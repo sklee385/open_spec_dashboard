@@ -33,3 +33,32 @@ API는 `127.0.0.1:13002/api`, 프런트엔드는 13001의 프록시를 사용한
 SQLite `user_version=1`, WAL, 업무의 요청 키 및 소스·변경 쌍에 UNIQUE 제약을 사용한다. 업무, 이벤트, 종류별 질문·답변·검증·초안 이력 레코드를 저장한다. 이벤트는 업무별 조회에서 전역 증가 순번을 커서로 사용한다. 저장소는 자식 프로세스와 감시자를 정리한 뒤 닫는다.
 
 `CONFIG_PATH` 또는 `OPENSPEC_UI_CONFIG`는 설정 경로, `DATA_DIR`은 SQLite 경로, `CODEX_BIN`은 실행 파일을 지정한다. `CODEX_ARGS`는 테스트 전용이다. 명령 인자를 셸 문자열로 합치지 않는다. 파일 차이는 Git 유무와 관계없이 구현 시작 스냅샷과 현재 파일을 비교한다.
+
+# 대기 요청 알림
+
+`GET /api/work/attention`은 업무를 소유하는 백엔드 서버의 현재 대기 요청을 조회한다. 별도 웹 게이트웨이를 배포한 환경에서는 같은 API를 전달한다.
+응답은 `{ items: [{ workId, sourceId, changeName, title, questionId, kind, status, createdAt }] }`이다.
+`kind`는 `input` 또는 `approval`, `status`는 `pending`이다. 한 요청에 여러 질문이 있어도 한 건이다.
+전송·복구·결과 확인 중이거나 응답·만료된 요청은 제외한다. 발생 시각 내림차순, 동률은 요청 ID·업무 ID순이다.
+제목은 보존된 원본 아이디어 제목, 없으면 변경명이다. 질문 원문·명령·프로젝트 경로는 반환하지 않는다.
+프로젝트 표시는 `sourceId`와 등록된 소스 정보를 연결한다. 대시보드는 최초 즉시, 이전 조회 완료 후 5초마다 조회하며 포커스·연결 복귀 시 즉시 갱신한다.
+
+## Windows 알림 설정·상태
+
+`GET /api/notifications/settings`, `PUT /api/notifications/settings`는 업무를 소유하는 백엔드 서버에서 처리한다. 별도 게이트웨이 배포 환경에서도 같은 계약을 사용한다. GET은 저장 의도를 변경하지 않는다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `enabled` | 저장된 사용 의도. 최초 true. 의도도 손상되어 읽을 수 없으면 null. |
+| `effectiveEnabled` | 읽기 전용 실제 발행 준비 상태. OS 표시·소리 성공을 뜻하지 않는다. |
+| `dashboardUrl` | 로컬 HTTP(S) 주소. 확인 불가 시 null. |
+| `registrationStatus` | uninitialized / registered / disabled / unsupported / failed / unregistered |
+| `lastError` | null 또는 settings-error / registration-error / unregister-error / storage-error / delivery-error / unsupported. 민감한 도우미 출력은 제외한다. |
+
+PUT은 `{enabled?:boolean,dashboardUrl?:string,unregister?:true}`만 받는다. 적어도 한 필드가 필요하며 해제에는 `enabled:false`도 필요하다. 읽기 전용 필드·외부 URL·사용자 정보·쿼리·프래그먼트는 400이다. 발행·설정 처리 중 변경 요청은 400이므로 잠시 후 사용자가 다시 시도한다. 저장 실패는 5xx이며 실제 발행을 중단한다. 등록 실패는 사용 의도를 유지한 채 실제 비활성과 오류를 반환한다. 파일은 `DATA_DIR/notifications.json`에 임시 파일 후 원자 교체한다.
+
+최초 주소는 `OPENSPEC_DASHBOARD_URL` → `http://127.0.0.1:13001/`, 이후 저장 주소 우선이다. localhost, 127.0.0.1, [::1]만 허용한다. 주소 오류는 명시적 주소 저장으로 복구하고 사용 의도까지 손상되었으면 두 필드를 함께 지정한다.
+
+서버는 질문 복구·만료 후 즉시, 처리 완료 후 5초마다 확인한다. `(workId,questionId)` SHA-256 키의 native-notification 레코드를 INSERT OR IGNORE로 먼저 확보하고 claimed/submitted/failed/uncertain을 기록한다. 미완결 claimed는 재시작 때 uncertain으로 바꾸며 명확한 실패도 재시도하지 않는다. 저장 실패 시 OS를 호출하지 않는다. 설정·브라우저 데이터 삭제는 발행 기록을 초기화하지 않는다. IndexedDB는 화면 안내 중복 방지에만 쓴다.
+
+고정 PowerShell 실행 파일·인자와 stdin JSON, XML 이스케이프, 로컬 microsoft-edge: 링크를 사용한다. 토스트에는 업무명·요청 종류와 기본 알림음 한 번만 넣는다. 링크는 workId와 questionId를 함께 포함하며 앱 최초 복원 전에 검증한다. 링크 처리는 조회·화면 이동만 수행하고 생성·재연결·답변·승인·검토·구현 API는 호출하지 않는다.

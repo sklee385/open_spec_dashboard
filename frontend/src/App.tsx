@@ -1,5 +1,8 @@
 import { useI18n } from '@/i18n/context';
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { AttentionContext, AttentionOverlays } from './components/AttentionCenter';
+import { useAttention } from './hooks/useAttention';
+import { consumeAttentionLink, parseAttentionLink, loadAttentionDestination, type AttentionLink, type AttentionTarget, type WorkRoomNavigation } from './lib/attentionNavigation';
 import { Header } from './components/Header';
 import { KanbanBoard } from './components/KanbanBoard';
 import { SpecsView } from './components/SpecsView';
@@ -29,9 +32,28 @@ function App() {
     }
     return 'kanban';
   });
+  const [initialLink] = useState(() => { try { return { target: parseAttentionLink(window.location.href), invalid: false }; } catch { return { target: null, invalid: true }; } });
   const [selectedChange, setSelectedChange] = useState<Change | null>(() => {
+    if (initialLink.target || initialLink.invalid) return null;
     try { return JSON.parse(localStorage.getItem('openspec-active-change') || 'null'); } catch { return null; }
   });
+  const workRoomNavigation = useRef<WorkRoomNavigation>(null);
+  const targetToken = useRef(0);
+  const [attentionTarget, setAttentionTarget] = useState<AttentionTarget>();
+  const openAttention = useCallback(async (item: AttentionLink) => {
+    const destination = await loadAttentionDestination(item);
+    if (workRoomNavigation.current && !workRoomNavigation.current.preserveDrafts()) throw new Error('Draft preservation failed');
+    setSelectedIdea(null);
+    setSelectedChange(destination);
+    setAttentionTarget({ workId: item.workId, questionId: item.questionId, token: ++targetToken.current });
+  }, []);
+  const attention = useAttention(openAttention);
+  const initialLinkStarted = useRef(false);
+  useEffect(() => {
+    if (initialLinkStarted.current) return; initialLinkStarted.current = true;
+    if (initialLink.invalid) { attention.reportNavigationError(); return; }
+    if (initialLink.target) void openAttention(initialLink.target).then(consumeAttentionLink).catch(attention.reportNavigationError);
+  }, [initialLink, openAttention, attention.reportNavigationError]);
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(() => {
     return localStorage.getItem(SELECTED_SOURCE_KEY);
@@ -93,7 +115,7 @@ function App() {
   });
 
   return (
-    <ErrorBoundary>
+    <AttentionContext.Provider value={attention}><ErrorBoundary>
       <div className="min-h-screen bg-background overflow-x-hidden max-w-full">
         <Header
           currentView={currentView}
@@ -106,6 +128,7 @@ function App() {
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenNewIdea={() => setIdeaCaptureOpen(true)}
         />
+        <AttentionOverlays sources={sources} />
         <main className={currentView === 'kanban' ? "px-4 pt-4 md:pt-6" : "max-w-7xl mx-auto px-4 pt-4 md:pt-6"}>
           {currentView === 'kanban' ? (
             <KanbanBoard
@@ -128,7 +151,9 @@ function App() {
           <WorkRoom
             key={selectedChange.id}
             change={selectedChange}
-            onClose={() => setSelectedChange(null)}
+            attentionTarget={attentionTarget}
+            navigationRef={workRoomNavigation}
+            onClose={() => { setSelectedChange(null); setAttentionTarget(undefined); }}
           />
         )}
         {selectedIdea && (
@@ -169,7 +194,7 @@ function App() {
           }}
         />
       </div>
-    </ErrorBoundary>
+    </ErrorBoundary></AttentionContext.Provider>
   );
 }
 

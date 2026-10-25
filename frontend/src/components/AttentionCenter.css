@@ -1,0 +1,18 @@
+.attention-bell { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; background: var(--background); color: var(--foreground); cursor: pointer; }
+.attention-bell[aria-expanded=true] { border-color: var(--primary); }
+.attention-panel,.attention-notices { position: fixed; z-index: 100; right: 16px; width: min(390px, calc(100vw - 32px)); border: 1px solid var(--border); border-radius: 12px; background: var(--background); color: var(--foreground); box-shadow: 0 12px 40px #0003; padding: 14px; font-size: 14px; overflow-wrap: anywhere; }
+.attention-panel { top: 64px; max-height: calc(100dvh - 80px); overflow-y: auto; }
+.attention-notices { bottom: 16px; z-index: 101; max-height: 45dvh; overflow-y: auto; }
+.attention-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.attention-heading h2 { font-weight: 650; }
+.attention-heading button { padding: 5px; cursor: pointer; }
+.attention-panel p { margin: 10px 0; color: var(--muted-foreground); line-height: 1.6; }
+.attention-item { display: grid; gap: 4px; width: 100%; padding: 12px; text-align: left; border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; cursor: pointer; background: var(--background); color: var(--foreground); }
+.attention-item:hover { background: var(--secondary); }
+.attention-item time,.attention-item span { font-size: 12px; color: var(--muted-foreground); }
+.attention-item:focus-visible,.attention-bell:focus-visible,.attention-enable:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.attention-item:disabled { opacity: .6; cursor: wait; }
+.attention-enable { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.attention-panel label { display: grid; gap: .35rem; margin-top: .6rem; }
+.attention-panel input { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: .35rem; padding: .4rem; background: var(--background); }
+.attention-panel > button { margin: .4rem .4rem .4rem 0; }

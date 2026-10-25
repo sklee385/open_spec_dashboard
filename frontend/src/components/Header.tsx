@@ -1,3 +1,4 @@
+import { AttentionBell } from './AttentionCenter';
 import { useI18n } from '@/i18n/context';
 import { useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
@@ -331,6 +332,7 @@ export function Header({
 
           {/* Right: Controls */}
           <div className="flex items-center gap-2 md:gap-3 flex-shrink-0">
+            <AttentionBell />
             {/* Show Archived toggle - visible on desktop when in kanban view */}
             <div className="hidden md:block">
               <ShowArchivedToggle />

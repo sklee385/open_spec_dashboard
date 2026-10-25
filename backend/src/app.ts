@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import { NativeNotifications, NotificationsController } from './notifications/service';
+import { WindowsNotifications } from './notifications/adapter';
 import { Controller, Get, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { LegacyController } from './legacy/legacy.controller';
@@ -20,7 +22,7 @@ class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter] })
+@Module({ controllers: [NotificationsController, HealthController, LegacyController, WorkController, AiToolsController], providers: [WindowsNotifications, NativeNotifications, LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter] })
 class AppModule {}
 
 export async function createApplication() {

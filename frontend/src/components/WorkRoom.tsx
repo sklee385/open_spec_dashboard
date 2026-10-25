@@ -1,6 +1,8 @@
 import { ProductError, errorMessage } from '@/i18n/errors';
 import { useI18n } from '@/i18n/context';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useImperativeHandle, type Ref } from 'react';
+import { AttentionBell } from './AttentionCenter';
+import type { AttentionTarget, WorkRoomNavigation } from '../lib/attentionNavigation';
 import ReactMarkdown from 'react-markdown';
 import { ReviewItems } from './ReviewItems';
 import { DetailModal } from './DetailModal';
@@ -18,6 +20,12 @@ type Room = { id: string; changeName: string; phase: string; state: string; thre
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
   changes: { path: string; before: string | null; after: string | null; status: string }[] };
 type Doc = { path: string; content: string; version: string };
+function readChatDraft(changeId: string): { message: string; answers: Record<string, string> } {
+  try {
+    const value = JSON.parse(localStorage.getItem(`work-chat-draft:${changeId}`) || 'null');
+    return { message: typeof value?.message === 'string' ? value.message : '', answers: Object.fromEntries(Object.entries(value?.answers || {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) };
+  } catch { return { message: '', answers: {} }; }
+}
 function readWorkView(changeId: string) {
   try {
     const value = JSON.parse(localStorage.getItem(`work-view:${changeId}`) || 'null');
@@ -58,7 +66,7 @@ function conversation(events: Entry[], toolName: string) {
   return [...messages.values()].slice(-100);
 }
 
-export function WorkRoom({ change, onClose }: { change: Change; onClose: () => void }) {
+export function WorkRoom({ change, onClose, attentionTarget, navigationRef }: { change: Change; onClose: () => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation> }) {
   const { t } = useI18n();
   const resultStates: Record<string, string> = { passed: t('workRoom.passed'), failed: t('workRoom.failed'), running: t('workRoom.running'), interrupted: t('workRoom.interrupted'), queued: t('workRoom.queuedStatus') };
   const fileStates: Record<string, string> = { added: t('workRoom.added'), modified: t('workRoom.modified'), removed: t('workRoom.removed') };
@@ -68,7 +76,13 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
   const [room, setRoom] = useState<Room | null>(null), [doc, setDoc] = useState<Doc | null>(null), [draft, setDraft] = useState('');
   const toolName = room?.toolConfigSnapshot?.name || 'Codex';
   const nativeResume = room?.toolCapabilities?.nativeResume ?? true;
-  const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [initialWorkId] = useState(attentionTarget?.workId);
+  const questionNodes = useRef(new Map<string, HTMLDivElement>());
+  const attentionNotice = useRef<HTMLParagraphElement>(null);
+  const focusedTarget = useRef<number | null>(null);
+  const [readyTarget, setReadyTarget] = useState<number | null>(null);
+  const [initialChat] = useState(() => readChatDraft(change.id));
+  const [message, setMessage] = useState(initialChat.message), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<Doc | null>(null);
   const [connection, setConnection] = useState(t('workRoom.connecting'));
   const [loadError, setLoadError] = useState('');
@@ -91,7 +105,24 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
     editor.current.scrollTop = Math.max(0, (sourceSelection.startLine - 3) * lineHeight);
     setSourceSelection(null);
   }, [sourceSelection, doc, draft, tab, preview, busy]);
-  const [answers, setAnswers] = useState<Record<string, string>>({}), [cli, setCli] = useState<{ ok: boolean; stdout: string; stderr: string; json?: unknown } | null>(null);
+  const messageList = useRef<HTMLDivElement>(null);
+  const messages = conversation(room?.events || [], toolName);
+  const conversationVersion = JSON.stringify(messages);
+  useEffect(() => {
+    if (!attentionTarget && messageList.current && pane === 'chat') messageList.current.scrollTop = messageList.current.scrollHeight;
+  }, [conversationVersion, pane, attentionTarget]);
+  useEffect(() => {
+    if (!attentionTarget || readyTarget !== attentionTarget.token || room?.id !== attentionTarget.workId || focusedTarget.current === attentionTarget.token) return;
+    if (pane !== 'chat') { setPane('chat'); return; }
+    const node = questionNodes.current.get(attentionTarget.questionId) || attentionNotice.current;
+    if (!node) return;
+    node.scrollIntoView?.({ block: 'center' }); node.focus({ preventScroll: true });
+    focusedTarget.current = attentionTarget.token;
+  }, [attentionTarget, readyTarget, room, pane]);
+  const [answers, setAnswers] = useState<Record<string, string>>(initialChat.answers), [cli, setCli] = useState<{ ok: boolean; stdout: string; stderr: string; json?: unknown } | null>(null);
+  useEffect(() => {
+    try { localStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message, answers })); } catch { /* Keep the current input usable if browser storage is unavailable. */ }
+  }, [change.id, message, answers]);
   const [operation, setOperation] = useState('status'), [artifact, setArtifact] = useState('proposal');
   const cliStatus = operation === 'status' ? cli?.json as { artifacts?: { id: string; status: string; requires?: string[] }[]; nextSteps?: string[] } | undefined : undefined;
   const [commandId, setCommandId] = useState(''), [command, setCommand] = useState(''), [args, setArgs] = useState('');
@@ -101,6 +132,15 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
   const documentRequest = useRef(0);
   const activeOperations = useRef(0);
   const refresh = useCallback(async (id: string) => { const result = await api<Room>(`work/${id}`); setRoom(result); setLoadError(''); return result; }, []);
+  useEffect(() => {
+    if (!attentionTarget || room?.id !== attentionTarget.workId) return;
+    let cancelled = false;
+    void api<Room>(`work/${encodeURIComponent(attentionTarget.workId)}`).then(result => {
+      if (cancelled) return;
+      setRoom(result); setReadyTarget(attentionTarget.token);
+    }).catch(error => { if (!cancelled) setLoadError(errorMessage(error, t)); });
+    return () => { cancelled = true; };
+  }, [attentionTarget, room?.id, t]);
   const openDoc = useCallback(async (id: string, path: string, expectedVersion?: string) => {
     const request = ++documentRequest.current;
     setConflict(null);
@@ -140,7 +180,9 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
   useEffect(() => {
     let cancelled = false, currentId: string | null = null;
     const start = async () => {
-      const result = await api<Room>('work', 'POST', { sourceId: change.sourceId, changeName: change.name, requestKey: `change:${change.id}` });
+      const result = initialWorkId
+        ? await api<Room>(`work/${encodeURIComponent(initialWorkId)}`)
+        : await api<Room>('work', 'POST', { sourceId: change.sourceId, changeName: change.name, requestKey: `change:${change.id}` });
       if (cancelled) return; currentId = result.id;
       const detail = await refresh(result.id);
       const path = initialView.path && detail.documents.includes(initialView.path) ? initialView.path : detail.documents[0];
@@ -159,16 +201,25 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
       }).catch(() => setLoadError(t('workRoom.waitingServer')));
     }, 2000);
     return () => { cancelled = true; ++documentRequest.current; clearInterval(timer); };
-  }, [change.id, change.name, change.sourceId, refresh, openDoc, initialView.path, t]);
+  }, [change.id, change.name, change.sourceId, initialWorkId, refresh, openDoc, initialView.path, t]);
   useEffect(() => {
     if (!doc) return;
-    localStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc.path }));
+    try { localStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc.path })); } catch { /* Keep the view and preserve drafts before notification navigation. */ }
   }, [change.id, doc, pane, tab]);
   useEffect(() => {
     if (!room || !doc) return;
     const key = `work-draft:${room.id}:${doc.path}`;
-    if (dirty) localStorage.setItem(key, JSON.stringify({ content: draft, version: doc.version })); else localStorage.removeItem(key);
+    try { if (dirty) localStorage.setItem(key, JSON.stringify({ content: draft, version: doc.version })); else localStorage.removeItem(key); } catch { /* Explicit navigation checks draft storage. */ }
   }, [room, doc, draft, dirty]);
+  useImperativeHandle(navigationRef, () => ({ preserveDrafts() {
+    if (activeOperations.current > 0) return false;
+    try {
+      localStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message, answers }));
+      localStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc?.path || null }));
+      if (room && doc && dirty) localStorage.setItem(`work-draft:${room.id}:${doc.path}`, JSON.stringify({ content: draft, version: doc.version }));
+      return true;
+    } catch { setError(t('attention.navigationError')); return false; }
+  } }), [change.id, message, answers, room, doc, dirty, draft, pane, tab, t]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => { if (live.current.dirty) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard);
@@ -213,6 +264,7 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
   const inspect = () => { if (room) void run(async () => setCli(await api(`work/${room.id}/openspec?operation=${operation}&artifact=${artifact}`))); };
   return <section className="work-room" aria-label={t('workRoom.space')}>
     <header className="work-header">
+      <AttentionBell />
       <button onClick={() => setDetailOpen(true)}>{t('review.documents')}</button>
       <button onClick={() => void move(':close')}>{t('workRoom.back')}</button>
       <div><h1>{change.title || change.name}</h1><span>{room ? `${phases[room.phase] || room.phase} · ${states[room.state] || room.state}` : t('workRoom.loading')}</span></div>
@@ -240,11 +292,12 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
     <nav className="work-mobile-tabs" aria-label={t('workRoom.mobile')}><button aria-pressed={pane === 'chat'} onClick={() => setPane('chat')}>{t('workRoom.chatTab')}</button><button aria-pressed={pane === 'output'} onClick={() => setPane('output')}>{t('workRoom.outputTab')}</button></nav>
     <div className={`work-layout pane-${pane}`}>
       <section className="work-chat"><h2>{t('workRoom.questions')}</h2><p className="work-hint">{t('workRoom.questionsHint')}</p>
-        <div className="work-messages" aria-live="polite">{!room?.events.length && <p>{t('workRoom.emptyChat')}</p>}
+                {attentionTarget && readyTarget === attentionTarget.token && room?.id === attentionTarget.workId && room.questions.find(q => q.id === attentionTarget.questionId)?.status !== 'pending' && <p ref={attentionNotice} tabIndex={-1} className="work-notice" role="status">{t('attention.stale')}</p>}
+<div className="work-messages" ref={messageList} aria-live="polite">{!room?.events.length && <p>{t('workRoom.emptyChat')}</p>}
           {conversation(room?.events || [], toolName).map(entry => <div key={entry.seq} className={entry.role === 'user' ? 'work-message user' : 'work-message'}><small>{entry.role === 'user' ? t('workRoom.me') : entry.role}</small><ReactMarkdown>{entry.text}</ReactMarkdown></div>)}
           <details className="work-event"><summary>{t('workRoom.events')}</summary>{room?.events.filter(entry => !['item/agentMessage/delta', 'user-message'].includes(entry.type)).slice(-100).map(entry => <details key={entry.seq}><summary>{({ 'item/autoApprovalReview/started': t('workRoom.autoReviewStarted'), 'item/autoApprovalReview/completed': t('workRoom.autoReviewCompleted'), 'autoApprovalReview/strictReviewRequired': t('workRoom.strictReview') } as Record<string, string>)[entry.type] || entry.type}</summary><pre>{JSON.stringify(entry.data, null, 2)}</pre></details>)}</details>
         </div>
-        {room?.questions.filter(q => (q.kind === 'input' ? room.toolCapabilities?.questions !== false : room.toolCapabilities?.approval !== false) && (q.status === 'pending' || (q.status === 'expired' && q.kind === 'input'))).map(q => <div className="work-question" key={q.id}>
+        {room?.questions.filter(q => (q.kind === 'input' ? room.toolCapabilities?.questions !== false : room.toolCapabilities?.approval !== false) && (q.status === 'pending' || (q.status === 'expired' && q.kind === 'input'))).map(q => <div className="work-question" key={q.id} tabIndex={-1} ref={node => { if (node) questionNodes.current.set(q.id, node); else questionNodes.current.delete(q.id); }}>
           <h3>{q.kind === 'input' ? t('workRoom.aiQuestion') : t('workRoom.permission')}</h3>
           {q.status === 'expired' && <p>{t('workRoom.expired')}</p>}
           {q.kind === 'input' ? <>{q.params.questions?.map(question => <label key={question.id}>{question.question}
