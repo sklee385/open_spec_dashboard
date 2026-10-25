@@ -1,0 +1,9 @@
+node_modules/
+frontend/dist/
+backend/dist/
+.reference/
+.data/
+.logs/
+.tools/
+*.tsbuildinfo
+config.local.json

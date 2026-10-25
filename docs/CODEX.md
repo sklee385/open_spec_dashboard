@@ -1,0 +1,21 @@
+# Codex 연결과 복구
+
+확인한 로컬 CLI: `0.163.0-alpha.11.2`. app-server의 설치 버전 스키마를 `.tools/codex-schema/`에 생성해 계약을 확인했다.
+
+- stdio JSON 연결: `initialize` → `initialized`.
+- 최초 업무: `thread/start`, 이후 `turn/start`는 같은 `threadId` 사용.
+- 서버 재시작: 저장한 ID로 `thread/resume` 후 후속 턴 실행.
+- 사용자 질문은 `item/tool/requestUserInput` 요청 ID에 `{answers}`로 응답한다.
+- 기본 모드에서도 문답하기 위해 `--experimental`로 생성한 설치 버전 스키마를 확인했다. `thread/start.dynamicTools`에 `ask_user`를 등록하고 `item/tool/call`에는 `{success,contentItems:[{type:'inputText',text}]}`로 답한다. 기존 대화는 같은 ID로 복원하며 동적 도구 등록도 유지된다.
+- 실행 경계는 `sandbox:workspace-write`, `approvalPolicy:on-request`, cwd는 등록 프로젝트다. `thread/start`, `thread/resume`, `turn/start`에 `approvalsReviewer:auto_review`를 전달하여 Codex의 ‘나 대신 승인’ 검토를 사용한다. Codex가 위험도에 따라 승인·거절하며, 대시보드가 일괄 승인 응답을 보내지 않는다. 모델명은 지정하지 않고 기존 Codex 기본 설정을 사용한다.
+- 자동 권한 검토의 시작·결과는 실행 기록에 보존한다. Codex가 사용자에게 전달한 승인 요청은 기존 개별 승인 UI로 처리하며, 요구사항 질문·문서 검토·구현 시작·최종 완료 결정은 사용자에게 남긴다. 미지원 CLI나 검토 오류는 오류로 표시하며 권한 정책을 완화하지 않는다. 이미 대기 중인 요청은 소급 승인하지 않고 같은 대화를 재개한 다음 실행부터 적용한다.
+- 요청 식별자는 프로세스 세대와 서버 요청 ID의 조합이다. 자식 프로세스가 다시 시작되면 세대도 바뀌며 이전 세대의 응답·알림은 적용하지 않는다.
+- 질문 도구가 실패하거나 턴이 끝나 원래 요청이 종료되어도 질문을 폐기하지 않는다. 만료 질문은 같은 대화의 후속 메시지에 명시적으로 답변을 복구하며, 재시작이나 시간 경과는 요구사항 해결로 간주하지 않는다.
+- 질문 응답과 파일·명령 실행 승인은 별도로 처리한다.
+- 대화 생성 결과가 불명확하거나 복원에 실패하면 기존 연결을 보존하고 복구 필요 상태로 표시한다.
+- `CODEX_BIN`으로 Codex 실행 파일을 지정할 수 있다. 기본값은 PATH의 `codex`다.
+- 테스트 전용 `CODEX_ARGS`는 프로토콜 모의 프로세스를 사용한다. 실제 실행에서는 설정하지 않는다.
+
+실제 CLI 연결과 `account/read` 결과로 기존 ChatGPT 인증을 사용할 수 있음을 확인했다. 모델 추론·전체 개발 흐름 검증은 별도이며 이 확인만으로 완료되었다고 간주하지 않는다.
+
+실제 추론 검증에서 구조화 질문·답변, 문서 생성과 직접 수정 의견 반영, 구현과 Node.js 테스트 실행, 서버 재시작 뒤 같은 대화 재개를 확인했다. 구체적인 검증 기록은 `VERIFICATION.md`를 따른다. 지원되지 않는 프로토콜이나 CLI 기능은 오류로 표시하며 다른 AI 도구로 자동 전환하지 않는다.
