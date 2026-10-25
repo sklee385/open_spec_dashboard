@@ -16,7 +16,8 @@
     "chokidar": "^4.0.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
-    "yaml": "^2.8.0"
+    "yaml": "^2.8.0",
+    "mdast-util-from-markdown": "^2.1.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

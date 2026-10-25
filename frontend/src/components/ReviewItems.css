@@ -1,0 +1,14 @@
+.review-items { padding: 1rem; overflow-wrap: anywhere; overflow-y: auto; min-height: 0; }
+.review-items section { margin-top: 1.25rem; }
+.review-items h3 { font-weight: 600; margin-bottom: .5rem; }
+.review-items ul { list-style: none; padding: 0; }
+.review-items li { margin-bottom: .65rem; }
+.review-items li button { width: 100%; text-align: left; border: 1px solid var(--border); border-radius: .5rem; padding: .75rem; display: flex; flex-wrap: wrap; gap: .5rem; }
+.review-items button:disabled { opacity: .55; cursor: wait; }
+.review-items button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.review-kind { font-size: .8rem; font-weight: 600; color: var(--primary); }
+.review-text { flex: 1 1 70%; white-space: pre-wrap; }
+.review-items small { width: 100%; opacity: .75; }
+.review-hint { font-size: .85rem; color: var(--muted-foreground); margin-bottom: .75rem; }
+.review-items [role=alert] { padding: .75rem; border: 1px solid var(--destructive); border-radius: .5rem; }
+.review-source [data-review-selected=true] { background: color-mix(in srgb, var(--primary) 16%, transparent); outline: 2px solid var(--primary); outline-offset: 3px; }

@@ -49,6 +49,7 @@ export interface TasksContent {
 }
 
 export interface ChangeDetail {
+  documentVersions?: Record<string, string>;
   id: string;
   name: string;
   title?: string;

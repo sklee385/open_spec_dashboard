@@ -1,11 +1,13 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Put, Query, Sse } from '@nestjs/common';
 import { WorkService } from './work.service';
 import { AiToolService } from '../ai-tools/ai-tool.service';
-import { workTool, capabilities, readiness } from '../ai-tools/config.service';
 import { OpenSpecService } from '../openspec/openspec.service';
+import { ReviewService } from '../review/review.service';
+import { workTool, capabilities, readiness } from '../ai-tools/config.service';
 @Controller('work')
 export class WorkController {
-  constructor(@Inject(WorkService) readonly service: WorkService, @Inject(AiToolService) readonly codex: AiToolService, @Inject(OpenSpecService) readonly openspec: OpenSpecService) {}
+  constructor(@Inject(WorkService) readonly service: WorkService, @Inject(AiToolService) readonly codex: AiToolService, @Inject(OpenSpecService) readonly openspec: OpenSpecService, @Inject(ReviewService) readonly review: ReviewService) {}
+  @Get(':id/review-items') reviewItems(@Param('id') id: string) { return this.review.read(this.service.root(this.service.get(id))); }
   @Get() list() { return { work: this.service.store.list().map(work => this.toolInfo(work)) }; }
   private toolInfo(work: any) { const tool = workTool(work); return { ...work, toolId: tool.id, toolConfigSnapshot: tool, toolCapabilities: capabilities(tool), toolReadiness: readiness(tool), providerSessionId: tool.kind === 'codex' ? work.threadId : null }; }
   @Post() @HttpCode(200) create(@Body() body: unknown) { return this.service.create(body); }

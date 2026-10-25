@@ -1,8 +1,10 @@
 import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Post, Put, Sse } from '@nestjs/common';
 import { LegacyService } from './legacy.service';
+import { ReviewService } from '../review/review.service';
 @Controller()
 export class LegacyController {
-  constructor(@Inject(LegacyService) private readonly service: LegacyService) {}
+  constructor(@Inject(LegacyService) private readonly service: LegacyService, @Inject(ReviewService) private readonly review: ReviewService) {}
+  @Get('changes/:id/review-items') reviewItems(@Param('id') id: string) { return this.review.change(id); }
   @Get('sources') sources() { return { sources: this.service.sources() }; }
   @Get('config') config() { return this.service.config(); }
   @Put('config/sources') updateSources(@Body() body: unknown) { return this.service.updateSources(body); }

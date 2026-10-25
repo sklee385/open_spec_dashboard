@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { textFile, within } from '../files';
+import { documentVersion } from '../review/review-items';
 
 export function taskStats(content: string) {
   const done = (content.match(/- \[x\]/g) || []).length;
@@ -59,8 +60,13 @@ export function changeDetail(root: string, sourceId: string, name: string) {
   }
   if (!record) return null;
   const raw = textFile(join(path, 'tasks.md'));
+  const proposal = textFile(join(path, 'proposal.md')), design = textFile(join(path, 'design.md'));
   const specs = markdownFiles(join(path, 'specs')).map(file => ({ path: file, content: textFile(within(root, `${path}/specs/${file}`))! }));
-  return { id: `${sourceId}/${name}`, name: record.name, title: record.title, sourceId, status: record.status, proposal: textFile(join(path, 'proposal.md')),
-    design: textFile(join(path, 'design.md')), specs, tasks: raw === null ? null : { raw, stats: taskStats(raw) },
+  return { id: `${sourceId}/${name}`, name: record.name, title: record.title, sourceId, status: record.status, proposal,
+    design, specs, tasks: raw === null ? null : { raw, stats: taskStats(raw) },
+    documentVersions: Object.fromEntries([
+      ['proposal.md', proposal], ['design.md', design], ['tasks.md', raw],
+      ...specs.map(spec => [`specs/${spec.path}`, spec.content]),
+    ].filter((entry): entry is [string, string] => entry[1] !== null).map(([file, content]) => [file, documentVersion(content)])),
     schema: record.schema, artifacts: artifacts(record.hasProposal, record.hasDesign, specs.length > 0, record.hasTasks) };
 }

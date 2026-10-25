@@ -1,6 +1,8 @@
 import { useI18n } from '@/i18n/context';
-import { useEffect, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { useEffect, useRef, useState } from 'react';
+import { ReviewSource } from './ReviewSource';
+import { ReviewItems } from './ReviewItems';
+import { matchReviewItem, useReviewItems, type ReviewItem } from '../hooks/useReviewItems';
 import { X, FileText, Layers, CheckSquare, Palette, Loader2 } from 'lucide-react';
 import { useChange } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -23,7 +25,7 @@ interface DetailModalProps {
   onClose: () => void;
 }
 
-type Tab = 'proposal' | 'specs' | 'tasks' | 'design';
+type Tab = 'proposal' | 'specs' | 'tasks' | 'design' | 'review';
 
 
 
@@ -38,6 +40,7 @@ const STATUS_STYLES: Record<string, string> = {
 export function DetailModal({ change, onClose }: DetailModalProps) {
   const { t } = useI18n();
   const TAB_CONFIG: Record<Tab, { icon: React.ReactNode; label: string; color: string }> = {
+  review: { icon: <CheckSquare className="h-4 w-4" />, label: t('review.title'), color: 'text-primary' },
   proposal: { 
     icon: <FileText className="h-4 w-4" />, 
     label: t('common.proposal'),
@@ -60,12 +63,47 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
   },
 };
 
-  const { change: detail, loading } = useChange(change?.id || null);
+  const { change: detail, loading, refetch } = useChange(change?.id || null);
+  const review = useReviewItems(change ? `/api/changes/${encodeURIComponent(change.id)}/review-items` : null);
+  const [selection, setSelection] = useState<ReviewItem | null>(null);
+  const [sourceError, setSourceError] = useState('');
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const sourceRequest = useRef(0);
+  const currentChange = useRef(change?.id); currentChange.current = change?.id;
+  useEffect(() => () => { ++sourceRequest.current; }, []);
+  const openSource = async (item: ReviewItem) => {
+    if (sourceBusy) return;
+    const id = change?.id, request = ++sourceRequest.current;
+    const current = () => currentChange.current === id && request === sourceRequest.current;
+    setSourceError(''); setSourceBusy(true);
+    try {
+      const latest = await review.refresh();
+      if (!current()) return;
+      const target = latest && matchReviewItem(item, latest);
+      if (!target) throw new Error(t('review.changed'));
+      const source = await refetch();
+      if (!current()) return;
+      let version = source?.documentVersions?.[target.path];
+      if (source && !version) {
+        const content = target.path === 'proposal.md' ? source.proposal : target.path === 'design.md' ? source.design : target.path === 'tasks.md' ? source.tasks?.raw : source.specs.find(spec => `specs/${spec.path}` === target.path)?.content;
+        if (typeof content === 'string') {
+          const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content));
+          version = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+        }
+      }
+      if (!current()) return;
+      if (!source || version !== target.version) { await review.refresh(); throw new Error(t('review.changed')); }
+      setSelection(target);
+      setActiveTab(target.path.startsWith('specs/') ? 'specs' : target.path.replace('.md', '') as Tab);
+    } catch { if (current()) setSourceError(t('review.changed')); }
+    finally { if (current()) setSourceBusy(false); }
+  };
   const [activeTab, setActiveTab] = useState<Tab>('proposal');
   const isMobile = useIsMobile();
 
   useEffect(() => {
     if (change) {
+      setSelection(null); setSourceError(''); setSourceBusy(false);
       setActiveTab(
         change.hasProposal ? 'proposal' :
         change.hasSpecs ? 'specs' :
@@ -79,10 +117,11 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
   if (!change) return null;
 
   const availableTabs: Tab[] = [];
-  if (change.hasProposal) availableTabs.push('proposal');
-  if (change.hasSpecs) availableTabs.push('specs');
-  if (change.hasTasks) availableTabs.push('tasks');
-  if (change.hasDesign) availableTabs.push('design');
+  if (detail ? detail.proposal !== null : change.hasProposal) availableTabs.push('proposal');
+  if (detail ? detail.specs.length > 0 : change.hasSpecs) availableTabs.push('specs');
+  if (detail ? detail.tasks !== null : change.hasTasks) availableTabs.push('tasks');
+  if (detail ? detail.design !== null : change.hasDesign) availableTabs.push('design');
+  availableTabs.push('review');
 
   const LoadingState = () => (
     <div className="flex flex-col items-center justify-center py-16 gap-3">
@@ -103,6 +142,8 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
   return (
     <Dialog open={!!change} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
+        overlayClassName="z-[79]"
+        style={{ zIndex: 80 }}
         showCloseButton={!isMobile}
         className={
           isMobile
@@ -168,6 +209,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                   <TabsTrigger 
                     key={tab}
                     value={tab} 
+                    aria-label={config.label}
                     className={cn(
                       "text-xs md:text-sm py-2 px-3 rounded-md transition-all duration-200",
                       "data-[state=active]:bg-background data-[state=active]:shadow-sm",
@@ -188,6 +230,8 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
 
             <div className="flex-1 overflow-y-auto overflow-x-hidden mt-4 scroll-smooth">
               <div className="pr-2 pb-8 overflow-hidden">
+                {sourceError && <p role="alert">{sourceError}</p>}
+                <TabsContent value="review"><ReviewItems {...review} busy={sourceBusy} onSelect={item => void openSource(item)} /></TabsContent>
                 {loading ? (
                   <LoadingState />
                 ) : !detail ? (
@@ -197,7 +241,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                     <TabsContent value="proposal" className="mt-0 data-[state=active]:block animate-in fade-in-50 duration-200 overflow-hidden">
                       {detail.proposal ? (
                         <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-a:text-primary prose-code:text-sm overflow-hidden break-words">
-                          <ReactMarkdown>{detail.proposal}</ReactMarkdown>
+                          <ReviewSource content={detail.proposal} path="proposal.md" selection={selection} />
                         </article>
                       ) : (
                         <EmptyState message={t('details.noProposal')} />
@@ -216,7 +260,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                                 </h3>
                               </div>
                               <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-a:text-primary prose-code:text-sm overflow-hidden break-words">
-                                <ReactMarkdown>{spec.content}</ReactMarkdown>
+                                <ReviewSource content={spec.content} path={`specs/${spec.path}`} selection={selection} />
                               </article>
                               {idx < detail.specs.length - 1 && <Separator className="my-8" />}
                             </div>
@@ -230,7 +274,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                     <TabsContent value="tasks" className="mt-0 data-[state=active]:block animate-in fade-in-50 duration-200 overflow-hidden">
                       {detail.tasks ? (
                         <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-a:text-primary prose-code:text-sm prose-li:marker:text-primary overflow-hidden break-words">
-                          <ReactMarkdown>{detail.tasks.raw}</ReactMarkdown>
+                          <ReviewSource content={detail.tasks.raw} path="tasks.md" selection={selection} />
                         </article>
                       ) : (
                         <EmptyState message={t('details.noTasks')} />
@@ -240,7 +284,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                     <TabsContent value="design" className="mt-0 data-[state=active]:block animate-in fade-in-50 duration-200 overflow-hidden">
                       {detail.design ? (
                         <article className="prose prose-sm dark:prose-invert max-w-none prose-headings:font-semibold prose-a:text-primary prose-code:text-sm overflow-hidden break-words">
-                          <ReactMarkdown>{detail.design}</ReactMarkdown>
+                          <ReviewSource content={detail.design} path="design.md" selection={selection} />
                         </article>
                       ) : (
                         <EmptyState message={t('details.noDesign')} />

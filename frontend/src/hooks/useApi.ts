@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Source, Change, ChangeDetail, Spec, SpecDetail, Idea } from '../types';
+import { subscribeChangeEvents, type ConnectionStatus } from './changeEvents';
 
 const API_BASE = '/api';
 
-type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
@@ -92,8 +92,11 @@ export function useChange(id: string | null) {
   const [change, setChange] = useState<ChangeDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const currentId = useRef(id); currentId.current = id;
+  const sequence = useRef(0);
 
   const refetch = useCallback(async () => {
+    const request = ++sequence.current;
     if (!id) {
       setChange(null);
       return;
@@ -101,17 +104,21 @@ export function useChange(id: string | null) {
     try {
       setLoading(true);
       const data = await fetchJson<ChangeDetail>(`${API_BASE}/changes/${encodeURIComponent(id)}`);
+      if (currentId.current !== id || request !== sequence.current) return;
       setChange(data);
       setError(null);
+      return data;
     } catch (e) {
-      setError(e as Error);
+      if (currentId.current === id && request === sequence.current) setError(e as Error);
     } finally {
-      setLoading(false);
+      if (currentId.current === id && request === sequence.current) setLoading(false);
     }
   }, [id]);
 
   useEffect(() => {
+    setChange(null);
     refetch();
+    return () => { ++sequence.current; };
   }, [refetch]);
 
   return { change, loading, error, refetch };
@@ -226,34 +233,20 @@ export function useSSE(onUpdate: () => void): { connectionStatus: ConnectionStat
   }, [onUpdate]);
 
   useEffect(() => {
-    const eventSource = new EventSource(`${API_BASE}/events`);
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     const refreshTimer = setInterval(() => onUpdateRef.current(), 5000);
 
-    eventSource.addEventListener('open', () => {
+    const unsubscribe = subscribeChangeEvents(() => onUpdateRef.current(), status => {
+      setConnectionStatus(status);
       clearTimeout(reconnectTimer);
-      setConnectionStatus('connected');
-      onUpdateRef.current();
-    });
-
-    eventSource.addEventListener('update', () => {
-      setConnectionStatus('connected');
-      onUpdateRef.current();
-    });
-
-    eventSource.onerror = () => {
-      setConnectionStatus('disconnected');
-      console.log('SSE connection error, will reconnect...');
-      // Try reconnecting after 3 seconds
-      clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
+      if (status === 'disconnected') reconnectTimer = setTimeout(() => {
         setConnectionStatus('connecting');
       }, 3000);
-    };
+    });
 
     return () => {
       clearTimeout(reconnectTimer);
-      eventSource.close();
+      unsubscribe();
       clearInterval(refreshTimer);
     };
   }, []); // No dependencies - connection stays stable

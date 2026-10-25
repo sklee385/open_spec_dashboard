@@ -23,3 +23,7 @@ npm run dev:frontend
 - [API 계약](docs/API.md)
 - [Codex 연결과 복구](docs/CODEX.md)
 - [실제 실행·자동 테스트 검증 기록](docs/VERIFICATION.md)
+
+## 사용자 검토
+
+변경 상세와 업무 공간의 검토 탭 사용법 및 Markdown 표기 규약은 [사용자 검토 안내](docs/document-review.md)를 참고하세요.
