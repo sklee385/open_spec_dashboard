@@ -10,6 +10,7 @@ type Question = { id: string; kind: string; status: string; reflection?: string;
 type Verification = { id: string; commandId: string; status: string; fresh: boolean; stdout: string; stderr: string; code: number | null };
 type Command = { id: string; command: string; args: string[] };
 type Room = { id: string; changeName: string; phase: string; state: string; threadId: string | null; turnId?: string; error?: string; updatedAt: string; reviewedVersion: string | null; reviewRequired?: boolean;
+  toolId?: string; toolConfigSnapshot?: { name: string; kind: string }; toolCapabilities?: { conversation: boolean; questions: boolean; approval: boolean; interrupt: boolean; nativeResume: boolean }; toolReadiness?: { ready: boolean; message: string };
   documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationCommands: Command[];
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
   changes: { path: string; before: string | null; after: string | null; status: string }[] };
@@ -39,16 +40,16 @@ async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> 
 
 
 const operationRequestLabels: Record<string, string> = { status: '산출물·의존성', instructions: '다음 작성 지침', schemas: '워크플로', specs: '기준 명세 목록', spec: '기준 명세 내용', deltas: '변경 명세', diff: '요구사항 차이', validate: '문서 검증', doctor: '관계 진단', context: '프로젝트 관계' };
-function conversation(events: Entry[]) {
+function conversation(events: Entry[], toolName: string) {
   const messages = new Map<string, { seq: number; role: string; text: string }>();
   for (const entry of events) {
     if (entry.type === 'user-message') messages.set(`user:${entry.seq}`, { seq: entry.seq, role: 'user', text: String(entry.data.text) });
     else if (entry.type === 'item/agentMessage/delta') {
       const key = `${entry.data.turnId}:${entry.data.itemId}`, old = messages.get(key);
-      messages.set(key, { seq: old?.seq || entry.seq, role: 'Codex', text: (old?.text || '') + String(entry.data.delta) });
+      messages.set(key, { seq: old?.seq || entry.seq, role: toolName, text: (old?.text || '') + String(entry.data.delta) });
     } else if (entry.type === 'item/completed' && (entry.data.item as Record<string, unknown>)?.type === 'agentMessage') {
       const item = entry.data.item as Record<string, unknown>, key = `${entry.data.turnId}:${item.id}`, old = messages.get(key);
-      messages.set(key, { seq: old?.seq || entry.seq, role: 'Codex', text: String(item.text) });
+      messages.set(key, { seq: old?.seq || entry.seq, role: toolName, text: String(item.text) });
     }
   }
   return [...messages.values()].slice(-100);
@@ -62,6 +63,8 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
   const states: Record<string, string> = { idle: t('workRoom.idle'), running: t('workRoom.running'), connecting: t('workRoom.connecting'), 'creating-thread': t('workRoom.creating'), 'waiting-input': t('workRoom.waitingInput'), 'waiting-approval': t('workRoom.waitingApproval'), 'recovery-required': t('workRoom.recovery'), failed: t('workRoom.failed'), interrupted: t('workRoom.interrupted') };
   const operations: Record<string, string> = { status: t('workRoom.dependencies'), instructions: t('workRoom.instructions'), schemas: t('workRoom.schemas'), specs: t('workRoom.specs'), spec: t('workRoom.spec'), deltas: t('workRoom.deltas'), diff: t('workRoom.diff'), validate: t('workRoom.validate'), doctor: t('workRoom.doctor'), context: t('workRoom.context') };
   const [room, setRoom] = useState<Room | null>(null), [doc, setDoc] = useState<Doc | null>(null), [draft, setDraft] = useState('');
+  const toolName = room?.toolConfigSnapshot?.name || 'Codex';
+  const nativeResume = room?.toolCapabilities?.nativeResume ?? true;
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState<Doc | null>(null);
   const [connection, setConnection] = useState(t('workRoom.connecting'));
@@ -169,12 +172,14 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
     <header className="work-header">
       <button onClick={() => void move(':close')}>{t('workRoom.back')}</button>
       <div><h1>{change.title || change.name}</h1><span>{room ? `${phases[room.phase] || room.phase} · ${states[room.state] || room.state}` : t('workRoom.loading')}</span></div>
-      <details><summary>{t('workRoom.sessionInfo')} {connection}</summary><small>{room?.threadId ? `Codex ${room.threadId}` : t('workRoom.sessionHint')}</small><p>{t('workRoom.approvalHint')}</p></details>
+      <details><summary><span>{toolName}</span> · <span>{t('workRoom.sessionInfo')} {connection}</span></summary><small>{nativeResume ? room?.threadId ? `${toolName} ${room.threadId}` : t('workRoom.sessionHint') : t('aiTools.logicalSession')}</small><p>{nativeResume ? t('workRoom.approvalHint') : t('aiTools.limitations')}</p></details>
     </header>
     {error && <div className="work-error" role="alert">{error}</div>}
     {loadError && <div className="work-error" role="status">{loadError}</div>}
     {room?.error && <div className="work-error">{room.error}</div>}
-    {room?.state === 'recovery-required' && room.threadId && <button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/reconnect`, 'POST', {}))}>{t('workRoom.reconnect')}</button>}
+    {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
+    {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}
+    {nativeResume && room?.state === 'recovery-required' && room.threadId && <button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/reconnect`, 'POST', {}))}>{t('workRoom.reconnect')}</button>}
     {room?.reviewRequired && <div className="work-notice">{t('workRoom.reviewAgain')}</div>}
     {pending && <div className="work-notice">{t('workRoom.unsaved')}
       <button onClick={() => void save().then(ok => { if (ok) { const target = pending; setPending(null); if (target === ':close') onClose(); else if (room) void openDoc(room.id, target); } })}>{t('workRoom.saveMove')}</button>
@@ -184,7 +189,7 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
       <button disabled={busy || !room} onClick={() => action('plan')}>{t('workRoom.plan')}</button>
       <button disabled={busy || !room} onClick={() => action('review')}>{t('workRoom.review')}</button>
       <button disabled={busy || !room?.reviewedVersion} onClick={() => action('implement')}>{t('workRoom.implement')}</button>
-      <button disabled={busy || !room?.turnId} onClick={() => room && void run(() => api(`work/${room.id}/interrupt`, 'POST', {}))}>{t('workRoom.interrupt')}</button>
+      <button disabled={busy || !room?.turnId || room?.toolCapabilities?.interrupt === false} onClick={() => room && void run(() => api(`work/${room.id}/interrupt`, 'POST', {}))}>{t('workRoom.interrupt')}</button>
       <button disabled={busy || room?.phase !== 'verification'} onClick={() => action('complete')}>{t('workRoom.complete')}</button>
       {room?.phase === 'completed' && <><button onClick={() => action('reopen')}>{t('workRoom.reopen')}</button><button onClick={() => action('archive')}>{t('workRoom.archive')}</button></>}
     </nav>
@@ -192,10 +197,10 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
     <div className={`work-layout pane-${pane}`}>
       <section className="work-chat"><h2>{t('workRoom.questions')}</h2><p className="work-hint">{t('workRoom.questionsHint')}</p>
         <div className="work-messages" aria-live="polite">{!room?.events.length && <p>{t('workRoom.emptyChat')}</p>}
-          {conversation(room?.events || []).map(entry => <div key={entry.seq} className={entry.role === 'user' ? 'work-message user' : 'work-message'}><small>{entry.role === 'user' ? t('workRoom.me') : entry.role}</small><ReactMarkdown>{entry.text}</ReactMarkdown></div>)}
+          {conversation(room?.events || [], toolName).map(entry => <div key={entry.seq} className={entry.role === 'user' ? 'work-message user' : 'work-message'}><small>{entry.role === 'user' ? t('workRoom.me') : entry.role}</small><ReactMarkdown>{entry.text}</ReactMarkdown></div>)}
           <details className="work-event"><summary>{t('workRoom.events')}</summary>{room?.events.filter(entry => !['item/agentMessage/delta', 'user-message'].includes(entry.type)).slice(-100).map(entry => <details key={entry.seq}><summary>{({ 'item/autoApprovalReview/started': t('workRoom.autoReviewStarted'), 'item/autoApprovalReview/completed': t('workRoom.autoReviewCompleted'), 'autoApprovalReview/strictReviewRequired': t('workRoom.strictReview') } as Record<string, string>)[entry.type] || entry.type}</summary><pre>{JSON.stringify(entry.data, null, 2)}</pre></details>)}</details>
         </div>
-        {room?.questions.filter(q => q.status === 'pending' || (q.status === 'expired' && q.kind === 'input')).map(q => <div className="work-question" key={q.id}>
+        {room?.questions.filter(q => (q.kind === 'input' ? room.toolCapabilities?.questions !== false : room.toolCapabilities?.approval !== false) && (q.status === 'pending' || (q.status === 'expired' && q.kind === 'input'))).map(q => <div className="work-question" key={q.id}>
           <h3>{q.kind === 'input' ? t('workRoom.aiQuestion') : t('workRoom.permission')}</h3>
           {q.status === 'expired' && <p>{t('workRoom.expired')}</p>}
           {q.kind === 'input' ? <>{q.params.questions?.map(question => <label key={question.id}>{question.question}

@@ -7,6 +7,20 @@ const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo' } as Chan
 const work = { id: 'work-1', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null,
   documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+it('저장된 외부 도구 이름과 기능 제한을 표시하고 고유 재개와 승인 동작을 제공하지 않는다', async () => {
+  const room = { ...work, toolId: 'local', toolConfigSnapshot: { name: '저장된 로컬 CLI', kind: 'external-cli' }, toolCapabilities: { conversation: true, questions: false, approval: false, interrupt: true, nativeResume: false }, state: 'recovery-required', threadId: 'old', errorCode: 'session-restarted',
+    events: [{ seq: 1, type: 'item/agentMessage/delta', data: { turnId: 't', itemId: 'i', delta: '외부 응답' } }],
+    questions: [{ id: 'q', kind: 'approval', status: 'pending', method: 'item/commandExecution/requestApproval', params: {} }] };
+  const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : room }));
+  vi.stubGlobal('fetch', fetch); render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByText('외부 응답');
+  expect(screen.getAllByText('저장된 로컬 CLI').length).toBeGreaterThan(0);
+  expect(screen.getByText(/구조화 질문·승인·고유 세션 재개 미지원/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '같은 대화 다시 연결' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '이 요청 승인' })).not.toBeInTheDocument();
+  expect(fetch.mock.calls.some(([url]) => url.endsWith('/reconnect') || url.includes('/ai-tools'))).toBe(false);
+});
+
 it('새로 열어도 선택 문서와 초안·화면 탭을 같은 업무로 복원한다', async () => {
   const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document')
     ? { path: new URL(url, 'http://localhost').searchParams.get('path'), content: '서버 문서', version: 'v1' }

@@ -7,18 +7,19 @@ import { LegacyService } from '../legacy/legacy.service';
 import { Work, WorkStore } from './store';
 import { atomicWrite, textFile, within } from '../files';
 import { markdownFiles } from '../legacy/parser';
-import { CodexService } from '../codex/codex.service';
+import { AiToolService } from '../ai-tools/ai-tool.service';
 import { OpenSpecService } from '../openspec/openspec.service';
 import { ExecutionService } from './execution.service';
 import { unresolvedQuestion } from '../codex/questions';
+import { AiToolConfigService } from '../ai-tools/config.service';
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 @Injectable()
 export class WorkService {
   private creating = new Map<string, Promise<Work>>();
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService,
-    @Inject(CodexService) readonly codex: CodexService, @Inject(OpenSpecService) readonly openspec: OpenSpecService,
-    @Inject(ExecutionService) readonly execution: ExecutionService) {}
+    @Inject(AiToolService) readonly codex: AiToolService, @Inject(OpenSpecService) readonly openspec: OpenSpecService,
+    @Inject(ExecutionService) readonly execution: ExecutionService, @Inject(AiToolConfigService) readonly tools: AiToolConfigService) {}
   get(id: string): Work { const work = this.store.get(id); if (!work) throw new NotFoundException('업무를 찾을 수 없습니다'); const source = this.legacy.source(work.sourceId); if (dirname(source.path) !== work.projectPath) throw new ConflictException('프로젝트 경로가 변경되었습니다'); return work; }
   create(body: any) {
     const key = `${body?.sourceId}:${body?.changeName}`;
@@ -48,7 +49,7 @@ export class WorkService {
     this.legacy.detail(`${source.id}/${body.changeName}`);
     const now = new Date().toISOString();
     const work: Work = { id: randomUUID(), sourceId: source.id, projectPath: dirname(source.path), changeName: body.changeName,
-      requestKey: body.requestKey, ideaIds: idea ? [idea.id] : [], phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null, createdAt: now, updatedAt: now };
+      requestKey: body.requestKey, ideaIds: idea ? [idea.id] : [], phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null, createdAt: now, updatedAt: now, ...this.tools.snapshot() };
     this.store.save(work);
     this.preserveIdeas(work);
     this.store.event(work.id, 'created', { changeName: work.changeName }); this.legacy.updates.next(); return work;

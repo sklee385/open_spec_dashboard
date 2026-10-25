@@ -3,11 +3,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { Subject } from 'rxjs';
+import type { ToolConfig, ToolCapabilities } from '../ai-tools/config.service';
 
 export interface Work {
   id: string; sourceId: string; projectPath: string; changeName: string; requestKey: string;
   ideaIds: string[]; phase: string; state: string; threadId: string | null;
   reviewedVersion: string | null; createdAt: string; updatedAt: string;
+  toolId?: string; toolConfigSnapshot?: ToolConfig; toolCapabilities?: ToolCapabilities; providerSessionId?: string | null;
   error?: string; turnId?: string; [key: string]: unknown;
 }
 @Injectable()

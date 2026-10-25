@@ -1,5 +1,20 @@
 // Product copy only; user content and execution output never pass through this catalog.
 export const enCopy = {
+  'aiTools.title': 'AI development tools',
+  'aiTools.hint': 'The default applies to new work only. Existing work keeps its saved tool and conversation. Saving does not run a tool.',
+  'aiTools.default': 'Default AI tool for new work',
+  'aiTools.id': 'Tool ID', 'aiTools.name': 'Tool name', 'aiTools.executable': 'Absolute executable path',
+  'aiTools.args': 'Arguments as a JSON array', 'aiTools.input': 'Input mode', 'aiTools.timeout': 'Timeout (ms)',
+  'aiTools.new': 'New tool', 'aiTools.add': 'Add external tool', 'aiTools.delete': 'Delete external tool',
+  'aiTools.save': 'Save AI tools', 'aiTools.saved': 'AI tool settings saved',
+  'aiTools.reload': 'Reload saved settings (replaces draft)',
+  'aiTools.loadError': 'Could not load AI tools', 'aiTools.saveError': 'Could not save AI tools',
+  'aiTools.argsError': 'Enter arguments as a JSON string array',
+  'aiTools.limitations': 'External CLI: saved conversation, text output and interruption. Structured questions, approvals and native session resume are unsupported. Install and authenticate in the CLI. The app does not provide a Codex sandbox for external tools.',
+  'aiTools.supported': 'Capabilities: conversation, questions, approvals, interruption, native session resume',
+  'aiTools.external': 'Capabilities: saved conversation and interruption. No structured questions, approvals or native session resume.',
+  'aiTools.logicalSession': 'Saved conversation context · no native session',
+
   "common.cancel": "Cancel",
   "common.retry": "Try Again",
   "common.settings": "Settings",
@@ -242,6 +257,21 @@ export const enCopy = {
   "workRoom.prepareRequest": "Prepare an AI correction request from this result"
 };
 export const koCopy: Record<keyof typeof enCopy, string> = {
+  'aiTools.title': 'AI 개발 도구',
+  'aiTools.hint': '새 업무에만 기본값을 적용합니다. 기존 업무의 저장 도구·대화는 유지됩니다. 저장만으로 도구를 실행하지 않습니다.',
+  'aiTools.default': '새 업무의 기본 AI 도구',
+  'aiTools.id': '도구 ID', 'aiTools.name': '도구 이름', 'aiTools.executable': '실행 파일 절대 경로',
+  'aiTools.args': '인자 JSON 배열', 'aiTools.input': '입력 방식', 'aiTools.timeout': '제한 시간(ms)',
+  'aiTools.new': '새 도구', 'aiTools.add': '외부 도구 추가', 'aiTools.delete': '외부 도구 삭제',
+  'aiTools.save': 'AI 도구 저장', 'aiTools.saved': 'AI 도구 설정을 저장했습니다',
+  'aiTools.reload': '저장 설정 다시 불러오기(초안 교체)',
+  'aiTools.loadError': 'AI 도구 설정을 불러오지 못했습니다', 'aiTools.saveError': 'AI 도구 설정을 저장하지 못했습니다',
+  'aiTools.argsError': '인자는 JSON 문자열 배열로 입력해 주세요',
+  'aiTools.limitations': '외부 CLI는 저장 대화·텍스트 출력·중단을 지원하며 구조화 질문·승인·고유 세션 재개는 미지원입니다. CLI를 직접 설치·인증해야 합니다. 앱은 외부 도구에 Codex 샌드박스를 제공하지 않습니다.',
+  'aiTools.supported': '지원 기능: 대화·질문·승인·중단·고유 세션 재개',
+  'aiTools.external': '지원 기능: 저장 대화·중단. 구조화 질문·승인·고유 세션 재개 미지원.',
+  'aiTools.logicalSession': '저장 대화 맥락 · 고유 세션 없음',
+
   "common.cancel": "취소",
   "common.retry": "다시 시도",
   "common.settings": "설정",

@@ -1,0 +1,32 @@
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { render } from '../test/render';
+import { SettingsModal } from './SettingsModal';
+const codex = { id: 'codex', name: 'Codex', kind: 'codex', readiness: { ready: true, message: '내장 도구' } };
+afterEach(() => vi.unstubAllGlobals());
+it('외부 도구를 등록·편집·선택하고 저장한 후 삭제할 수 있다', async () => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => ({ ok: true, json: async () => init ? { ...JSON.parse(init.body as string), version: 'v2' } : { tools: [codex], defaultToolId: 'codex', version: 'v1' }, text: async () => JSON.stringify(url.endsWith('/config') ? { sources: [] } : {}) }));
+  vi.stubGlobal('fetch', fetch); render(<SettingsModal open onOpenChange={() => {}} />);
+  await screen.findByRole('button', { name: '외부 도구 추가' });
+  fireEvent.click(screen.getByRole('button', { name: '외부 도구 추가' }));
+  fireEvent.change(screen.getByLabelText('도구 ID'), { target: { value: 'local' } });
+  fireEvent.change(screen.getByLabelText('도구 이름'), { target: { value: '로컬 도구' } });
+  fireEvent.change(screen.getByLabelText('실행 파일 절대 경로'), { target: { value: 'C:\\node.exe' } });
+  fireEvent.change(screen.getByLabelText('인자 JSON 배열'), { target: { value: '["run.cjs"]' } });
+  fireEvent.change(screen.getByLabelText('새 업무의 기본 AI 도구'), { target: { value: 'local' } });
+  fireEvent.click(screen.getByRole('button', { name: 'AI 도구 저장' }));
+  await screen.findByText('AI 도구 설정을 저장했습니다');
+  const call = fetch.mock.calls.find(([url, init]) => url.endsWith('/ai-tools') && init?.method === 'PUT')!;
+  expect(JSON.parse(call[1]!.body as string)).toMatchObject({ version: 'v1', defaultToolId: 'local', tools: [codex, { id: 'local', name: '로컬 도구', args: ['run.cjs'] }] });
+  fireEvent.click(screen.getByRole('button', { name: '외부 도구 삭제' }));
+  expect(screen.queryByLabelText('도구 이름')).not.toBeInTheDocument();
+});
+it('미설치 상태를 표시하고 충돌·저장 실패 시 초안을 보존한다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => ({ ok: !init, status: 409, json: async () => init ? { message: '다른 창에서 변경되었습니다' } : { version: 'v1', defaultToolId: 'codex', tools: [codex, { id: 'missing', name: '없는 도구', kind: 'external-cli', executable: 'C:\\missing.exe', args: [], input: 'stdin', timeoutMs: 100, readiness: { ready: false, message: '실행 파일이 없습니다' } }] }, text: async () => JSON.stringify(url.endsWith('/config') ? { sources: [] } : {}) })));
+  render(<SettingsModal open onOpenChange={() => {}} />);
+  await screen.findByText('실행 파일이 없습니다');
+  fireEvent.change(screen.getByLabelText('도구 이름'), { target: { value: '보존할 초안' } });
+  fireEvent.click(screen.getByRole('button', { name: 'AI 도구 저장' }));
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('다른 창에서 변경되었습니다'));
+  expect(screen.getByLabelText('도구 이름')).toHaveValue('보존할 초안');
+});

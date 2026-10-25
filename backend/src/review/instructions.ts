@@ -1,0 +1,1 @@
+export const reviewInstructions = '계획 문서에서 사용자 확인·가정·미결정·선택이 필요한 사항은 일반 Markdown 목록의 시작에 각각 [review:confirm], [review:assumption], [review:decision], [review:choice]로 명시한다. 여러 줄 설명과 선택지는 같은 목록 항목의 하위 블록으로 작성한다. 이전 문서의 의미를 추측해 소급 표기하지 않는다. 항목별 승인 상태는 없으며 목록 조회는 문서 검토 완료나 구현 시작을 대신하지 않는다.';

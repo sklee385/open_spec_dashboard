@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Plus, Trash2, AlertCircle, FolderOpen, Loader2, Check } from 'lucide-react';
 import { getConfig, updateSources, type SourceConfig } from '../hooks/useApi';
 import { cn } from '@/lib/utils';
+import { AiToolSettings } from './AiToolSettings';
 
 interface SettingsModalProps {
   open: boolean;
@@ -108,7 +109,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FolderOpen className="h-5 w-5 text-primary" />
@@ -117,6 +118,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
         </DialogHeader>
 
         <div className="space-y-6 py-4">
+          <AiToolSettings />
           <div className="space-y-4">
             <div>
               <h3 className="text-sm font-semibold leading-none">{t('settings.sources')}</h3>

@@ -30,6 +30,7 @@ describe('Codex 프로세스와 동일 대화', () => {
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
     const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(calls.filter(x => x.method === 'thread/start')).toHaveLength(1);
+    expect(app.get(WorkStore).get(work.id)?.providerSessionId).toBe('thread-1');
     expect(calls.filter(x => x.method === 'turn/start').every(x => x.params.threadId === 'thread-1')).toBe(true);
     for (const call of calls.filter(x => ['thread/start', 'turn/start'].includes(x.method))) {
       expect(call.params).toMatchObject({ approvalsReviewer: 'auto_review', approvalPolicy: 'on-request' });

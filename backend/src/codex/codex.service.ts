@@ -20,7 +20,7 @@ export class CodexService implements OnModuleDestroy {
   private closing = false;
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService) {
     this.queueSubscription = store.updates.subscribe(event => setImmediate(() => { void this.drain(event.workId); }));
-    for (const work of this.store.list()) {
+    for (const work of this.store.list().filter(work => !work.toolId || work.toolId === 'codex')) {
       if (['running', 'connecting', 'creating-thread', 'waiting-input', 'waiting-approval'].includes(work.state)) {
         work.state = 'recovery-required'; work.error = '서버가 재시작되었습니다. 같은 대화로 복구할 수 있습니다.'; this.store.save(work);
       }
@@ -59,7 +59,7 @@ export class CodexService implements OnModuleDestroy {
         work.state = 'creating-thread'; this.store.save(work);
         const result = await this.client.rpc('thread/start', { cwd: work.projectPath, ephemeral: false, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', dynamicTools: [askUserTool],
           developerInstructions: '사용자와 한국어로 문답하며 같은 업무를 계속 진행한다. 불명확한 요구사항은 ask_user 도구로 질문하고 답변을 관련 문서에 반영한다. 계획 단계에서는 지정된 OpenSpec 변경 문서만 작성·수정하고 제품 코드를 구현하지 않는다. 구현은 사용자의 구현 시작 지시 후에 진행한다. 문서 작성·구현·검증 결과 생성만으로 사용자 검토나 완료를 대체하지 않는다.' });
-        work.threadId = result.thread.id; this.store.save(work); this.loaded.add(work.threadId!);
+        work.threadId = result.thread.id; work.providerSessionId = work.threadId; this.store.save(work); this.loaded.add(work.threadId!);
       } else if (!this.loaded.has(work.threadId)) {
         await this.client.rpc('thread/resume', { threadId: work.threadId, cwd: work.projectPath, excludeTurns: true, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' });
         this.loaded.add(work.threadId);
@@ -180,7 +180,7 @@ export class CodexService implements OnModuleDestroy {
     const paths = ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`)];
     return Object.fromEntries(paths.map(path => { const content = textFile(within(root, path)); return [path, content === null ? '' : createHash('sha256').update(content).digest('hex')]; }));
   }
-  private requireReviewedPlan(work: Work) {
+  requireReviewedPlan(work: Work) {
     const root = within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`);
     const paths = ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(path => `specs/${path}`)].filter(path => textFile(within(root, path)) !== null);
     const version = createHash('sha256').update(paths.map(path => `${path}\n${textFile(within(root, path))!.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')).digest('hex');
@@ -188,7 +188,7 @@ export class CodexService implements OnModuleDestroy {
   }
   private async drain(id: string) {
     if (this.closing || this.draining.has(id) || this.locks.has(id)) return;
-    const work = this.store.get(id); if (!work || work.state !== 'idle' || ['completed', 'archived'].includes(work.phase)) return;
+    const work = this.store.get(id); if (!work || (work.toolId && work.toolId !== 'codex') || work.state !== 'idle' || ['completed', 'archived'].includes(work.phase)) return;
     const queued = this.store.records(id, 'queued-message').find(x => x.status === 'queued'); if (!queued) return;
     this.draining.add(id); this.store.record(queued.id, id, 'queued-message', { ...queued, status: 'dispatching' });
     try { await this.send(id, queued.text, queued.phase); this.store.record(queued.id, id, 'queued-message', { ...queued, status: 'sent' }); }

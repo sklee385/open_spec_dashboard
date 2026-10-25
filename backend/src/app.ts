@@ -9,13 +9,17 @@ import { WorkStore } from './work/store';
 import { CodexService } from './codex/codex.service';
 import { OpenSpecService } from './openspec/openspec.service';
 import { ExecutionService } from './work/execution.service';
+import { AiToolConfigService } from './ai-tools/config.service';
+import { AiToolsController } from './ai-tools/ai-tools.controller';
+import { AiToolService } from './ai-tools/ai-tool.service';
+import { ExternalCliAdapter } from './ai-tools/external-cli.adapter';
 
 @Controller()
 class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService] })
+@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, AiToolConfigService, AiToolService, ExternalCliAdapter] })
 class AppModule {}
 
 export async function createApplication() {
