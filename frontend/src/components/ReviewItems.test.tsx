@@ -35,7 +35,27 @@ it('배경 갱신 중에도 원문 선택을 유지하고 이동 요청에서 �
   const select = vi.fn();
   render(<ReviewItems data={data} loading error={false} refresh={async () => data} onSelect={select} />);
   const button = screen.getByRole('button', { name: /공개 범위 확인/ });
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
   expect(button).toBeEnabled(); fireEvent.click(button); expect(select).toHaveBeenCalledWith(item);
+});
+it('빈 목록을 반복 갱신할 때 로딩 안내로 바꾸거나 기존 안내를 제거하지 않는다', async () => {
+  class Stream { static current: Stream; callbacks: Record<string, () => void> = {}; close() {} addEventListener(name: string, callback: () => void) { this.callbacks[name] = callback; } constructor() { Stream.current = this; } }
+  vi.stubGlobal('EventSource', Stream);
+  const empty = { ...data, items: [] };
+  let finish!: (value: unknown) => void;
+  const fetch = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => empty });
+  vi.stubGlobal('fetch', fetch);
+  render(<View />);
+  const notice = await screen.findByText('검토 항목이 없습니다.');
+  for (const round of [1, 2, 3]) {
+    fetch.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    act(() => Stream.current.callbacks.update());
+    expect(fetch).toHaveBeenCalledTimes(round + 1);
+    expect(screen.queryByText('검토 항목이 없습니다.')).toBe(notice);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    await act(async () => finish({ ok: true, json: async () => empty }));
+    expect(screen.getByText('검토 항목이 없습니다.')).toBe(notice);
+  }
 });
 it('부분 오류를 빈 목록과 구분하고 재시도한다', async () => {
   const fetch = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ ...data, items: [], errors: [{ path: 'design.md', code: 'EACCES', message: '실패' }] }) }).mockResolvedValue({ ok: true, json: async () => ({ ...data, items: [] }) });
