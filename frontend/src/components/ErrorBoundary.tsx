@@ -1,6 +1,8 @@
 import { Component, type ReactNode, type ComponentType } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { I18nContext } from '@/i18n/context';
+import type { ContextType } from 'react';
 
 interface Props {
   children: ReactNode;
@@ -12,6 +14,8 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
+  static contextType = I18nContext;
+  declare context: ContextType<typeof I18nContext>;
   constructor(props: Props) {
     super(props);
     this.state = { error: null };
@@ -38,11 +42,11 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="flex flex-col items-center justify-center min-h-[400px] gap-4 p-6">
           <AlertTriangle className="h-12 w-12 text-destructive" />
           <div className="text-center max-w-md">
-            <h2 className="text-lg font-semibold mb-2">Something went wrong</h2>
+            <h2 className="text-lg font-semibold mb-2">{this.context.t('errors.screen')}</h2>
             <p className="text-sm text-muted-foreground mb-4">{error.message}</p>
             <Button onClick={this.handleRetry} variant="outline">
               <RefreshCw className="h-4 w-4 mr-2" />
-              Try Again
+              {this.context.t('common.retry')}
             </Button>
           </div>
         </div>

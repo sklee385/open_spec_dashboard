@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { cn } from '@/lib/utils';
 import type { Idea } from '../types';
 import { formatRelativeTime } from '@/lib/utils';
@@ -8,6 +9,9 @@ interface IdeaCardProps {
 }
 
 export function IdeaCard({ idea, onClick }: IdeaCardProps) {
+  const { t, locale } = useI18n();
+
+
   return (
     <button
       onClick={onClick}
@@ -24,15 +28,15 @@ export function IdeaCard({ idea, onClick }: IdeaCardProps) {
             {idea.title}
           </h3>
           <p className="text-xs text-muted-foreground/70 line-clamp-2 mb-2">
-            {idea.description || 'No description'}
+            {idea.description || t('ideas.noDescription')}
           </p>
           <div className="flex items-center gap-2 text-xs text-muted-foreground/50">
             {idea.projectId && (
               <span className="px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 font-medium">
-                Linked
+                {t('ideas.linked')}
               </span>
             )}
-            <span>{formatRelativeTime(idea.createdAt)}</span>
+            <span>{formatRelativeTime(idea.createdAt, locale)}</span>
           </div>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Menu, FileText, Folder, Loader2 } from 'lucide-react';
@@ -21,6 +22,9 @@ interface SpecsViewProps {
 }
 
 export function SpecsView({ selectedSourceId }: SpecsViewProps) {
+  const { t } = useI18n();
+
+
   const { specs, loading, error } = useSpecs();
   const [selectedSpecId, setSelectedSpecId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -52,7 +56,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <Loader2 className="h-8 w-8 text-primary animate-spin" />
-        <div className="text-muted-foreground">Loading specs...</div>
+        <div className="text-muted-foreground">{t('specs.loading')}</div>
       </div>
     );
   }
@@ -63,7 +67,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
         <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
           <span className="text-3xl">⚠️</span>
         </div>
-        <div className="text-destructive font-medium">Error loading specs</div>
+        <div className="text-destructive font-medium">{t('specs.error')}</div>
         <div className="text-sm text-muted-foreground">{error.message}</div>
       </div>
     );
@@ -77,10 +81,10 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
         </div>
         <div className="text-center">
           <div className="text-muted-foreground text-lg font-medium">
-            {selectedSourceId ? 'No specs found for selected project' : 'No specs found'}
+            {selectedSourceId ? t('specs.noProject') : t('specs.none')}
           </div>
           <p className="text-sm text-muted-foreground/70 mt-1">
-            Specs will appear here once they're created
+            {t('specs.hint')}
           </p>
         </div>
       </div>
@@ -129,7 +133,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
         detailLoading ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <Loader2 className="h-8 w-8 text-primary animate-spin" />
-            <div className="text-muted-foreground text-sm">Loading spec...</div>
+            <div className="text-muted-foreground text-sm">{t('specs.loadingOne')}</div>
           </div>
         ) : specDetail ? (
           <div className="animate-in fade-in-50 duration-200">
@@ -155,7 +159,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
             <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center">
               <FileText className="h-8 w-8 text-muted-foreground/40" />
             </div>
-            <div className="text-muted-foreground">Failed to load spec</div>
+            <div className="text-muted-foreground">{t('specs.errorOne')}</div>
           </div>
         )
       ) : (
@@ -164,10 +168,10 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
             <FileText className="h-10 w-10 text-muted-foreground/30" />
           </div>
           <div className="text-muted-foreground font-medium">
-            {isMobile ? 'Tap the menu to select a spec' : 'Select a spec to view'}
+            {isMobile ? t('specs.tap') : t('specs.select')}
           </div>
           <p className="text-sm text-muted-foreground/70 mt-1">
-            Choose from the {isMobile ? 'menu' : 'sidebar'} to get started
+            {t('specs.choose', { mobile: isMobile })}
           </p>
         </div>
       )}
@@ -184,14 +188,14 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
             <SheetTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2 bg-background/50">
                 <Menu className="h-4 w-4" />
-                Specs
+                {t('common.specs')}
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="w-[300px] p-0">
               <SheetHeader className="p-5 border-b border-border">
                 <SheetTitle className="text-left flex items-center gap-2">
                   <FileText className="h-4 w-4 text-primary" />
-                  Specifications
+                  {t('header.specifications')}
                 </SheetTitle>
               </SheetHeader>
               <ScrollArea className="h-[calc(100dvh-5rem)]">
@@ -224,7 +228,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
         <div className="p-4 border-b border-border/50">
           <h2 className="text-sm font-semibold flex items-center gap-2">
             <FileText className="h-4 w-4 text-primary" />
-            Specifications
+            {t('header.specifications')}
           </h2>
           <p className="text-xs text-muted-foreground mt-1">
             {filteredSpecs.length} {filteredSpecs.length === 1 ? 'spec' : 'specs'}

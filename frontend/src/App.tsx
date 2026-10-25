@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { KanbanBoard } from './components/KanbanBoard';
@@ -18,6 +19,9 @@ const SHOW_ARCHIVED_KEY = 'openspec-show-archived';
 const SELECTED_SOURCE_KEY = 'openspec-selected-source';
 
 function App() {
+  const { t } = useI18n();
+
+
   const [currentView, setCurrentView] = useState<View>(() => {
     const stored = localStorage.getItem('openspec-view');
     if (stored === 'kanban' || stored === 'specs') {
@@ -135,7 +139,7 @@ function App() {
             onStart={async (idea, changeName) => {
               const response = await fetch('/api/work', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: idea.sourceId, ideaId: idea.id, changeName, requestKey: `idea:${idea.id}:${changeName}` }) });
               const data = await response.json();
-              if (!response.ok) throw new Error(data.message || data.error || '업무를 시작하지 못했습니다');
+              if (!response.ok) throw new Error(data.message || data.error || t('ideas.startError'));
               setSelectedIdea(null);
               setSelectedChange({ id: `${data.sourceId}/${data.changeName}`, name: data.changeName, sourceId: data.sourceId, status: 'draft', hasProposal: false, hasDesign: false, hasSpecs: false, hasTasks: false, taskStats: null, schema: 'spec-driven', artifacts: [] });
               handleUpdate();

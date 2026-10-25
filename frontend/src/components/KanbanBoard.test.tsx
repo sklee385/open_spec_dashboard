@@ -1,5 +1,7 @@
+import { render as renderLocalized } from '../test/render';
+const render: typeof renderLocalized = (view, options) => renderLocalized(view, { locale: 'en', ...options });
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { KanbanBoard } from './KanbanBoard';
 import type { Change, Idea, Source } from '../types';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -129,7 +131,7 @@ describe('KanbanBoard', () => {
     vi.mocked(useIsMobile).mockReturnValue(true);
     const change = { ...mockChanges[0], name: 'idea-123', title: '다국어처리', status: 'draft', taskStats: null } as Change;
     render(<KanbanBoard sources={mockSources} onCardClick={vi.fn()} selectedSourceId={null} ideas={[]} changes={[change]} />);
-    fireEvent.click(screen.getByRole('button', { name: '초안 (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Draft (1)' }));
     expect(screen.getByRole('heading', { name: '다국어처리' })).toBeInTheDocument();
   });
 });

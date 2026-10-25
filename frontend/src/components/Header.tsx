@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
 import { Menu, Settings, Sun, Moon, Sparkles, Lightbulb } from 'lucide-react';
@@ -46,6 +47,9 @@ export function Header({
   onOpenSettings,
   onOpenNewIdea,
 }: HeaderProps) {
+  const { t } = useI18n();
+
+
   const { theme, toggle } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -90,7 +94,7 @@ export function Header({
             )}
           >
             <span className="mr-3">📋</span>
-            Kanban Board
+            {t('header.kanbanBoard')}
           </button>
           <button
             onClick={() => handleViewChange('specs')}
@@ -102,7 +106,7 @@ export function Header({
             )}
           >
             <span className="mr-3">📄</span>
-            Specifications
+            {t('header.specifications')}
           </button>
         </div>
       );
@@ -121,7 +125,7 @@ export function Header({
               : "text-muted-foreground hover:text-foreground hover:bg-transparent"
           )}
         >
-          Kanban
+          {t('header.kanban')}
         </Button>
         <Button
           variant="ghost"
@@ -134,7 +138,7 @@ export function Header({
               : "text-muted-foreground hover:text-foreground hover:bg-transparent"
           )}
         >
-          Specs
+          {t('common.specs')}
         </Button>
       </nav>
     );
@@ -146,13 +150,13 @@ export function Header({
       onValueChange={(val) => onSourceChange(val === "all" ? null : val)}
     >
       <SelectTrigger className="w-[160px] md:w-[180px] h-9 text-sm bg-background/50 border-border/50 hover:border-border transition-colors shrink-0">
-        <SelectValue placeholder="All Projects" />
+        <SelectValue placeholder={t('header.allProjects')} />
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="all">
           <span className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-gradient-to-r from-[var(--accent-violet)] to-[var(--accent-cyan)] shrink-0" />
-            <span className="truncate">All Projects</span>
+            <span className="truncate">{t('header.allProjects')}</span>
           </span>
         </SelectItem>
         {sources.map(s => (
@@ -173,17 +177,17 @@ export function Header({
         <button
           onClick={toggle}
           className="flex items-center gap-3 w-full px-3 py-2.5 text-sm rounded-lg text-foreground hover:bg-muted transition-all duration-200"
-          aria-label="Toggle theme"
+          aria-label={t('header.theme')}
         >
           {theme === 'dark' ? (
             <>
               <Sun className="h-4 w-4 text-amber-500" />
-              Light Mode
+              {t('header.light')}
             </>
           ) : (
             <>
               <Moon className="h-4 w-4 text-indigo-500" />
-              Dark Mode
+              {t('header.dark')}
             </>
           )}
         </button>
@@ -195,7 +199,7 @@ export function Header({
         variant="ghost" 
         size="icon" 
         onClick={toggle} 
-        aria-label="Toggle theme"
+        aria-label={t('header.theme')}
         className="h-9 w-9 rounded-lg hover:bg-muted transition-colors"
       >
         {theme === 'dark' ? (
@@ -213,10 +217,10 @@ export function Header({
         <button
           onClick={handleOpenSettings}
           className="flex items-center gap-3 w-full px-3 py-2.5 text-sm rounded-lg text-foreground hover:bg-muted transition-all duration-200"
-          aria-label="Open settings"
+          aria-label={t('header.settings')}
         >
           <Settings className="h-4 w-4" />
-          Settings
+          {t('common.settings')}
         </button>
       );
     }
@@ -226,7 +230,7 @@ export function Header({
         variant="ghost" 
         size="icon" 
         onClick={handleOpenSettings} 
-        aria-label="Open settings"
+        aria-label={t('header.settings')}
         className="h-9 w-9 rounded-lg hover:bg-muted transition-colors"
       >
         <Settings className="h-4 w-4 transition-transform hover:rotate-90 duration-300" />
@@ -243,10 +247,10 @@ export function Header({
             setMobileMenuOpen(false);
           }}
           className="flex items-center gap-3 w-full px-3 py-2.5 text-sm rounded-lg text-foreground hover:bg-muted transition-all duration-200"
-          aria-label="Create new idea"
+          aria-label={t('header.createIdea')}
         >
           <Lightbulb className="h-4 w-4" />
-          New Idea
+          {t('header.newIdea')}
         </button>
       );
     }
@@ -259,7 +263,7 @@ export function Header({
         className="h-9"
       >
         <Lightbulb className="h-4 w-4 mr-2" />
-        New Idea
+        {t('header.newIdea')}
       </Button>
     );
   };
@@ -286,10 +290,10 @@ export function Header({
               ? "bg-primary text-primary-foreground font-medium shadow-sm"
               : "text-foreground hover:bg-muted"
           )}
-          aria-label="Toggle archived changes"
+          aria-label={t('header.toggleArchived')}
         >
           <span className="mr-3">📦</span>
-          {showArchived ? 'Hide Archived' : 'Show Archived'}
+          {showArchived ? t('header.hideArchived') : t('header.showArchived')}
         </button>
       );
     }
@@ -299,13 +303,13 @@ export function Header({
         variant={showArchived ? 'default' : 'outline'}
         size="sm"
         onClick={handleToggle}
-        aria-label="Toggle archived changes"
+        aria-label={t('header.toggleArchived')}
         className={cn(
           "h-9 transition-all duration-200",
           !showArchived && "bg-background/50 border-border/50 hover:border-border"
         )}
       >
-        {showArchived ? 'Hide Archived' : 'Show Archived'}
+        {showArchived ? t('header.hideArchived') : t('header.showArchived')}
       </Button>
     );
   };
@@ -354,7 +358,7 @@ export function Header({
             <div className="md:hidden">
               <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
                 <SheetTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="Open menu" className="h-9 w-9">
+                  <Button variant="ghost" size="icon" aria-label={t('header.openMenu')} className="h-9 w-9">
                     <Menu className="h-5 w-5" />
                   </Button>
                 </SheetTrigger>
@@ -363,24 +367,24 @@ export function Header({
                     <SheetHeader className="px-5 py-5 border-b border-border">
                       <SheetTitle className="text-left flex items-center gap-2">
                         <Sparkles className="h-4 w-4 text-primary" />
-                        Menu
+                        {t('header.menu')}
                       </SheetTitle>
                     </SheetHeader>
                     <nav className="flex-1 px-4 py-5 space-y-6">
                       {showViewToggle && (
                         <div className="space-y-2">
-                          <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">View</p>
+                          <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('header.view')}</p>
                           <ViewToggle mobile />
                         </div>
                       )}
                       {currentView === 'kanban' && onShowArchivedChange && (
                         <div className="space-y-2">
-                          <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Filter</p>
+                          <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('header.filter')}</p>
                           <ShowArchivedToggle mobile />
                         </div>
                       )}
                       <div className="space-y-2">
-                        <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Preferences</p>
+                        <p className="px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('header.preferences')}</p>
                         <div className="space-y-1">
                           <NewIdeaButton mobile />
                           <SettingsButton mobile />

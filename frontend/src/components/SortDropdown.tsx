@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { ArrowUpDown, ArrowUpAZ, ArrowDownAZ, TrendingUp, TrendingDown, Check } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
@@ -9,14 +10,17 @@ interface SortDropdownProps {
   onChange: (value: SortOption) => void;
 }
 
-const SORT_OPTIONS: { value: SortOption; label: string; icon: React.ReactNode }[] = [
-  { value: 'name-asc', label: 'Name (A-Z)', icon: <ArrowUpAZ className="h-4 w-4" /> },
-  { value: 'name-desc', label: 'Name (Z-A)', icon: <ArrowDownAZ className="h-4 w-4" /> },
-  { value: 'progress-asc', label: 'Progress (least)', icon: <TrendingDown className="h-4 w-4" /> },
-  { value: 'progress-desc', label: 'Progress (most)', icon: <TrendingUp className="h-4 w-4" /> },
-];
+
 
 export function SortDropdown({ value, onChange }: SortDropdownProps) {
+  const { t } = useI18n();
+  const SORT_OPTIONS: { value: SortOption; label: string; icon: React.ReactNode }[] = [
+  { value: 'name-asc', label: t('sort.nameAsc'), icon: <ArrowUpAZ className="h-4 w-4" /> },
+  { value: 'name-desc', label: t('sort.nameDesc'), icon: <ArrowDownAZ className="h-4 w-4" /> },
+  { value: 'progress-asc', label: t('sort.progressAsc'), icon: <TrendingDown className="h-4 w-4" /> },
+  { value: 'progress-desc', label: t('sort.progressDesc'), icon: <TrendingUp className="h-4 w-4" /> },
+];
+
   const selectedOption = SORT_OPTIONS.find(opt => opt.value === value);
   
   return (
@@ -27,7 +31,7 @@ export function SortDropdown({ value, onChange }: SortDropdownProps) {
         "hover:border-border transition-colors"
       )}>
         <ArrowUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <SelectValue placeholder="Sort by">
+        <SelectValue placeholder={t('sort.by')}>
           {selectedOption?.label}
         </SelectValue>
       </SelectTrigger>

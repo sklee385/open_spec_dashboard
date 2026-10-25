@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { useState, useEffect } from 'react';
 import { useSources } from '../hooks/useApi';
 import { createIdea, updateIdea } from '../hooks/useApi';
@@ -31,6 +32,9 @@ interface IdeaCaptureProps {
 }
 
 export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea, onSuccess }: IdeaCaptureProps) {
+  const { t } = useI18n();
+
+
   const [internalOpen, setInternalOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -72,7 +76,7 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
       onSuccess?.();
     } catch (error) {
       console.error('Failed to save idea:', error);
-      alert('Failed to save idea. Please try again.');
+      alert(t('ideas.saveError'));
     } finally {
       setSaving(false);
     }
@@ -87,11 +91,11 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
       ) : null}
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>{isEditing ? 'Edit Idea' : 'Capture Idea'}</DialogTitle>
+          <DialogTitle>{isEditing ? t('ideas.edit') : t('ideas.capture')}</DialogTitle>
           <DialogDescription>
             {isEditing
-              ? 'Update your idea details.'
-              : 'Quickly jot down an idea. AI agents can help you expand it into a full proposal later.'
+              ? t('ideas.editHint')
+              : t('ideas.captureHint')
             }
           </DialogDescription>
         </DialogHeader>
@@ -99,16 +103,16 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
           <div className="space-y-4 py-4">
             {!isEditing && (
               <div className="space-y-2">
-                <Label htmlFor="source">Source (Optional)</Label>
+                <Label htmlFor="source">{t('ideas.source')}</Label>
                 <Select
                   value={sourceId || ''}
                   onValueChange={(value) => setSourceId(value === 'none' ? null : value)}
                 >
                   <SelectTrigger id="source">
-                    <SelectValue placeholder="Select a source or leave unassigned" />
+                    <SelectValue placeholder={t('ideas.selectSource')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No Source (Default)</SelectItem>
+                    <SelectItem value="none">{t('ideas.noSource')}</SelectItem>
                     {sources.map((source) => (
                       <SelectItem key={source.id} value={source.id}>
                         {source.name}
@@ -119,20 +123,20 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="title">Title</Label>
+              <Label htmlFor="title">{t('ideas.title')}</Label>
               <Input
                 id="title"
-                placeholder="What's your idea?"
+                placeholder={t('ideas.titlePlaceholder')}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 disabled={saving}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
+              <Label htmlFor="description">{t('common.description')}</Label>
               <textarea
                 id="description"
-                placeholder="Describe your idea in detail..."
+                placeholder={t('ideas.descriptionPlaceholder')}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 disabled={saving}
@@ -148,10 +152,10 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
               onClick={() => setOpen(false)}
               disabled={saving}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button type="submit" disabled={saving || !title.trim()}>
-              {saving ? 'Saving...' : (isEditing ? 'Update Idea' : 'Save Idea')}
+              {saving ? t('settings.saving') : (isEditing ? t('ideas.update') : t('ideas.save'))}
             </Button>
           </DialogFooter>
         </form>

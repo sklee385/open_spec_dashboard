@@ -1,5 +1,13 @@
 # React + TypeScript + Vite
 
+## 다국어 화면
+
+브라우저 선호 언어의 첫 지원 언어에 따라 한국어·영어를 자동 선택하며 지원 언어가 없으면 영어를 사용합니다. 브라우저 설정 변경은 새로고침 후 반영됩니다.
+
+제품 문구는 `src/i18n/catalog.ts`의 두 사전에 같은 키로 추가합니다. 변수가 있는 문구는 `src/i18n/messages.ts`에 타입이 있는 메시지 함수로 정의하고, 컴포넌트에서는 `useI18n()`의 `t`를 사용합니다. API 상태·문서·대화·실행 출력은 번역하지 않습니다.
+
+테스트에서는 `src/test/render.tsx`로 언어를 명시합니다. `npm run test:run`, `npm run build`, `npm run lint`로 확인합니다. 실제 브라우저 확인은 사용자 설치 ChatGPT 확장을 통한 Microsoft Edge에서 수행합니다.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

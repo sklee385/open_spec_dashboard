@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { Search, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -10,14 +11,17 @@ interface SearchBarProps {
   className?: string;
 }
 
-export function SearchBar({ value, onChange, placeholder = "Search...", className }: SearchBarProps) {
+export function SearchBar({ value, onChange, placeholder, className }: SearchBarProps) {
+  const { t } = useI18n();
+
+
   return (
     <div className={cn("relative w-full sm:w-auto group", className)}>
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none transition-colors group-focus-within:text-primary" />
       <Input
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t('search.placeholder')}
         className={cn(
           "pl-9 pr-9 h-9 w-full sm:w-[280px]",
           "bg-background/50 border-border/50",
@@ -31,6 +35,7 @@ export function SearchBar({ value, onChange, placeholder = "Search...", classNam
           variant="ghost"
           size="icon"
           className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 rounded-md hover:bg-muted"
+          aria-label={t('kanban.clearSearch')}
           onClick={() => onChange('')}
         >
           <X className="h-3.5 w-3.5" />

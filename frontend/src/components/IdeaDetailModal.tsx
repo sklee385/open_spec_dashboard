@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { useState } from 'react';
 import { X, Lightbulb, Calendar, Folder, Trash2, Loader2, Edit } from 'lucide-react';
 import { deleteIdea } from '../hooks/useApi';
@@ -13,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime, formatDateTime } from "@/lib/utils";
 
 interface IdeaDetailModalProps {
   idea: Idea | null;
@@ -24,13 +25,16 @@ interface IdeaDetailModalProps {
 }
 
 export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: IdeaDetailModalProps) {
+  const { t, locale } = useI18n();
+
+
   const [deleting, setDeleting] = useState(false);
   const [changeName, setChangeName] = useState(() => `idea-${Date.now()}`);
   const [starting, setStarting] = useState(false), [startError, setStartError] = useState('');
   const isMobile = useIsMobile();
 
   const handleDelete = async () => {
-    if (!idea || !confirm('Are you sure you want to delete this idea?')) return;
+    if (!idea || !confirm(t('ideas.deleteConfirm'))) return;
 
     setDeleting(true);
     try {
@@ -39,7 +43,7 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
       onClose();
     } catch (error) {
       console.error('Failed to delete idea:', error);
-      alert('Failed to delete idea. Please try again.');
+      alert(t('ideas.deleteError'));
     } finally {
       setDeleting(false);
     }
@@ -72,7 +76,7 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
                 <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500/10 to-violet-500/5 flex items-center justify-center">
                   <Lightbulb className="h-4 w-4 text-violet-600 dark:text-violet-400" />
                 </div>
-                <span className="text-xs font-medium text-muted-foreground">Idea</span>
+                <span className="text-xs font-medium text-muted-foreground">{t('ideas.idea')}</span>
               </div>
               <DialogTitle className={cn(
                 "leading-snug",
@@ -89,13 +93,13 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
                 </Badge>
                 <div className="flex items-center gap-1 text-xs text-muted-foreground/70">
                   <Calendar className="h-3 w-3" />
-                  <span>{formatRelativeTime(idea.createdAt)}</span>
+                  <span>{formatRelativeTime(idea.createdAt, locale)}</span>
                 </div>
               </div>
             </div>
             {isMobile && (
               <DialogClose asChild>
-                <Button variant="ghost" size="icon" className="flex-shrink-0 h-9 w-9 rounded-lg">
+                <Button aria-label={t('common.close')} variant="ghost" size="icon" className="flex-shrink-0 h-9 w-9 rounded-lg">
                   <X className="h-4 w-4" />
                 </Button>
               </DialogClose>
@@ -109,7 +113,7 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
             {idea.projectId && (
               <div className="flex items-center gap-2 text-sm">
                 <Folder className="h-4 w-4 text-muted-foreground" />
-                <span className="text-muted-foreground">Project:</span>
+                <span className="text-muted-foreground">{t('ideas.project')}</span>
                 <Badge variant="outline" className="text-xs">
                   {idea.projectId}
                 </Badge>
@@ -117,13 +121,13 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
             )}
 
             <div className="space-y-2">
-              <h3 className="text-sm font-medium text-foreground">Description</h3>
+              <h3 className="text-sm font-medium text-foreground">{t('common.description')}</h3>
               <div className="prose prose-sm dark:prose-invert max-w-none">
                 <p className={cn(
                   "text-sm leading-relaxed",
                   idea.description ? "text-muted-foreground" : "text-muted-foreground italic"
                 )}>
-                  {idea.description || "No description provided."}
+                  {idea.description || t('ideas.noDescriptionDetail')}
                 </p>
               </div>
             </div>
@@ -131,11 +135,11 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
             <div className="pt-4 border-t border-border/50">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Calendar className="h-3 w-3" />
-                <span>Created: {new Date(idea.createdAt).toLocaleString()}</span>
+                <span>{t('ideas.created')} {formatDateTime(idea.createdAt, locale)}</span>
                 {idea.updatedAt !== idea.createdAt && (
                   <>
                     <span className="text-border">•</span>
-                    <span>Updated: {new Date(idea.updatedAt).toLocaleString()}</span>
+                    <span>{t('ideas.updated')} {formatDateTime(idea.updatedAt, locale)}</span>
                   </>
                 )}
               </div>
@@ -149,8 +153,8 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
           isMobile ? "p-4" : "px-6 py-4"
         )}>
           {onStart && <form className="mb-4 flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); setStarting(true); setStartError(''); void onStart(idea, changeName).catch(error => setStartError(error.message)).finally(() => setStarting(false)); }}>
-            <label>변경 이름<input className="ml-2 border rounded px-2 py-1" aria-label="변경 이름" pattern="[a-z0-9]+(-[a-z0-9]+)*" required value={changeName} onChange={event => setChangeName(event.target.value)} /></label>
-            <Button type="submit" disabled={starting}>아이디어에서 업무 시작</Button>
+            <label>{t('ideas.changeName')}<input className="ml-2 border rounded px-2 py-1" aria-label={t('ideas.changeName')} pattern="[a-z0-9]+(-[a-z0-9]+)*" required value={changeName} onChange={event => setChangeName(event.target.value)} /></label>
+            <Button type="submit" disabled={starting}>{t('ideas.startWork')}</Button>
             {startError && <p role="alert">{startError}</p>}
           </form>}
           <div className="flex gap-2 justify-end">
@@ -164,12 +168,12 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
               {deleting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Deleting...
+                  {t('ideas.deleting')}
                 </>
               ) : (
                 <>
                   <Trash2 className="h-4 w-4" />
-                  Delete
+                  {t('common.delete')}
                 </>
               )}
             </Button>
@@ -180,7 +184,7 @@ export function IdeaDetailModal({ idea, onClose, onDeleted, onEdit, onStart }: I
               className="gap-2"
             >
               <Edit className="h-4 w-4" />
-              Edit
+              {t('common.edit')}
             </Button>
           </div>
         </div>

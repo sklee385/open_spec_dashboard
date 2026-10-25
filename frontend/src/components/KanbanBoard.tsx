@@ -1,3 +1,5 @@
+import { useI18n } from '@/i18n/context';
+import { formatNumber } from '@/i18n/messages';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import type { TouchEvent } from 'react';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -22,36 +24,11 @@ import {
   FilePenLine
 } from 'lucide-react';
 
-const ARCHIVED_COLUMN = {
-  label: 'Archived',
-  icon: <Archive className="h-4 w-4" />,
-  color: 'text-gray-500'
-};
 
-const COLUMN_CONFIG: { status: ChangeStatus; label: string; icon: React.ReactNode; color: string }[] = [
-  { status: 'draft', label: '초안', icon: <FilePenLine className="h-4 w-4" />, color: 'text-violet-500' },
-  { 
-    status: 'todo', 
-    label: 'Todo', 
-    icon: <ListTodo className="h-4 w-4" />,
-    color: 'text-blue-500'
-  },
-  { 
-    status: 'in_progress', 
-    label: 'In Progress', 
-    icon: <Loader className="h-4 w-4" />,
-    color: 'text-amber-500'
-  },
-  { 
-    status: 'done', 
-    label: 'Done', 
-    icon: <CheckCircle2 className="h-4 w-4" />,
-    color: 'text-emerald-500'
-  },
-];
+
+
 
 const IDEAS_COLUMN = {
-  label: 'Ideas',
   icon: <Lightbulb className="h-4 w-4" />,
   color: 'text-violet-500'
 };
@@ -85,6 +62,34 @@ export function KanbanBoard({
   showArchived = false, 
   onOpenSettings 
 }: KanbanBoardProps) {
+  const { t, locale } = useI18n();
+  const ARCHIVED_COLUMN = {
+  label: t('kanban.archived'),
+  icon: <Archive className="h-4 w-4" />,
+  color: 'text-gray-500'
+};
+  const COLUMN_CONFIG: { status: ChangeStatus; label: string; icon: React.ReactNode; color: string }[] = [
+  { status: 'draft', label: t('kanban.draft'), icon: <FilePenLine className="h-4 w-4" />, color: 'text-violet-500' },
+  {
+    status: 'todo',
+    label: t('kanban.todo'),
+    icon: <ListTodo className="h-4 w-4" />,
+    color: 'text-blue-500'
+  },
+  {
+    status: 'in_progress',
+    label: t('kanban.progress'),
+    icon: <Loader className="h-4 w-4" />,
+    color: 'text-amber-500'
+  },
+  {
+    status: 'done',
+    label: t('kanban.done'),
+    icon: <CheckCircle2 className="h-4 w-4" />,
+    color: 'text-emerald-500'
+  },
+];
+
   const isMobile = useIsMobile();
   const [activeColumnIndex, setActiveColumnIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,7 +97,7 @@ export function KanbanBoard({
 
   // Build columns array based on showArchived - Ideas column is always first
   const COLUMNS: Column[] = [
-    { type: 'ideas', ...IDEAS_COLUMN },
+    { type: 'ideas', ...IDEAS_COLUMN, label: t('ideas.idea') },
     ...COLUMN_CONFIG.map(col => ({ type: 'status' as const, ...col })),
   ];
   
@@ -276,10 +281,10 @@ export function KanbanBoard({
         <div className="w-16 h-16 rounded-2xl bg-destructive/10 flex items-center justify-center">
           <span className="text-3xl">⚠️</span>
         </div>
-        <div className="text-destructive font-medium">Error loading changes</div>
+        <div className="text-destructive font-medium">{t('kanban.error')}</div>
         <div className="text-sm text-muted-foreground">{error.message}</div>
         <Button onClick={() => window.location.reload()} variant="outline" size="sm" className="mt-2">
-          Try Again
+          {t('common.retry')}
         </Button>
       </div>
     );
@@ -301,30 +306,30 @@ export function KanbanBoard({
         <div className="text-center">
           <div className="text-muted-foreground text-lg font-medium">
             {hasNoSources
-              ? "No OpenSpec sources configured"
+              ? t('kanban.noSources')
               : selectedSourceId
-                ? "No changes found for this project"
+                ? t('kanban.noProjectChanges')
                 : searchQuery
-                  ? "No items found matching your search"
-                  : "No items found"
+                  ? t('kanban.noSearchResults')
+                  : t('kanban.noItemsFound')
             }
           </div>
           <p className="text-sm text-muted-foreground/70 mt-1">
             {hasNoSources 
-              ? "Add a source to get started" 
-              : "Try adjusting your filters or create a new idea"
+              ? t('kanban.addSourceHint')
+              : t('kanban.filtersHint')
             }
           </p>
         </div>
         {hasNoSources && (
           <Button onClick={onOpenSettings} size="sm" className="mt-2">
             <FolderOpen className="h-4 w-4 mr-2" />
-            Configure Sources
+            {t('kanban.configure')}
           </Button>
         )}
         {searchQuery && !hasAnyItems && !hasNoSources && (
           <Button onClick={() => setSearchQuery('')} variant="outline" size="sm">
-            Clear Search
+            {t('kanban.clearSearch')}
           </Button>
         )}
       </div>
@@ -355,7 +360,7 @@ export function KanbanBoard({
           <SearchBar
             value={searchQuery}
             onChange={setSearchQuery}
-            placeholder="Search changes..."
+            placeholder={t('kanban.search')}
           />
         </div>
 
@@ -370,7 +375,7 @@ export function KanbanBoard({
                 ? "text-muted-foreground/30"
                 : "text-foreground hover:bg-muted active:scale-95"
             )}
-            aria-label="Previous column"
+            aria-label={t('kanban.previous')}
           >
             <ChevronLeft className="h-5 w-5" />
           </button>
@@ -421,7 +426,7 @@ export function KanbanBoard({
             
             {/* Count badge */}
             <span className="text-xs text-muted-foreground">
-              {totalCount} {totalCount === 1 ? 'item' : 'items'}
+              {t('common.itemCount', { count: totalCount })}
             </span>
           </div>
 
@@ -434,7 +439,7 @@ export function KanbanBoard({
                 ? "text-muted-foreground/30"
                 : "text-foreground hover:bg-muted active:scale-95"
             )}
-            aria-label="Next column"
+            aria-label={t('kanban.next')}
           >
             <ChevronRight className="h-5 w-5" />
           </button>
@@ -488,7 +493,7 @@ export function KanbanBoard({
                       {activeColumn.icon}
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      No items in {activeColumn.label}
+                      {t('kanban.emptyColumn', { name: activeColumn.label })}
                     </div>
                   </div>
                 )}
@@ -507,7 +512,7 @@ export function KanbanBoard({
         <SearchBar
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search changes..."
+          placeholder={t('kanban.search')}
         />
         <SortDropdown value={sortBy} onChange={setSortBy} />
       </div>
@@ -543,7 +548,7 @@ export function KanbanBoard({
                     {label}
                   </h2>
                   <span className="ml-auto text-xs font-medium text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
-                    {totalCount}
+                    {formatNumber(locale, totalCount)}
                   </span>
                 </div>
               </div>
@@ -577,7 +582,7 @@ export function KanbanBoard({
                   <div className="flex flex-col items-center justify-center py-12 text-center rounded-lg border border-dashed border-border/50 bg-muted/20">
                     <span className={cn("mb-2 opacity-40", color)}>{icon}</span>
                     <div className="text-xs text-muted-foreground/70">
-                      No items
+                      {t('kanban.noItems')}
                     </div>
                   </div>
                 )}

@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n/context';
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { X, FileText, Layers, CheckSquare, Palette, Loader2 } from 'lucide-react';
@@ -24,28 +25,7 @@ interface DetailModalProps {
 
 type Tab = 'proposal' | 'specs' | 'tasks' | 'design';
 
-const TAB_CONFIG: Record<Tab, { icon: React.ReactNode; label: string; color: string }> = {
-  proposal: { 
-    icon: <FileText className="h-4 w-4" />, 
-    label: 'Proposal',
-    color: 'text-blue-500'
-  },
-  specs: { 
-    icon: <Layers className="h-4 w-4" />, 
-    label: 'Specs',
-    color: 'text-emerald-500'
-  },
-  tasks: { 
-    icon: <CheckSquare className="h-4 w-4" />, 
-    label: 'Tasks',
-    color: 'text-amber-500'
-  },
-  design: { 
-    icon: <Palette className="h-4 w-4" />, 
-    label: 'Design',
-    color: 'text-purple-500'
-  },
-};
+
 
 const STATUS_STYLES: Record<string, string> = {
   draft: 'bg-slate-500/10 text-slate-500 border-slate-500/20',
@@ -56,6 +36,30 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 export function DetailModal({ change, onClose }: DetailModalProps) {
+  const { t } = useI18n();
+  const TAB_CONFIG: Record<Tab, { icon: React.ReactNode; label: string; color: string }> = {
+  proposal: { 
+    icon: <FileText className="h-4 w-4" />, 
+    label: t('common.proposal'),
+    color: 'text-blue-500'
+  },
+  specs: { 
+    icon: <Layers className="h-4 w-4" />, 
+    label: t('common.specs'),
+    color: 'text-emerald-500'
+  },
+  tasks: { 
+    icon: <CheckSquare className="h-4 w-4" />, 
+    label: t('common.tasks'),
+    color: 'text-amber-500'
+  },
+  design: { 
+    icon: <Palette className="h-4 w-4" />, 
+    label: t('common.design'),
+    color: 'text-purple-500'
+  },
+};
+
   const { change: detail, loading } = useChange(change?.id || null);
   const [activeTab, setActiveTab] = useState<Tab>('proposal');
   const isMobile = useIsMobile();
@@ -83,7 +87,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
   const LoadingState = () => (
     <div className="flex flex-col items-center justify-center py-16 gap-3">
       <Loader2 className="h-8 w-8 text-primary animate-spin" />
-      <div className="text-muted-foreground text-sm">Loading content...</div>
+      <div className="text-muted-foreground text-sm">{t('details.loading')}</div>
     </div>
   );
 
@@ -132,18 +136,18 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                     STATUS_STYLES[change.status]
                   )}
                 >
-                  {change.status.replace('_', ' ')}
+                  {({ draft: t('kanban.draft'), todo: t('kanban.todo'), in_progress: t('kanban.progress'), done: t('kanban.done'), archived: t('kanban.archived') })[change.status]}
                 </Badge>
                 {change.taskStats && change.taskStats.total > 0 && (
                   <Badge variant="outline" className="text-xs font-medium">
-                    {change.taskStats.done}/{change.taskStats.total} tasks
+                    {t('common.progress', { done: change.taskStats.done, total: change.taskStats.total })}
                   </Badge>
                 )}
               </div>
             </div>
             {isMobile && (
               <DialogClose asChild>
-                <Button variant="ghost" size="icon" className="flex-shrink-0 h-9 w-9 rounded-lg">
+                <Button aria-label={t('common.close')} variant="ghost" size="icon" className="flex-shrink-0 h-9 w-9 rounded-lg">
                   <X className="h-4 w-4" />
                 </Button>
               </DialogClose>
@@ -187,7 +191,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                 {loading ? (
                   <LoadingState />
                 ) : !detail ? (
-                  <EmptyState message="Failed to load details" />
+                  <EmptyState message={t('details.error')} />
                 ) : (
                   <>
                     <TabsContent value="proposal" className="mt-0 data-[state=active]:block animate-in fade-in-50 duration-200 overflow-hidden">
@@ -196,7 +200,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                           <ReactMarkdown>{detail.proposal}</ReactMarkdown>
                         </article>
                       ) : (
-                        <EmptyState message="No proposal document found" />
+                        <EmptyState message={t('details.noProposal')} />
                       )}
                     </TabsContent>
 
@@ -219,7 +223,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                           ))}
                         </div>
                       ) : (
-                        <EmptyState message="No specs found" />
+                        <EmptyState message={t('specs.none')} />
                       )}
                     </TabsContent>
 
@@ -229,7 +233,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                           <ReactMarkdown>{detail.tasks.raw}</ReactMarkdown>
                         </article>
                       ) : (
-                        <EmptyState message="No tasks document found" />
+                        <EmptyState message={t('details.noTasks')} />
                       )}
                     </TabsContent>
 
@@ -239,7 +243,7 @@ export function DetailModal({ change, onClose }: DetailModalProps) {
                           <ReactMarkdown>{detail.design}</ReactMarkdown>
                         </article>
                       ) : (
-                        <EmptyState message="No design document found" />
+                        <EmptyState message={t('details.noDesign')} />
                       )}
                     </TabsContent>
                   </>

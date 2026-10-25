@@ -1,3 +1,5 @@
+import type { Translator } from '@/i18n/messages';
+import { useI18n } from '@/i18n/context';
 import type { Change, Artifact } from '../types';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,12 +11,7 @@ interface ChangeCardProps {
   onClick: () => void;
 }
 
-const ARTIFACTS: { id: string; label: string; Icon: typeof FileText; tone: string }[] = [
-  { id: 'proposal', label: 'Proposal', Icon: FileText, tone: 'bg-blue-500/10 text-blue-500 dark:text-blue-400' },
-  { id: 'design', label: 'Design', Icon: Palette, tone: 'bg-purple-500/10 text-purple-500 dark:text-purple-400' },
-  { id: 'specs', label: 'Specs', Icon: Layers, tone: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400' },
-  { id: 'tasks', label: 'Tasks', Icon: CheckSquare, tone: 'bg-amber-500/10 text-amber-500 dark:text-amber-400' },
-];
+
 
 /** Fall back to the boolean flags when a source is served by an older backend. */
 function artifactStates(change: Change): Record<string, Artifact> {
@@ -31,21 +28,29 @@ function artifactStates(change: Change): Record<string, Artifact> {
     specs: change.hasSpecs,
     tasks: change.hasTasks,
   };
-  for (const { id } of ARTIFACTS) {
+  for (const id of ['proposal', 'design', 'specs', 'tasks']) {
     states[id] = { id, state: present[id] ? 'complete' : 'blocked', missingDeps: [] };
   }
   return states;
 }
 
-function artifactTitle(artifact: Artifact): string {
-  if (artifact.state === 'complete') return 'Written';
-  if (artifact.state === 'ready') return 'Ready to write — nothing blocking it';
+function artifactTitle(artifact: Artifact, t: Translator): string {
+  if (artifact.state === 'complete') return t('common.written');
+  if (artifact.state === 'ready') return t('common.ready');
   return artifact.missingDeps.length > 0
-    ? `Waiting for ${artifact.missingDeps.join(' and ')}`
-    : 'Not written yet';
+    ? t('common.waiting', { names: artifact.missingDeps.join(', ') })
+    : t('common.notWritten');
 }
 
 export function ChangeCard({ change, onClick }: ChangeCardProps) {
+  const { t } = useI18n();
+  const ARTIFACTS: { id: string; label: string; Icon: typeof FileText; tone: string }[] = [
+  { id: 'proposal', label: t('common.proposal'), Icon: FileText, tone: 'bg-blue-500/10 text-blue-500 dark:text-blue-400' },
+  { id: 'design', label: t('common.design'), Icon: Palette, tone: 'bg-purple-500/10 text-purple-500 dark:text-purple-400' },
+  { id: 'specs', label: t('common.specs'), Icon: Layers, tone: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-400' },
+  { id: 'tasks', label: t('common.tasks'), Icon: CheckSquare, tone: 'bg-amber-500/10 text-amber-500 dark:text-amber-400' },
+];
+
   const taskStats = change.taskStats;
   const progress = taskStats && taskStats.total > 0 ? (taskStats.done / taskStats.total) * 100 : 0;
   const isComplete = progress === 100;
@@ -80,7 +85,7 @@ export function ChangeCard({ change, onClick }: ChangeCardProps) {
           <div className="space-y-2 mb-3">
             <div className="flex justify-between items-center text-xs">
               <span className="text-muted-foreground font-medium">
-                {taskStats.done} of {taskStats.total} tasks
+                {t('common.progress', { done: taskStats.done, total: taskStats.total })}
               </span>
               <span className={cn(
                 "font-semibold tabular-nums",
@@ -114,7 +119,7 @@ export function ChangeCard({ change, onClick }: ChangeCardProps) {
             return (
               <div
                 key={id}
-                title={artifactTitle(artifact)}
+                title={artifactTitle(artifact, t)}
                 className={cn(
                   "flex items-center gap-1.5 px-2 py-1 rounded-md transition-opacity",
                   isWritten
@@ -126,7 +131,7 @@ export function ChangeCard({ change, onClick }: ChangeCardProps) {
               >
                 <Icon className="h-3 w-3" />
                 <span className="text-[10px] font-medium">{label}</span>
-                {isReady && <span className="text-[9px] font-normal opacity-70">next</span>}
+                {isReady && <span className="text-[9px] font-normal opacity-70">{t('common.next')}</span>}
               </div>
             );
           })}

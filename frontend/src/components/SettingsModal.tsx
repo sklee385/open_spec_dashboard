@@ -1,3 +1,5 @@
+import { useI18n } from '@/i18n/context';
+import { ProductError, errorMessage } from '@/i18n/errors';
 import { useState, useEffect } from 'react';
 import {
   Dialog,
@@ -18,9 +20,12 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
+  const { t } = useI18n();
+
+
   const [sources, setSources] = useState<SourceConfig[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
   const [success, setSuccess] = useState(false);
   
   // New source state
@@ -49,7 +54,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
       setSources(config.sources);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load configuration');
+      setError(e instanceof Error ? e : new ProductError('settings.loadError'));
     } finally {
       setLoading(false);
     }
@@ -76,7 +81,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
       setSuccess(true);
     } catch (e) {
       // Revert on error
-      setError(e instanceof Error ? e.message : 'Failed to update configuration');
+      setError(e instanceof Error ? e : new ProductError('settings.updateError'));
       // Reload actual state
       loadConfig();
     } finally {
@@ -94,7 +99,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
       setError(null);
       setSuccess(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update configuration');
+      setError(e instanceof Error ? e : new ProductError('settings.updateError'));
       loadConfig();
     } finally {
       setLoading(false);
@@ -107,16 +112,16 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FolderOpen className="h-5 w-5 text-primary" />
-            Settings
+            {t('common.settings')}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-6 py-4">
           <div className="space-y-4">
             <div>
-              <h3 className="text-sm font-semibold leading-none">Sources</h3>
+              <h3 className="text-sm font-semibold leading-none">{t('settings.sources')}</h3>
               <p className="text-sm text-muted-foreground mt-1.5">
-                Configure OpenSpec source repositories. Changes are applied immediately.
+                {t('settings.hint')}
               </p>
             </div>
 
@@ -124,8 +129,8 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
               <div className="flex items-start gap-3 p-4 text-sm border border-destructive/50 bg-destructive/5 rounded-lg">
                 <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
                 <div>
-                  <div className="font-medium text-destructive">Error</div>
-                  <div className="text-muted-foreground mt-0.5">{error}</div>
+                  <div className="font-medium text-destructive">{t('common.error')}</div>
+                  <div className="text-muted-foreground mt-0.5">{errorMessage(error, t)}</div>
                 </div>
               </div>
             )}
@@ -133,7 +138,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
             {success && (
               <div className="flex items-center gap-2 p-3 text-sm border border-emerald-500/50 bg-emerald-500/5 rounded-lg text-emerald-600 dark:text-emerald-400">
                 <Check className="h-4 w-4" />
-                <span className="font-medium">Changes saved successfully</span>
+                <span className="font-medium">{t('settings.saved')}</span>
               </div>
             )}
 
@@ -158,6 +163,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                       <Button
                         variant="ghost"
                         size="icon"
+                        aria-label={t('common.delete')}
                         onClick={() => handleRemoveSource(i)}
                         disabled={loading}
                         className="text-destructive hover:text-destructive hover:bg-destructive/10 h-8 w-8 rounded-lg shrink-0"
@@ -173,10 +179,10 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                     <FolderOpen className="h-6 w-6 text-muted-foreground/50" />
                   </div>
                   <div className="text-sm text-muted-foreground">
-                    No sources configured
+                    {t('settings.noSources')}
                   </div>
                   <p className="text-xs text-muted-foreground/70 mt-1">
-                    Add a source below to get started
+                    {t('settings.addHint')}
                   </p>
                 </div>
               )}
@@ -186,14 +192,14 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
             <div className="grid gap-4 p-4 border border-border/50 rounded-xl bg-muted/30">
               <div className="text-sm font-medium flex items-center gap-2">
                 <Plus className="h-4 w-4 text-primary" />
-                Add New Source
+                {t('settings.newSource')}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="name" className="text-xs">Name</Label>
+                  <Label htmlFor="name" className="text-xs">{t('settings.name')}</Label>
                   <Input
                     id="name"
-                    placeholder="e.g. brain-gate"
+                    placeholder={t('settings.nameExample')}
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     disabled={loading}
@@ -201,10 +207,10 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="path" className="text-xs">Path</Label>
+                  <Label htmlFor="path" className="text-xs">{t('settings.path')}</Label>
                   <Input
                     id="path"
-                    placeholder="/path/to/repo/openspec"
+                    placeholder={t('settings.pathExample')}
                     value={newPath}
                     onChange={(e) => setNewPath(e.target.value)}
                     disabled={loading}
@@ -223,12 +229,12 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                 {loading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Saving...
+                    {t('settings.saving')}
                   </>
                 ) : (
                   <>
                     <Plus className="mr-2 h-4 w-4" />
-                    Add Source
+                    {t('settings.add')}
                   </>
                 )}
               </Button>
