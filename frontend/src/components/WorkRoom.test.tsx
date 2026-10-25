@@ -6,6 +6,60 @@ const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo' } as Chan
 const work = { id: 'work-1', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null,
   documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+it('새로 열어도 선택 문서와 초안·화면 탭을 같은 업무로 복원한다', async () => {
+  const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document')
+    ? { path: new URL(url, 'http://localhost').searchParams.get('path'), content: '서버 문서', version: 'v1' }
+    : { ...work, threadId: 'same-thread', documents: ['proposal.md', 'design.md'] } }));
+  vi.stubGlobal('fetch', mock);
+  const first = render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByRole('textbox', { name: '문서 내용' });
+  fireEvent.change(screen.getByRole('combobox', { name: '문서 선택' }), { target: { value: 'design.md' } });
+  await waitFor(() => expect(mock.mock.calls.some(([url]) => url.endsWith('path=design.md'))).toBe(true));
+  await waitFor(() => expect(screen.getByRole('button', { name: '문서 저장' })).toBeDisabled());
+  fireEvent.change(screen.getByRole('textbox', { name: '문서 내용' }), { target: { value: '설계 미저장 초안' } });
+  fireEvent.click(screen.getByRole('button', { name: '문서·결과' }));
+  fireEvent.click(screen.getByRole('button', { name: '코드·실행·검증' }));
+  const unload = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(true);
+  first.unmount();
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByText('Codex same-thread');
+  expect(screen.getByRole('button', { name: '문서·결과' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', { name: '코드·실행·검증' })).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: '문서' }));
+  expect(await screen.findByRole('textbox', { name: '문서 내용' })).toHaveValue('설계 미저장 초안');
+  expect(screen.getByRole('combobox', { name: '문서 선택' })).toHaveValue('design.md');
+  const starts = mock.mock.calls.filter(([url]) => url === '/api/work');
+  expect(starts).toHaveLength(2);
+  expect(starts.map(([, init]) => JSON.parse(init!.body as string).requestKey)).toEqual(['change:demo/feature', 'change:demo/feature']);
+  expect(mock.mock.calls.filter(([url]) => /^\/api\/work\/[^/]+$/.test(url)).every(([url]) => url === '/api/work/work-1')).toBe(true);
+});
+
+it('이벤트가 없는 재연결에서도 업무 상태를 다시 조회하고 초안을 유지한다', async () => {
+  class Stream { static current: Stream; onopen?: () => void; onerror?: () => void; close() {} addEventListener() {} constructor() { Stream.current = this; } }
+  vi.stubGlobal('EventSource', Stream);
+  let state = 'idle';
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '서버 문서', version: 'v1' } : { ...work, state } })));
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  const editor = await screen.findByRole('textbox', { name: '문서 내용' });
+  fireEvent.change(editor, { target: { value: '재연결 중에도 유지할 초안' } });
+  act(() => Stream.current.onerror?.());
+  state = 'waiting-input';
+  act(() => Stream.current.onopen?.());
+  await screen.findByText('아이디어·문서 작성 · 답변 대기');
+  expect(editor).toHaveValue('재연결 중에도 유지할 초안');
+});
+
+it.each(['{broken', JSON.stringify({ pane: 'missing', tab: 'missing', path: '../other.md' })])('저장된 화면 정보가 잘못되면 현재 업무의 첫 문서로 복원한다: %s', async saved => {
+  localStorage.setItem(`work-view:${change.id}`, saved);
+  const mock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '현재 업무 문서', version: 'v1' } : work }));
+  vi.stubGlobal('fetch', mock);
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  expect(await screen.findByRole('textbox', { name: '문서 내용' })).toHaveValue('현재 업무 문서');
+  expect(screen.getByRole('button', { name: '대화·질문' })).toHaveAttribute('aria-pressed', 'true');
+  expect(mock.mock.calls.some(([url]) => url.includes('other.md'))).toBe(false);
+});
 it('HTTP 상태 이름보다 구체적인 충돌 원인을 표시한다', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/message')
     ? { ok: false, json: async () => ({ error: 'Conflict', message: '다른 Codex 앱에서 이 업무 대화를 사용 중입니다.' }) }

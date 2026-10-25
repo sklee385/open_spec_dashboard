@@ -12,6 +12,16 @@ type Room = { id: string; changeName: string; phase: string; state: string; thre
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
   changes: { path: string; before: string | null; after: string | null; status: string }[] };
 type Doc = { path: string; content: string; version: string };
+function readWorkView(changeId: string) {
+  try {
+    const value = JSON.parse(localStorage.getItem(`work-view:${changeId}`) || 'null');
+    return {
+      pane: value?.pane === 'output' ? 'output' : 'chat',
+      tab: ['documents', 'results', 'openspec'].includes(value?.tab) ? value.tab as string : 'documents',
+      path: typeof value?.path === 'string' ? value.path as string : null,
+    };
+  } catch { return { pane: 'chat', tab: 'documents', path: null }; }
+}
 class RequestError extends Error { readonly latest?: Doc; constructor(message: string, latest?: Doc) { super(message); this.latest = latest; } }
 async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`/api/${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -44,8 +54,9 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
   const [conflict, setConflict] = useState<Doc | null>(null);
   const [connection, setConnection] = useState('연결 중');
   const [loadError, setLoadError] = useState('');
-  const [tab, setTab] = useState('documents'), [preview, setPreview] = useState(false), [pending, setPending] = useState<string | null>(null);
-  const [pane, setPane] = useState('chat');
+  const [initialView] = useState(() => readWorkView(change.id));
+  const [tab, setTab] = useState(initialView.tab), [preview, setPreview] = useState(false), [pending, setPending] = useState<string | null>(null);
+  const [pane, setPane] = useState(initialView.pane);
   const [answers, setAnswers] = useState<Record<string, string>>({}), [cli, setCli] = useState<{ ok: boolean; stdout: string; stderr: string; json?: unknown } | null>(null);
   const [operation, setOperation] = useState('status'), [artifact, setArtifact] = useState('proposal');
   const cliStatus = operation === 'status' ? cli?.json as { artifacts?: { id: string; status: string; requires?: string[] }[]; nextSteps?: string[] } | undefined : undefined;
@@ -77,7 +88,7 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
       }, 150);
     };
     const stream = new EventSource(`/api/work/${room.id}/events?after=${cursor}`);
-    stream.onopen = () => setConnection('실시간 연결됨');
+    stream.onopen = () => { setConnection('실시간 연결됨'); schedule(); };
     stream.onerror = () => setConnection('재연결 중 · 저장된 업무 유지');
     stream.addEventListener('work-update', event => {
       const entry = JSON.parse((event as MessageEvent).data) as Entry;
@@ -92,7 +103,8 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
       const result = await api<Room>('work', 'POST', { sourceId: change.sourceId, changeName: change.name, requestKey: `change:${change.id}` });
       if (cancelled) return; currentId = result.id;
       const detail = await refresh(result.id);
-      if (!cancelled && detail.documents[0]) await openDoc(result.id, detail.documents[0]);
+      const path = initialView.path && detail.documents.includes(initialView.path) ? initialView.path : detail.documents[0];
+      if (!cancelled && path) await openDoc(result.id, path);
     };
     void start().catch(e => setLoadError(e.message));
     const timer = setInterval(() => {
@@ -106,7 +118,11 @@ export function WorkRoom({ change, onClose }: { change: Change; onClose: () => v
       }).catch(() => setLoadError('서버 연결을 기다리는 중입니다. 저장된 업무와 초안은 유지됩니다.'));
     }, 2000);
     return () => { cancelled = true; clearInterval(timer); };
-  }, [change.id, change.name, change.sourceId, refresh, openDoc]);
+  }, [change.id, change.name, change.sourceId, refresh, openDoc, initialView.path]);
+  useEffect(() => {
+    if (!doc) return;
+    localStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc.path }));
+  }, [change.id, doc, pane, tab]);
   useEffect(() => {
     if (!room || !doc) return;
     const key = `work-draft:${room.id}:${doc.path}`;
