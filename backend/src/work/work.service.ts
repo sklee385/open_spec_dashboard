@@ -5,6 +5,7 @@ import { mkdirSync, existsSync, renameSync } from 'node:fs';
 import { Observable } from 'rxjs';
 import { LegacyService } from '../legacy/legacy.service';
 import { Work, WorkStore } from './store';
+import { reconcileArchive } from './archive-state';
 import { atomicWrite, textFile, within } from '../files';
 import { markdownFiles } from '../legacy/parser';
 import { AiToolService } from '../ai-tools/ai-tool.service';
@@ -20,7 +21,24 @@ export class WorkService {
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService,
     @Inject(AiToolService) readonly codex: AiToolService, @Inject(OpenSpecService) readonly openspec: OpenSpecService,
     @Inject(ExecutionService) readonly execution: ExecutionService, @Inject(AiToolConfigService) readonly tools: AiToolConfigService) {}
-  get(id: string): Work { const work = this.store.get(id); if (!work) throw new NotFoundException('업무를 찾을 수 없습니다'); const source = this.legacy.source(work.sourceId); if (dirname(source.path) !== work.projectPath) throw new ConflictException('프로젝트 경로가 변경되었습니다'); return work; }
+  list(): Work[] { return this.store.list().map(work => {
+    const source = this.legacy.sources().find(source => source.id === work.sourceId && source.valid && dirname(source.path) === work.projectPath);
+    return source ? reconcileArchive(this.store, work, source.path) : work;
+  }); }
+  get(id: string): Work {
+    const work = this.store.get(id);
+    if (!work) throw new NotFoundException('업무를 찾을 수 없습니다');
+    if (work.phase === 'archived') return work;
+    const source = this.legacy.sources().find(source => source.id === work.sourceId && source.valid && dirname(source.path) === work.projectPath);
+    if (source) {
+      const restored = reconcileArchive(this.store, work, source.path);
+      if (restored.phase === 'archived') return restored;
+    }
+    if (work.phase === 'completed') return work;
+    const current = this.legacy.source(work.sourceId);
+    if (dirname(current.path) !== work.projectPath) throw new ConflictException('프로젝트 경로가 변경되었습니다');
+    return work;
+  }
   create(body: any) {
     const key = `${body?.sourceId}:${body?.changeName}`;
     const pending = this.creating.get(key); if (pending) return pending;
@@ -34,8 +52,9 @@ export class WorkService {
     const existing = this.store.list().find(w => w.requestKey === body.requestKey || (w.sourceId === source.id && w.changeName === body.changeName));
     if (existing) {
       if (existing.sourceId !== source.id || existing.changeName !== body.changeName) throw new ConflictException('요청 키가 다른 업무에 사용되었습니다');
-      if (existing.phase !== 'archived') this.preserveIdeas(existing);
-      return existing;
+      const current = this.get(existing.id);
+      if (current.phase !== 'archived') this.preserveIdeas(current);
+      return current;
     }
     const idea = body.ideaId ? this.legacy.ideas().find(x => x.id === body.ideaId && x.sourceId === source.id) : null;
     if (body.ideaId && !idea) throw new BadRequestException('아이디어를 찾을 수 없습니다');
@@ -104,6 +123,7 @@ export class WorkService {
   planVersion(work: Work) { return hash(this.documents(work).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')); }
   async action(id: string, body: any) {
     const work = this.get(id);
+    if (body?.action === 'archive' && work.phase === 'archived') return work;
     if (body?.action === 'review') {
       if (['completed', 'archived'].includes(work.phase)) throw new ConflictException('완료된 업무는 수정 단계로 먼저 열어 주세요');
       if (!['idle', 'interrupted', 'failed'].includes(work.state)) throw new ConflictException('연결 또는 실행 중에는 검토를 확정할 수 없습니다');

@@ -27,6 +27,11 @@ export class WorkStore implements OnApplicationShutdown {
       PRAGMA user_version=1;`);
   }
   list(): Work[] { return (this.db.prepare('SELECT data FROM work ORDER BY rowid DESC').all() as any[]).map(x => JSON.parse(x.data)); }
+  transaction<T>(operation: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const result = operation(); this.db.exec('COMMIT'); return result; }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
   get(id: string): Work | undefined { const row: any = this.db.prepare('SELECT data FROM work WHERE id=?').get(id); return row ? JSON.parse(row.data) : undefined; }
   save(work: Work) {
     work.updatedAt = new Date().toISOString();

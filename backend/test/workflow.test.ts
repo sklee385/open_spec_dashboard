@@ -181,6 +181,15 @@ describe('업무·문서 영속성과 실행 조건', () => {
     current.state = 'idle'; store.save(current);
   });
   it('실행 중 검증을 중단하면 성공으로 처리하지 않는다', async () => {
+    // A fresh active work is required; the previous work was archived above.
+    const docs = join(root, 'openspec', 'changes', 'interrupt-check');
+    await mkdir(join(docs, 'specs', 'feature'), { recursive: true });
+    for (const file of ['proposal.md', 'design.md', 'specs/feature/spec.md']) await writeFile(join(docs, file), '# plan\n');
+    await writeFile(join(docs, 'tasks.md'), '- [ ] check\n');
+    work = (await request('work', 'POST', { sourceId: 'demo', changeName: 'interrupt-check', requestKey: 'interrupt-check' })).data;
+    await request(`work/${work.id}/action`, 'POST', { action: 'review' });
+    await request(`work/${work.id}/action`, 'POST', { action: 'implement' });
+    await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
     await request(`work/${work.id}/verification-plan`, 'PUT', { commands: [{ id: 'slow', command: process.execPath, args: ['-e', 'setTimeout(()=>{},10000)'] }] });
     await request(`work/${work.id}/verify`, 'POST', { commandId: 'slow' });
     expect((await request(`work/${work.id}/interrupt`, 'POST', {})).status).toBe(200);
