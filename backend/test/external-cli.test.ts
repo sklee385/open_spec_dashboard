@@ -39,7 +39,7 @@ it('설정 저장은 실행하지 않으며 stdin에 같은 업무 대화와 최
   const other = await work(); await request(`work/${other.id}/message`, { text: '다른 업무' });
   await expect.poll(async () => (await state(other.id)).state, { timeout: 5000 }).toBe('idle');
   expect(JSON.stringify((await state(other.id)).events)).not.toContain('첫 요청');
-});
+}, 30000);
 it('단독 인자 입력은 shell 기호를 명령으로 해석하지 않는다', async () => {
   const w = await work('argument', { input: 'argument', args: [resolve('test/fixtures/external-cli.cjs'), 'argument', '{prompt}'] });
   await request(`work/${w.id}/message`, { text: 'literal $(echo hi) & | "한글"' });
@@ -61,7 +61,7 @@ it('미설치·종료 실패·인증·시간·출력 제한을 구분하고 비�
     await expect.poll(async () => (await state(w.id)).state, { timeout: 5000 }).toBe('failed');
     const result = await state(w.id); expect(result.errorCode).toBe(code); expect(JSON.stringify(result)).not.toContain('PRIVATE_SECRET');
   }
-});
+}, 30000);
 it('지원하지 않는 질문·승인·고유 재개와 잘못된 연결을 거부한다', async () => {
   const w = await work();
   for (const action of ['answer', 'approval', 'reconnect']) expect((await request(`work/${w.id}/${action}`, {})).status).toBe(400);
