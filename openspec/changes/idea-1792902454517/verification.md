@@ -1,5 +1,43 @@
 # 구현 및 검증 기록
 
+## 2026-10-26 무설치 ZIP과 자동 업데이트 구현·검증
+
+- 사용자가 설치형 EXE 사용이 정상적이지 않은 느낌이라고 보고해 무설치 배포를 요청했다. 문답에서 무설치 상태를 유지하는 자동 업데이트 개발을 명시적으로 선택했다. 설치 문제의 원인은 확정하지 않았다. 설치기 없이 ZIP 전체를 풀어 실행하는 v0.1.2와 전용 업데이트 경로를 구현했다.
+- `portable-updater.cjs`는 고정 GitHub 정식 높은 버전과 portable.json·정확한 Windows x64 ZIP·크기·SHA-512만 사용한다. JSON 응답 크기·다운로드 크기·시간·리다이렉트 호스트를 제한하고 검증 실패 시 재시도를 허용한다. 설치형 EXE로 전환하지 않는다. 정책·실제 main 분기·기존 설치형 경로·준비 실패와 비동기 handoff를 테스트했다.
+- `portable-install.cjs`는 스트림 해시·EOCD/ZIP64·중앙 디렉터리 사전 범위/개수·경로·링크·Windows 중복 경로·추출 실제 크기·64KiB 빌드 메타데이터 상한·정확한 버전/모드를 확인한다. 같은 볼륨의 새 옆 폴더에 준비하고 데이터 밖 보조 작업 디렉터리에 동봉 Node와 표준 라이브러리 전용 교체 스크립트를 복사한다.
+- `portable-swap.cjs`는 준비 응답과 원래 앱 종료를 확인한 뒤 폴더를 교체한다. 기존 폴더 백업을 유지하고, 새 앱과 세션 상태가 불명확하면 강제 재실행하지 않는다. 새 앱 시작 후 확인된 실패는 폴더만 복구하고 DB 호환성 확인 없이 이전 앱을 자동 실행하지 않는다. 독립 검토에서 지적된 고아 세션·DB 하위 호환·ZIP 파서 선택 차이·대형 JSON 메모리 문제를 회귀 테스트로 확인하고 수정했다.
+- 데스크톱 테스트 142개가 통과했다(`.logs/portable-all-desktop-tests-final.log`). 신규 실패 테스트→수정→통과 이력은 portable-integration-red/green.log·portable-release-red/green.log·portable-metadata-red.log 및 개별 테스트에 있다. 신규 의존성은 기존 unzipper 0.12.5를 런타임 의존성으로 고정했고 npm 검사 취약점 0개였다.
+- 동결한 v0.1.1 소스 사본의 프런트·백엔드 빌드를 유지하고 데스크톱·정책·의존성·패키징 변경만 동기화해 v0.1.2 설치형과 무설치 ZIP을 별도 출력했다. `.logs/portable-installer-dist-final.json`과 `portable-zip-build-verified.json`의 실제 자식 종료 코드 0을 확인했다. 최종 ZIP은 27,176개 항목·비압축 합계 780,931,445바이트이며 사용자 DB/설정·인증 파일·debug.log 경로는 없고 무설치 안내 파일이 포함됐다.
+- 실제 무설치 EXE를 TEMP 복사본과 새 프로필 `.tools/desktop-smoke-검증 공간-g5FBno`에서 실행해 렌더러 격리·업데이트 IPC·활성·닫기/숨김/재표시 콜백·정상 종료·백업을 확인했다(`.logs/portable-native-smoke.log`).
+- 실제 Windows 폴더 교체 검사는 `%TEMP%/OpenSpecBoard-portable-live-e0hAqO`에만 수행했다. 0.1.1 폴더 복사본과 실제 이전 백엔드·테스트 업무 두 개를 만들고 Node 검사 부모에서 UpdateManager→실제 유휴 API→ZIP 다운로드/해시/추출→서버 정상 종료/백업→별도 보조 프로세스→폴더 교체→실제 0.1.2 Electron smoke 실행과 정상 종료를 확인했다. 다운로드 전송만 로컬 파일 Response로 대체했으며 원래 앱 부모는 Electron 대신 소유 Node 검사 프로세스였다.
+- 질문 대기 중 설치 보류·서비스 유지, 유휴 후 새 POST 거절 503, 보조 프로세스 준비 응답 뒤 검사 부모 종료를 확인했다. job `6f6543d4b1888c62317a88b92db9e1c0`은 complete였고 새 앱 PID 44016의 시작 확인과 종료를 확인했다. 기존 폴더 백업, 업무·대화 ID·질문 답변·이벤트·설정·프로젝트 문서·표식 파일 보존과 종료 백업 두 개를 확인했다. 근거 `.logs/test-portable-live.cjs`·`test-portable-live-child.cjs`, `.logs/portable-live-verification.log`, QA 루트 verification.json과 job journal.json. 포트 리스너 스냅샷은 전후 모두 빈 목록이므로 실행 중 13001~13003 서버 공존의 신규 검증으로 확대하지 않는다.
+- 실제 사용자 앱·프로필·프로젝트·서버는 교체하거나 종료하지 않았다. 7.1~7.4를 완료했으며 실제 GitHub 다운로드 확인·v0.1.2 게시인 7.5와 기존 미완료 범위는 별도로 남긴다.
+
+## 2026-10-26 v0.1.1 직접 게시 완료
+
+- 사용자가 계획 단계에서 “검증된 설치 파일을 직접 게시 하는 방식으로 진행”을 선택했고 문서 반영 후 “이제 진행 해”라고 실행을 지시했다. 이 최신 지시는 승인한 최초 직접 게시 범위로 해석하여 수행했다. 제품 코드 추가 구현·기존 사용자 앱 교체·세션 서버 재시작은 수행하지 않았다.
+- 지정 저장소·태그 소스 `c129aaa8d617e694bc49872722a5f349be1b4944`·로컬 세 파일의 크기/해시·개인용 정책·버전을 다시 확인하고 인증된 전체 릴리스 목록에서 동명 릴리스가 없음을 확인했다. 공식 GitHub CLI의 keyring 로그인을 사용했으며 CI 환경 값을 꾸미거나 토큰을 앱·소스·로그에 넣지 않았다.
+- 새 초안 ID `423750879`에 `OpenSpecBoard-0.1.1-win-x64.exe`·같은 이름의 `.exe.blockmap`·`latest.yml` 세 파일만 업로드했다. 원격 파일 이름·개수·크기·uploaded 상태·GitHub SHA-256 digest와 로컬 재해시를 확인한 뒤 초안을 정식 공개했다. 기존 파일·태그를 덮어쓰거나 이동하지 않았다.
+- 정식 릴리스: https://github.com/sklee385/open_spec_dashboard/releases/tag/v0.1.1 . 공개 API에서 draft=false·prerelease=false·latest의 ID/버전/세 파일 일치를 확인했다. 직접 다운로드: https://github.com/sklee385/open_spec_dashboard/releases/download/v0.1.1/OpenSpecBoard-0.1.1-win-x64.exe . 설치 파일은 214,715,012바이트, SHA-256 `ae5dfc70d5d4bb88b6107971ae820e6efca867f22b936c5b64198087cd26bedd`.
+- 세 파일을 인증 없이 `.tools/desktop-published-v0.1.1-check`로 다시 다운로드했다. 원래 고정된 SHA-256·크기와 메타데이터 SHA-512, 공개 태그와 메타데이터를 합친 Windows x64 파일 선택 검사를 통과했다. 설치 파일은 실행하지 않았다. 공개 다운로드 검사를 앱 내부의 실제 두 버전 간 설치·데이터 보존 검증으로 확대하지 않는다.
+- 실행기 `.logs/manual-desktop-release.cjs`의 preflight/create/upload/publish 각 단계 종료 코드 0을 확인했다. 근거 `.logs/desktop-manual-release-receipt.json`, `desktop-manual-release-verified-draft.json`, `desktop-manual-release-published.json`, `desktop-manual-release-public-verification.json`. 공개 파일 재검사 `.logs/verify-published-release.cjs`도 종료 코드 0. 운영 절차와 다운로드 링크는 `docs/DESKTOP.md`에 기록했다.
+- 작업 5.4를 완료했다. 총 24개 중 16개 완료이며 5.1 실제 Actions 실행, 실제 두 버전 간 설치와 사용자 최종 결과 검토는 남아 있다. 아래의 미게시·선택 대기·15/23 기록은 당시의 이력이다.
+
+## 2026-10-26 GitHub 배포 요청 및 준비
+
+- 사용자가 “github 배포 진행 해”라고 명시적으로 요청했다. 이전 기록의 원격 게시 미수행은 당시 결과이며 이번 배포를 금지하는 조건이 아니다.
+- 기존 작업 브랜치·인덱스·실행 앱·13001~13003 서버를 보존하고 `.tools/desktop-release-v0.1.0`에 독립 배포 사본을 만들었다. 현재 대시보드의 프런트·백엔드와 패키징에 필요한 모듈·확장 파일·테스트 fixture를 포함하고 다른 업무의 계획 문서 변경은 포함하지 않았다. 사용자 DB·설정·로그·인증 정보·동봉 런타임은 소스 커밋에 넣지 않았다. 파일 목록은 `.logs/desktop-release-manifest.json`에 있다.
+- 현재 설치본 0.1.0보다 높은 0.1.1을 배포 버전으로 준비했다. 배포 브랜치 `release/windows-v0.1.1`, 커밋 `c129aaa8d617e694bc49872722a5f349be1b4944`, 로컬 태그 `v0.1.1`이다. 원격의 같은 브랜치·태그가 없는 것을 조회했다. 아직 원격 push·Actions 실행·릴리스 게시 완료로 기록하지 않는다.
+- 새 사본에서 `npm ci --ignore-scripts`가 통과했다(취약점 0개). 예제 문서 누락으로 첫 프런트 검사가 실패해 테스트가 참조하는 문서를 배포 사본에 포함한 뒤 재검사했다. 데스크톱 72개, 프런트 224개, 백엔드 243개 통과·2개 건너뜀과 프런트/백엔드 빌드 종료 코드 0을 확인했다. 로그 `desktop-release-desktop-tests-v011.log`, `desktop-release-frontend-tests.log`, `desktop-release-backend-tests.log`·`.json`, `desktop-release-build-verified.log`·`.json`.
+- 제한된 실행 환경의 첫 백엔드 검사가 진행되지 않아 소유한 검사 프로세스 두 개만 종료하고, 확장 실행 권한과 상세 로그로 재실행했다. 실제 백엔드 검사는 271.42초에 통과했다. 빌드 결과는 PowerShell stderr 표시와 구분하여 자식 종료 코드를 JSON으로 별도 확인했다. 인증서·API 키 패턴 검사에서 배포 사본 파일의 해당 패턴을 찾지 못했다.
+- 공식 GitHub CLI를 `.tools/github-cli`에 준비하고 사용자가 기기 로그인을 승인해 `sklee385` 계정의 정상 keyring 로그인을 확인했다. 사용자가 추가 기기 인증 완료를 알린 뒤 repo·workflow 권한을 확인했다. 인증 정보는 앱·소스·검증 로그에 기록하지 않는다.
+- 같은 커밋의 소스로 v0.1.1 Windows x64 설치 파일을 생성했다. 위치 `.tools/desktop-release-v0.1.0/.tools/desktop-dist/OpenSpecBoard-0.1.1-win-x64.exe`, 크기 214,715,012바이트, SHA-256 `ae5dfc70d5d4bb88b6107971ae820e6efca867f22b936c5b64198087cd26bedd`. `desktop/artifacts.cjs`의 버전·파일·SHA-512 검사와 실제 app.asar의 정책·최신 데스크톱 소스·고정 피드 검사가 통과했다. 이 파일은 아직 GitHub에서 빌드·게시한 산출물이 아니다.
+- 새 v0.1.1 EXE의 `--copy-to-temp --security --lifecycle --personal-update` 검사도 종료 코드 0으로 통과했다. 빈 검사 프로필 `.tools/desktop-smoke-검증 공간-h9QGIc`에서 격리·업데이트 IPC·개인용 활성·정상 종료와 백업을 확인했다. 로그 `.logs/desktop-release-native-v011.log`. 기존 사용자 앱은 설치·교체·종료하지 않았다.
+- 인증 후 `release/windows-v0.1.1` 브랜치와 `v0.1.1` 태그를 한 번의 atomic push로 게시했다. 원격 태그 객체 `1f8f5805082d1d37f3bd3f8fbf43bf971da0d859`의 대상이 검증한 커밋 `c129aaa8d617e694bc49872722a5f349be1b4944`임을 API로 확인했다. main·기존 태그·사용자 작업 브랜치는 변경하지 않았다.
+- GitHub Actions 활성 설정은 enabled/all이지만 workflows·workflow_runs 목록은 0개이고 워크플로 이름 조회는 404였다. 태그의 workflow 파일은 API에서 확인했다. 독립 리뷰의 YAML 파싱 오류는 없고 v* 패턴·태그·커밋에도 실행 생략 지시가 없다. 공식 문서상 push 실행에는 기본 브랜치 workflow가 필수라는 조건이 없으므로 main 부재를 확정 원인으로 기록하지 않는다. 수동 workflow_dispatch는 기본 브랜치 등록이 필요하며, 현재 설정의 수동 실행은 게시 job을 실행하지 않는다. 실제 CI 실행과 릴리스는 아직 없다.
+- 5.1의 음성검사를 위해 로컬 `v-ci-mismatch-1792902454517` 태그를 만들었으나 원격 push는 자동 승인 심사에서 거부됐다. 이유는 v0.1.1 배포 외의 부수적 원격 변경 승인 부족이며 더 안전한 로컬 검증 대안이 있다는 것이었다. 원격 음성검사 태그를 만들지 않았고 다른 수단으로 우회하지 않았다. 이 검사 실패를 정상 게시나 5.1 완료로 처리하지 않는다.
+- 사용자에게 이미 검증한 v0.1.1 파일의 개인용 수동 최초 게시와 기존 CI 경로 유지 중 선택을 요청한다. CI 전용 게시 계약을 사용자 결정 없이 완화하거나 환경 값을 속여 기존 게시 함수를 실행하지 않는다. source 태그·앱 소스·파일·버전·해시 검증 자료는 준비됐다.
+
 ## 2026-10-26 실패·복구 통합 검증
 
 - 자동 다운로드 Promise가 실패해도 확인 요청에서 처리하지 않던 문제를 회귀 테스트로 재현한 뒤 `desktop/updates.cjs`에서 처리했다. 이미 수신한 updater 오류 메시지는 보존하고, 실패 후 다시 확인할 수 있다. 데스크톱 테스트 72개가 통과했다(`.logs/desktop-integration-tests.log`).
@@ -105,7 +143,7 @@
 
 저장소 밖 검사는 서비스·프로필·프로젝트를 임시 폴더에 두고 복사한 동봉 Node만 PATH에 제공했다. 이 실행에서는 소스 체크아웃과 시스템 Node 경로를 사용하지 않았다. 시스템 Node가 아예 설치되지 않은 새 Windows VM이나 실제 설치 환경을 검증한 것은 아니므로 1.2·6.1은 미완료로 유지한다. 중복 소유자의 startup-error 및 exit 1 뒤 기존 소유자가 계속 API를 제공하고, 정상 종료 후 같은 프로필로 다시 준비되는 것까지 확인했다. 2.1의 서비스·게이트웨이 통합 조건을 완료했으며, 네이티브 재시도 대화상자·트레이·중복 실행 시 기존 창 표시 검증은 별도다. 기존 서버 공존은 포트의 검사 전후 연결 가능 여부만 확인했고 해당 프로세스를 종료하거나 재시작하지 않았다.
 
-최신 Windows 산출물: `.tools/desktop-dist-integration/OpenSpecBoard-0.1.0-win-x64.exe`와 같은 이름의 `.sha256` 파일. SHA-256은 `3d801b3d037c1778d4a34e4b517001afbe30dbac9b9290f30c7e93ab6cd8e468`이다. 실제 산출물에 `desktop/artifacts.cjs`를 실행해 Windows EXE·메타데이터 버전·SHA-512 검사도 통과했다. 설치 파일을 생성했으며 사용자 PC에 설치하거나 기존 앱을 교체하지 않았다. 위 사용자 설치 확인은 이 개인용 업데이트 정책 빌드 이전의 확인이며 최신 빌드의 사용자 확인으로 확대하지 않는다.
+이전 0.1.0 통합 검사 산출물: `.tools/desktop-dist-integration/OpenSpecBoard-0.1.0-win-x64.exe`와 같은 이름의 `.sha256` 파일. SHA-256은 `3d801b3d037c1778d4a34e4b517001afbe30dbac9b9290f30c7e93ab6cd8e468`이다. 실제 산출물에 `desktop/artifacts.cjs`를 실행해 Windows EXE·메타데이터 버전·SHA-512 검사도 통과했다. 설치 파일을 생성했으며 사용자 PC에 설치하거나 기존 앱을 교체하지 않았다. 최신 공개 산출물은 위 v0.1.1 직접 게시 기록을 참고한다. 사용자 설치 확인을 최신 빌드의 확인으로 확대하지 않는다.
 
 독립 코드 리뷰에서 지적된 종료 교착·중복 소유·백업 실패 종료 문제를 수정했고, 후속 소스 리뷰에서 추가 중요한 문제는 보고되지 않았다. 실제 배포 검증과 사용자 완료 확인을 이 리뷰로 대체하지 않는다.
 
@@ -160,7 +198,7 @@
 
 초기 쓰기 제한 검사는 Node 권한 모델로 서비스와 상속된 Node 자식에 적용했다. 당시 이 검사만으로 1.2·2.2·6.1을 완료 처리하지 않았다. 이후 위의 실제 Windows ACL 검사에서 전체 앱 복사본을 읽기 전용으로 두고 Electron과 서비스의 영속 데이터 생성·재실행·복원을 확인해 2.2를 완료했다. 시스템 Node 미설치 새 VM 및 실제 설치 검증인 1.2·6.1은 별도다.
 
-현재 추적 진행률은 15/23이다. 개인용 배포 정책에 따라 4.3의 활성·무결성 검사와 5.2의 CI 토큰 연결·인증서 요구 제거, 6.3의 실패·복구 통합 검증을 완료했다. 실제 Actions 실행·설치·두 버전 전환 등 남은 조건이 충족되지 않은 항목은 체크하지 않았다. 4.4의 실제 화면·설치 검증은 이 자동 검사로 완료 처리하지 않는다.
+현재 추적 진행률은 16/24다. 개인용 배포 정책에 따라 4.3의 활성·무결성 검사와 5.2의 CI 토큰 연결·인증서 요구 제거, 6.3의 실패·복구 통합 검증에 이어 새 작업 5.4의 최초 직접 게시를 완료했다. 실제 Actions 실행·설치·두 버전 전환 등 남은 조건이 충족되지 않은 항목은 체크하지 않았다. 4.4의 실제 화면·설치 검증은 공개 다운로드 검사로 완료 처리하지 않는다.
 
 ## 사용자 승인 후 GUI 조작 시도
 

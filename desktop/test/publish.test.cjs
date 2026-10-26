@@ -27,6 +27,15 @@ function fixture() {
 }
 const was = (calls, action) => calls.some(args => args[0] === 'release' && args[1] === action);
 
+test('무설치 ZIP·메타데이터가 있으면 다섯 파일을 빠짐없이 검증해 게시한다', () => {
+  const f=fixture();const name='OpenSpecBoard-0.1.0-win-x64-portable.zip';const data=Buffer.from('portable');
+  fs.writeFileSync(join(f.directory,name),data);fs.writeFileSync(join(f.directory,'portable.json'),JSON.stringify({version:'0.1.0',file:name,size:data.length,sha512:createHash('sha512').update(data).digest('base64')}));
+  for(const file of [name,'portable.json'])f.remote.assets.push({name:file,size:fs.statSync(join(f.directory,file)).size,state:'uploaded',digest:'sha256:'+createHash('sha256').update(fs.readFileSync(join(f.directory,file))).digest('hex')});
+  publishRelease(f.options);
+  const upload=f.calls.find(args=>args[1]==='upload');assert.equal(upload.filter(arg=>arg.startsWith(f.directory)).length,5);
+  assert.ok(was(f.calls,'edit'));
+});
+
 test('검증한 세 파일을 초안에 올리고 원격 전체 확인 뒤 게시한다', () => {
   const f = fixture(); publishRelease(f.options);
   assert.deepEqual(f.calls.map(args => args.slice(0, 2).join(' ')), ['api --hostname', 'release create', 'release upload', 'api --hostname', 'release edit']);

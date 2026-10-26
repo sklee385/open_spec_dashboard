@@ -6,7 +6,9 @@ function validateArtifacts(directory, version) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('정식 배포 버전이 잘못되었습니다');
   const names = readdirSync(directory);
   const win = `OpenSpecBoard-${version}-win-x64.exe`;
-  const required = [win];
+  const portable = `OpenSpecBoard-${version}-win-x64-portable.zip`;
+  const hasPortable = names.includes(portable) || names.includes('portable.json');
+  const required = hasPortable ? [win,portable] : [win];
   if (required.some(name => !names.includes(name))) throw new Error('해당 버전·지원 플랫폼의 필수 설치 파일이 없습니다');
   if (names.some(name => /\.(exe|dmg|zip)$/i.test(name) && !required.includes(name))) throw new Error('다른 버전·OS·아키텍처의 설치 파일이 있습니다');
   for (const manifest of ['latest.yml']) {
@@ -25,6 +27,12 @@ function validateArtifacts(directory, version) {
       const full = join(directory, file.url);
       if (!statSync(full).isFile() || createHash('sha512').update(readFileSync(full)).digest('base64') !== file.sha512) throw new Error('업데이트 파일 무결성 불일치');
     }
+  }
+  if (hasPortable) {
+    const { validatePortableManifest } = require('./portable-updater.cjs');
+    const manifest = validatePortableManifest(JSON.parse(readFileSync(join(directory,'portable.json'),'utf8')),version);
+    const bytes = readFileSync(join(directory,portable));
+    if (bytes.length !== manifest.size || createHash('sha512').update(bytes).digest('base64') !== manifest.sha512) throw new Error('무설치 ZIP 무결성 불일치');
   }
   return true;
 }

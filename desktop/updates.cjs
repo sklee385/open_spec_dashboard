@@ -34,7 +34,7 @@ class UpdateManager extends EventEmitter {
       try { lease = await this.prepare(); }
       catch (e) { this.set('waiting', { message: e.message || '업무가 유휴 상태가 되면 다시 요청해 주세요.' }); return this.snapshot(); }
       this.set('installing');
-      try { await this.stop(lease); this.updater.quitAndInstall(false, true); }
+      try { await this.updater.prepareInstall?.(); await this.stop(lease); await this.updater.quitAndInstall(false, true); }
       catch { await this.cancel(lease).catch(() => {}); this.set('error', { message: '정상 종료·백업·설치를 완료하지 못했습니다. 데이터는 보존됩니다. 앱을 다시 열어 복구 상태를 확인해 주세요.' }); }
     } finally { this.busy = false; }
     return this.snapshot();

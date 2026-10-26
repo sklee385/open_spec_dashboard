@@ -12,6 +12,7 @@ module.exports = {
   ],
   afterPack: require('./after-pack.cjs'),
   asar: true, npmRebuild: false,
+  extraFiles: process.env.DESKTOP_PORTABLE_BUILD === '1' ? [{ from: 'docs/PORTABLE.md', to: '무설치 실행 안내.txt' }] : [],
   protocols: [{ name: 'OpenSpecBoard attention', schemes: ['openspecboard'] }],
   artifactName: 'OpenSpecBoard-${version}-${os}-${arch}.${ext}',
   publish: { provider: 'github', owner: 'sklee385', repo: 'open_spec_dashboard', releaseType: 'draft' },

@@ -13,6 +13,17 @@ function fixture() {
   const save = files => fs.writeFileSync(join(dir, 'latest.yml'), JSON.stringify({ version: '0.1.0', files }));
   save([entry]); return { dir, entry, save };
 }
+
+test('무설치 ZIP과 전용 메타데이터를 함께 검증하고 누락·변조를 차단한다', () => {
+  const { dir } = fixture();
+  const file = 'OpenSpecBoard-0.1.0-win-x64-portable.zip';
+  const bytes = Buffer.from('portable fixture'); fs.writeFileSync(join(dir,file),bytes);
+  const manifest={version:'0.1.0',file,size:bytes.length,sha512:createHash('sha512').update(bytes).digest('base64')};
+  fs.writeFileSync(join(dir,'portable.json'),JSON.stringify(manifest));
+  assert.equal(validateArtifacts(dir,'0.1.0'),true);
+  fs.writeFileSync(join(dir,file),'changed'); assert.throws(()=>validateArtifacts(dir,'0.1.0'));
+  fs.writeFileSync(join(dir,file),bytes); fs.unlinkSync(join(dir,'portable.json')); assert.throws(()=>validateArtifacts(dir,'0.1.0'));
+});
 test('Windows 설치 파일과 메타데이터만으로 버전·해시 검사를 통과한다', () => {
   const { dir, entry } = fixture();
   assert.equal(validateArtifacts(dir, '0.1.0'), true);

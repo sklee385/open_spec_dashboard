@@ -1,5 +1,5 @@
 const { spawnSync } = require('node:child_process');
-const { lstatSync, readFileSync } = require('node:fs');
+const { lstatSync, readFileSync, existsSync } = require('node:fs');
 const { join, resolve } = require('node:path');
 const { createHash } = require('node:crypto');
 const { validateArtifacts } = require('./artifacts.cjs');
@@ -13,6 +13,7 @@ function publishRelease({ directory, version, tag, env = process.env, run = runG
   directory = resolve(directory);
   validateArtifacts(directory, version);
   const names = [`OpenSpecBoard-${version}-win-x64.exe`, `OpenSpecBoard-${version}-win-x64.exe.blockmap`, 'latest.yml'];
+  if (existsSync(join(directory,'portable.json'))) names.push(`OpenSpecBoard-${version}-win-x64-portable.zip`,'portable.json');
   const assets = names.map(name => {
     const file = join(directory, name), stat = lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || !stat.size) throw new Error('필수 배포 파일이 없거나 잘못되었습니다');

@@ -8,6 +8,24 @@ function setup(overrides = {}) {
   const manager = new UpdateManager({ updater, enabled: true, prepare: async () => { service.prepared++; }, stop: async () => { service.stopped++; }, cancel: async () => { service.cancelled++; }, ...overrides });
   return { manager, updater, service };
 }
+
+test('무설치 압축 해제 준비 실패는 서버 종료 전에 차단하고 잠금을 돌려준다', async () => {
+  const { manager, updater, service } = setup();
+  updater.prepareInstall = async () => { throw new Error('invalid portable archive'); };
+  updater.emit('update-downloaded', { version: '0.2.0' }); await manager.install();
+  assert.equal(manager.snapshot().state, 'error'); assert.equal(service.stopped, 0);
+  assert.equal(service.cancelled, 1); assert.equal(updater.installed, undefined);
+});
+
+test('무설치 준비·정상 종료 뒤 보조 프로세스 준비를 기다리고 실패를 처리한다', async () => {
+  const events = [];
+  const { manager, updater } = setup({prepare:async()=>events.push('lease'),stop:async()=>events.push('stop'),cancel:async()=>events.push('cancel')});
+  updater.prepareInstall = async()=>events.push('extract');
+  updater.quitAndInstall = async()=>{events.push('handoff');throw new Error('helper failed');};
+  updater.emit('update-downloaded',{version:'0.2.0'}); await manager.install();
+  assert.deepEqual(events,['lease','extract','stop','handoff','cancel']);
+  assert.equal(manager.snapshot().state,'error');
+});
 test('다운로드 완료만으로 설치하거나 종료하지 않는다', async () => {
   const { manager, updater, service } = setup(); updater.emit('update-downloaded', { version: '0.2.0' });
   assert.equal(manager.snapshot().state, 'ready'); assert.equal(service.prepared, 0); assert.equal(updater.installed, undefined);

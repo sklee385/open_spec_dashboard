@@ -9,7 +9,8 @@ const stage = path.join(root, '.tools', stageName);
 const service = path.join(stage, 'service');
 const pkg = require('../package.json');
 const release = process.argv.includes('--release');
-const personalUpdate = release || process.argv.includes('--personal-update');
+const portable = process.argv.includes('--portable');
+const personalUpdate = release || portable || process.argv.includes('--personal-update');
 if (process.version !== 'v24.15.0') throw new Error('데스크톱 패키징에는 검증한 Node 24.15.0을 사용해 주세요');
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Windows x64에서 준비해 주세요');
 if (release) validateRelease({ platform: process.platform, arch: process.arch, version: pkg.version, tag: process.env.GITHUB_REF_NAME, env: process.env });
@@ -19,8 +20,8 @@ for (const required of ['backend/dist/desktop-main.js', 'frontend/dist/index.htm
 prepareStageDirectory(root, stageName);
 fs.mkdirSync(service, { recursive: true });
 const copy = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true, dereference: true }); };
-for (const name of ['main.cjs','preload.cjs','dashboard-preload.cjs','attention-links.cjs','updates.cjs','update-policy.cjs','update-selection.cjs','renderer-close.cjs','shutdown-guard.cjs','updates.html','updates-ui.cjs']) copy(path.join(root, 'desktop', name), path.join(stage, 'desktop', name));
-fs.writeFileSync(path.join(stage, 'desktop', 'release-policy.json'), JSON.stringify(makeUpdatePolicy(personalUpdate)));
+for (const name of ['main.cjs','preload.cjs','dashboard-preload.cjs','attention-links.cjs','updates.cjs','update-policy.cjs','update-selection.cjs','portable-updater.cjs','portable-install.cjs','portable-swap.cjs','renderer-close.cjs','shutdown-guard.cjs','updates.html','updates-ui.cjs']) copy(path.join(root, 'desktop', name), path.join(stage, 'desktop', name));
+fs.writeFileSync(path.join(stage, 'desktop', 'release-policy.json'), JSON.stringify(makeUpdatePolicy(personalUpdate, { portable })));
 fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'openspecboard', productName: 'OpenSpecBoard', version: pkg.version, description: 'OpenSpecBoard 데스크톱 업무 공간', main: 'desktop/main.cjs', author: 'OpenSpecBoard', license: 'MIT', private: true, dependencies: {} }, null, 2));
 copy(path.join(root, 'backend', 'dist'), path.join(service, 'backend', 'dist'));
 copy(path.join(root, 'backend', 'scripts'), path.join(service, 'backend', 'scripts'));
@@ -43,6 +44,6 @@ const npmCandidates = [path.join(path.dirname(process.execPath), 'node_modules',
 const npm = npmCandidates.find(dir => fs.existsSync(path.join(dir, 'bin', 'npm-cli.js')));
 if (!npm) throw new Error('실행 중인 Node 배포의 npm을 찾을 수 없습니다');
 copy(npm, path.join(runtime, 'node_modules', 'npm'));
-const metadata = { node: process.version, platform: process.platform, arch: process.arch, electron: require('electron/package.json').version, version: pkg.version, signedRelease: false, updateMode: personalUpdate ? 'personal-github' : 'local', repository: 'sklee385/open_spec_dashboard' };
+const metadata = { node: process.version, platform: process.platform, arch: process.arch, electron: require('electron/package.json').version, version: pkg.version, signedRelease: false, updateMode: portable ? 'portable-github' : personalUpdate ? 'personal-github' : 'local', repository: 'sklee385/open_spec_dashboard' };
 fs.writeFileSync(path.join(service, 'build-info.json'), JSON.stringify(metadata, null, 2));
 console.log(`데스크톱 준비 완료: ${process.platform}/${process.arch}, Node ${process.version}, ${personalUpdate ? '개인용 GitHub 업데이트 활성 (미서명)' : '로컬 검사 빌드 (업데이트 비활성)'}`);

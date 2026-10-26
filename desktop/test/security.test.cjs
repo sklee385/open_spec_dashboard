@@ -39,12 +39,13 @@ async function launch(t, smoke = false, controls = {}) {
   let child;
   const electron = { app, BrowserWindow: Window, Tray, nativeImage: { createFromDataURL: () => ({}) }, Menu: { buildFromTemplate: menu => menu, setApplicationMenu() {} }, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, shell: { openExternal: async url => { external.push(url); } }, dialog: { async showMessageBox(value) { dialogs.push(value); return { response: 1 }; } } };
   const requireMock = id => {
+    if (id === './portable-updater.cjs') return { PortableUpdater: class { constructor(options) { updater.portable = true; updater.installConfig = options; return updater; } } };
     if (id === 'electron') return electron;
     if (id === 'node:fs') return { mkdirSync() {}, appendFileSync() {}, writeFileSync(file, data) { files.push({ file, data }); }, readdirSync: () => [] };
     if (id === 'node:child_process') return { spawn() { child = new EventEmitter(); child.stderr = new EventEmitter(); child.exitCode = null; child.signalCode = null; child.send = () => { child.emit('message', { type: 'stopped' }); child.exitCode = 0; child.emit('exit', 0); }; queueMicrotask(() => child.emit('message', { type: 'ready', port: 15002 })); return child; } };
     if (id.endsWith(join('backend', 'dist', 'gateway.js'))) return { createGateway: () => gateway };
     if (id.endsWith(join('node_modules', 'electron-updater'))) return { autoUpdater: updater };
-    if (id.endsWith('release-policy.json')) return controls.personal ? { mode: 'personal-github', repository: 'sklee385/open_spec_dashboard', updatesEnabled: true } : { signedRelease: false };
+    if (id.endsWith('release-policy.json')) return controls.portable ? { mode: 'portable-github', repository: 'sklee385/open_spec_dashboard', updatesEnabled: true } : controls.personal ? { mode: 'personal-github', repository: 'sklee385/open_spec_dashboard', updatesEnabled: true } : { signedRelease: false };
     return localRequire(id);
   };
   vm.runInNewContext(readFileSync(file, 'utf8'), { require: requireMock, __dirname: join(__dirname, '..'), process: { argv: smoke ? ['--desktop-smoke-test', ...(controls.lifecycle ? ['--desktop-lifecycle-test'] : []), ...(controls.personalTest ? ['--desktop-personal-update-test'] : [])] : [], env: { DESKTOP_SMOKE_DIRECTORY: '/isolated-profile' }, resourcesPath: '/isolated-resources', platform: 'win32', arch: 'x64' }, console: { ...console, log() {}, error() {} }, URL, AbortSignal, fetch: async url => { requests.push(url); return { ok: !controls.busy || !url.endsWith('/prepare'), json: async () => ({ idle: true, sources: [] }) }; }, setTimeout, clearTimeout, queueMicrotask }, { filename: file });
@@ -145,6 +146,15 @@ test('중복 앱은 창과 자식을 생성하지 않고 종료한다', async t 
 });
 
 const drain = async () => { await new Promise(resolve => setImmediate(resolve)); };
+
+test('무설치 main은 ZIP 업데이트 공급자를 사용하고 설치형 피드를 구성하지 않는다', async t => {
+  const { updater, handlers, windows } = await launch(t,false,{portable:true});
+  assert.equal(updater.portable,true); assert.equal(updater.feed,undefined);
+  assert.equal(typeof updater.installConfig.prepareInstall,'function');
+  assert.equal(updater.autoInstallOnAppQuit,false);
+  const target=windows[1];target.webContents.mainFrame.url=target.url;
+  assert.equal(handlers.get('desktop:status')({sender:target.webContents,senderFrame:target.webContents.mainFrame}).state,'checking');
+});
 
 test('개인용 패키지는 실제 main의 IPC에서 업데이트를 활성화하고 지정 GitHub 피드를 사용한다', async t => {
   const { windows, handlers, updater } = await launch(t, false, { personal: true });

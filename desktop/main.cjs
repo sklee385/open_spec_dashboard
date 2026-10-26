@@ -2,11 +2,12 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, shell, dialog } = 
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const { join, dirname } = require('node:path');
-const { mkdirSync, appendFileSync, readdirSync, writeFileSync } = require('node:fs');
+const { mkdirSync, appendFileSync, readdirSync, writeFileSync, readFileSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { UpdateManager, startUpdateChecks } = require('./updates.cjs');
 const { configureUpdateSelection } = require('./update-selection.cjs');
-const { allowPersonalUpdates } = require('./update-policy.cjs');
+const { allowPersonalUpdates, allowPortableUpdates } = require('./update-policy.cjs');
+const { reportPortableReady, reportPortableFailure, isPortableUpdateLaunch, validateConfig } = require('./portable-swap.cjs');
 const { assertRendererClosable } = require('./renderer-close.cjs');
 const { ShutdownGuard } = require('./shutdown-guard.cjs');
 const shutdownGuard = new ShutdownGuard();
@@ -22,7 +23,13 @@ const smoke = process.argv.includes('--desktop-smoke-test');
 if (smoke) {
   if (!process.env.DESKTOP_SMOKE_DIRECTORY) throw new Error('격리한 smoke 데이터 경로가 필요합니다');
   mkdirSync(process.env.DESKTOP_SMOKE_DIRECTORY, { recursive: true });
-  if (readdirSync(process.env.DESKTOP_SMOKE_DIRECTORY).length) throw new Error('smoke에는 비어 있는 새 프로필 경로가 필요합니다');
+  if (readdirSync(process.env.DESKTOP_SMOKE_DIRECTORY).length) {
+    const matches = process.argv.filter(arg => /^--portable-update-job=[a-f0-9]{32}$/.test(arg));
+    if (matches.length !== 1) throw new Error('smoke에는 비어 있는 새 프로필 경로가 필요합니다');
+    const jobPath = join(process.env.DESKTOP_SMOKE_DIRECTORY, 'portable-updates', 'jobs', matches[0].split('=')[1], 'config.json');
+    const job = validateConfig(JSON.parse(readFileSync(jobPath, 'utf8')), jobPath);
+    if (job.smoke !== true || job.userDirectory.toLowerCase() !== process.env.DESKTOP_SMOKE_DIRECTORY.toLowerCase() || job.appDirectory.toLowerCase() !== dirname(process.execPath).toLowerCase() || job.version !== app.getVersion()) throw new Error('격리한 무설치 교체 검사 경로 불일치');
+  }
   app.setPath('userData', process.env.DESKTOP_SMOKE_DIRECTORY);
 }
 let allowQuit = false, stopping = false, shutdownRequested = false;
@@ -67,6 +74,10 @@ async function recoverStartup(error) {
     catch { await cancel(recoveryLease).catch(() => {}); /* Keep an uncertain live owner; do not spawn a replacement. */ }
   }
   const canRetry = !child || child.exitCode !== null || child.signalCode !== null;
+  if (canRetry && isPortableUpdateLaunch(process.argv)) {
+    await reportPortableFailure({ argv: process.argv, userDirectory, appDirectory: dirname(process.execPath), version: app.getVersion() });
+    allowQuit = true; app.exit(1); return;
+  }
   const result = await dialog.showMessageBox({ type: 'error', title: 'OpenSpecBoard 시작 실패', message: '앱을 준비하지 못했습니다.', detail: `단계: ${startupPhase}\n업무 데이터는 보존됩니다. 진단 경로: ${join(userDirectory, 'logs')}${canRetry ? '' : '\n기존 서버 종료를 확인하지 못해 재실행을 보류합니다.'}`, buttons: canRetry ? ['다시 시도', '앱 종료'] : ['확인'] });
   if (!canRetry) return;
   if (result.response === 1) { allowQuit = true; app.quit(); return; }
@@ -171,13 +182,26 @@ async function start() {
   child.on('exit', () => { if (!stopping && !allowQuit) { log('session lost; automatic duplicate restart prevented'); void dialog.showMessageBox({ type: 'error', message: '대화 서버 연결이 끊겼습니다.', detail: '업무 데이터를 보존했습니다. 실행 상태를 확인한 뒤 앱을 다시 실행해 주세요.' }); } });
 
   startupPhase = 'updater';
-  const { autoUpdater } = require(join(serviceDirectory, 'node_modules', 'electron-updater'));
   const policy = require(join(__dirname, 'release-policy.json'));
-  autoUpdater.logger = null;
-  configureUpdateSelection(autoUpdater, { platform: process.platform, arch: process.arch });
-  const updatesEnabled = allowPersonalUpdates(policy, app.isPackaged);
-  if (updatesEnabled) autoUpdater.setFeedURL({ provider: 'github', owner: 'sklee385', repo: 'open_spec_dashboard' });
-  manager = new UpdateManager({ updater: autoUpdater, enabled: updatesEnabled, prepare, stop, cancel, version: app.getVersion() });
+  const portableUpdates = allowPortableUpdates(policy, app.isPackaged);
+  const updatesEnabled = portableUpdates || allowPersonalUpdates(policy, app.isPackaged);
+  let updater;
+  if (portableUpdates) {
+    const { PortableUpdater } = require('./portable-updater.cjs');
+    const { preparePortableInstall } = require('./portable-install.cjs');
+    updater = new PortableUpdater({ version: app.getVersion(), userDirectory, prepareInstall: async args => {
+      const prepared = await preparePortableInstall({ ...args, appDirectory: dirname(process.execPath), userDirectory, nodeBinary, unzipper: require(join(serviceDirectory, 'node_modules', 'unzipper')) });
+      await assertRendererClosable(window);
+      return prepared;
+    }, exit: () => app.quit() });
+  } else {
+    const { autoUpdater } = require(join(serviceDirectory, 'node_modules', 'electron-updater'));
+    autoUpdater.logger = null;
+    configureUpdateSelection(autoUpdater, { platform: process.platform, arch: process.arch });
+    if (updatesEnabled) autoUpdater.setFeedURL({ provider: 'github', owner: 'sklee385', repo: 'open_spec_dashboard' });
+    updater = autoUpdater;
+  }
+  manager = new UpdateManager({ updater, enabled: updatesEnabled, prepare, stop, cancel, version: app.getVersion() });
   for (const [channel, operation] of [['status', () => manager.snapshot()], ['check', () => manager.check()], ['install', () => manager.install()]]) {
     ipcMain.handle(`desktop:${channel}`, event => {
       if (event.sender !== updateWindow?.webContents || event.senderFrame !== updateWindow?.webContents.mainFrame || event.senderFrame?.url !== updateURL) throw new Error('허용되지 않은 앱 요청입니다');
@@ -192,6 +216,11 @@ async function start() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'OpenSpecBoard', submenu: [{ label: '앱 업데이트', click: showUpdates }, { label: '앱 종료', click: () => void requestQuit() }] }, { role: 'editMenu' }, { role: 'viewMenu' }]));
   startupPhase = 'page';
   await window.loadURL(attentionRouter.initialURL(origin)); if (!smoke) window.show(); log('desktop ready');
+  const confirmPortableReady = async () => { if (isPortableUpdateLaunch(process.argv)) {
+    const portableReady = await reportPortableReady({ argv: process.argv, userDirectory, appDirectory: dirname(process.execPath), version: app.getVersion() });
+    if (!portableReady) throw new Error('무설치 업데이트 시작 확인 실패');
+  } };
+  if (!smoke) await confirmPortableReady();
   if (smoke) {
     const rendererSafe = await window.webContents.executeJavaScript("typeof require === 'undefined' && typeof process === 'undefined' && typeof window.desktopUpdates === 'undefined'");
     if (!rendererSafe) throw new Error('대시보드 렌더러의 권한 격리 실패');
@@ -210,7 +239,7 @@ async function start() {
     const status = await api('status');
     if (!status.idle) throw new Error('격리한 앱이 유휴 상태가 아닙니다');
     const sources = await fetch(`${origin}/api/sources`, { headers: { 'x-desktop-token': token } }).then(r => r.json());
-    if (sources.sources.length) throw new Error('새 프로필에 프로젝트가 자동 등록되었습니다');
+    if (sources.sources.length && !isPortableUpdateLaunch(process.argv)) throw new Error('새 프로필에 프로젝트가 자동 등록되었습니다');
     if (process.argv.includes('--desktop-lifecycle-test')) {
       window.close();
       if (window.isDestroyed() || window.isVisible()) throw new Error('창 닫기 후 백그라운드 유지 실패');
@@ -221,6 +250,7 @@ async function start() {
       console.log('DESKTOP_LIFECYCLE_READY');
     }
     console.log('DESKTOP_SMOKE_READY');
+    await confirmPortableReady();
     await requestQuit(); return;
   }
   app.once('will-quit', startUpdateChecks(manager));

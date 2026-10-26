@@ -39,6 +39,8 @@ jobs:
             node scripts/desktop-stage.cjs --personal-update
           fi
       - run: npm run desktop:dist
+      - name: Build portable ZIP and metadata
+        run: node scripts/desktop-portable-build.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-win32-x64
@@ -47,6 +49,8 @@ jobs:
           path: |
             .tools/desktop-dist/*.exe
             .tools/desktop-dist/*.blockmap
+            .tools/desktop-dist/*-portable.zip
+            .tools/desktop-dist/portable.json
             .tools/desktop-dist/latest.yml
   release:
     if: github.event_name == 'push'
