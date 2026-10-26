@@ -19,8 +19,9 @@ API는 `127.0.0.1:13002/api`, 프런트엔드는 13001의 프록시를 사용한
 | `POST /work/:id/answer` | `questionId`, `answers:{질문ID:{answers:[문자열]}}`. 모든 질문에 답해야 한다. 만료 질문은 명시적 `recover:true`로 같은 대화의 후속 메시지에 복구한다. |
 | `POST /work/:id/approval` | `questionId`, `decision:accept/decline`. 요구사항 질문 응답과 분리하며 요청 유형에 맞는 Codex 응답을 전송한다. |
 | `POST /work/:id/interrupt` | 현재 검증 프로세스 또는 Codex 턴 중단을 요청한다. 실제 종료 이벤트 전에는 새 실행을 시작하지 않는다. |
-| `PUT /work/:id/verification-plan` | `commands:[{id,command,args:[]}]`. 등록된 명령 전체를 필수 검증으로 사용한다. |
-| `POST /work/:id/verify` | `{commandId}`. 출력·종료 코드·명령 정의·프로젝트 파일 해시를 기록한다. |
+| `PUT /work/:id/verification-plan` | `{scope?:'work'\|'full',commands:[{id,command,args:[]}]}`. 기본은 full. 작업 테스트 명령은 전체 필수 검증과 별도로 저장한다. |
+| `POST /work/:id/verify` | `{commandId,scope?:'work'\|'full'}`. 기본은 full. 출력·종료 코드·소요 시간·범위·명령 정의·프로젝트 파일 해시를 기록한다. |
+| `POST /work/:id/verify-all` | `{scope:'work'\|'full'}`. 해당 범위 명령을 순차 실행하고 첫 실패·중단 시 남은 명령을 중지한다. 작업 테스트는 변경 관련 Vitest 명령을 탐지하며 미지원 시 전용 명령 등록이 필요하다. 전체 테스트는 기존 필수 검증 전체를 실행한다. 작업 테스트 통과는 완료 조건의 전체 검증을 대체하지 않는다. |
 | `GET /work/:id/openspec` | `operation`: status/instructions/schemas/specs/spec/deltas/diff/validate/doctor/context. instructions는 artifact, spec은 artifact에 기준 명세 이름도 필요하다. 실제 CLI 종료 코드·출력·오류·가능한 JSON을 반환한다. |
 | `GET /work/:id/events?after=순번` | `work-update` SSE와 증가 순번. `Last-Event-ID`로 재연결하며 해당 업무만 전송한다. heartbeat는 15초. 연결 해제는 Codex를 종료하지 않는다. |
 

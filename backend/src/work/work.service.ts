@@ -125,7 +125,7 @@ export class WorkService {
       const detail = this.legacy.detail(`${work.sourceId}/${work.changeName}`), stats = detail.tasks?.stats;
       if (!stats?.total || stats.done !== stats.total || this.store.records(id, 'question').some(unresolvedQuestion)) throw new ConflictException('작업 또는 질문이 남아 있습니다');
       const commands = this.execution.commands(work), results = this.execution.results(work);
-      if (!commands.length || commands.some(command => { const result = results.filter(r => r.commandId === command.id).at(-1); return !result || result.status !== 'passed' || !result.fresh; })) throw new ConflictException('모든 필수 검증이 최신 버전에서 통과해야 합니다');
+      if (!commands.length || commands.some(command => { const result = results.filter(r => r.commandId === command.id && r.scope === 'full').at(-1); return !result || result.status !== 'passed' || !result.fresh; })) throw new ConflictException('모든 필수 검증이 최신 버전에서 통과해야 합니다');
       work.phase = 'completed'; this.store.save(work); this.store.event(id, 'completed', { confirmed: true }); this.legacy.updates.next(); return work;
     }
     if (body?.action === 'archive') {

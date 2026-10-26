@@ -1,7 +1,9 @@
 import { intlLocale, type Locale } from './locale';
+import { enTestCopy, koTestCopy } from './testMessages';
 import { enCopy, koCopy } from './catalog';
 
 const en = {
+  ...enTestCopy,
   ...enCopy,
 
   'common.close': 'Close',
@@ -24,6 +26,7 @@ type MessageArgs<K extends keyof typeof en> = (typeof en)[K] extends (args: infe
 export type MessageKey = keyof typeof en;
 type Dictionary = { [K in MessageKey]: (typeof en)[K] extends string ? string : (typeof en)[K] };
 const ko: Dictionary = {
+  ...koTestCopy,
   ...koCopy,
 
   'common.close': '닫기',

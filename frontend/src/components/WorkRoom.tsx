@@ -9,14 +9,15 @@ import { DetailModal } from './DetailModal';
 import { matchReviewItem, useReviewItems, type ReviewItem } from '../hooks/useReviewItems';
 import type { Change } from '../types';
 import './WorkRoom.css';
+import { WorkTestActions, WorkTestResults, type TestResult, type TestScope } from './WorkTests';
 
 type Entry = { seq: number; type: string; data: Record<string, unknown> };
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
-type Verification = { id: string; commandId: string; status: string; fresh: boolean; stdout: string; stderr: string; code: number | null };
+type Verification = TestResult;
 type Command = { id: string; command: string; args: string[] };
 type Room = { id: string; changeName: string; phase: string; state: string; threadId: string | null; turnId?: string; error?: string; updatedAt: string; reviewedVersion: string | null; reviewRequired?: boolean;
   toolId?: string; toolConfigSnapshot?: { name: string; kind: string }; toolCapabilities?: { conversation: boolean; questions: boolean; approval: boolean; interrupt: boolean; nativeResume: boolean }; toolReadiness?: { ready: boolean; message: string };
-  documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationCommands: Command[];
+  documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationCommands: Command[]; workVerificationCommands?: Command[];
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
   changes: { path: string; before: string | null; after: string | null; status: string }[] };
 type Doc = { path: string; content: string; version: string };
@@ -68,7 +69,7 @@ function conversation(events: Entry[], toolName: string) {
 
 export function WorkRoom({ change, onClose, attentionTarget, navigationRef }: { change: Change; onClose: () => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation> }) {
   const { t } = useI18n();
-  const resultStates: Record<string, string> = { passed: t('workRoom.passed'), failed: t('workRoom.failed'), running: t('workRoom.running'), interrupted: t('workRoom.interrupted'), queued: t('workRoom.queuedStatus') };
+
   const fileStates: Record<string, string> = { added: t('workRoom.added'), modified: t('workRoom.modified'), removed: t('workRoom.removed') };
   const phases: Record<string, string> = { planning: t('workRoom.planning'), reviewed: t('workRoom.reviewed'), implementation: t('workRoom.implementation'), verification: t('workRoom.verificationPhase'), completed: t('workRoom.completed'), archived: t('workRoom.archived') };
   const states: Record<string, string> = { idle: t('workRoom.idle'), running: t('workRoom.running'), connecting: t('workRoom.connecting'), 'creating-thread': t('workRoom.creating'), 'waiting-input': t('workRoom.waitingInput'), 'waiting-approval': t('workRoom.waitingApproval'), 'recovery-required': t('workRoom.recovery'), failed: t('workRoom.failed'), interrupted: t('workRoom.interrupted') };
@@ -126,6 +127,7 @@ export function WorkRoom({ change, onClose, attentionTarget, navigationRef }: { 
   const [operation, setOperation] = useState('status'), [artifact, setArtifact] = useState('proposal');
   const cliStatus = operation === 'status' ? cli?.json as { artifacts?: { id: string; status: string; requires?: string[] }[]; nextSteps?: string[] } | undefined : undefined;
   const [commandId, setCommandId] = useState(''), [command, setCommand] = useState(''), [args, setArgs] = useState('');
+  const [commandScope, setCommandScope] = useState<TestScope>('work');
   const answerText = (q: Question, id: string) => answers[`${q.id}:${id}`] ?? (q.answer as Record<string, { answers?: string[] }> | undefined)?.[id]?.answers?.join('\n') ?? '';
   const dirty = !!doc && draft !== doc.content;
   const live = useRef({ doc, dirty }); live.current = { doc, dirty };
@@ -262,6 +264,12 @@ export function WorkRoom({ change, onClose, attentionTarget, navigationRef }: { 
     void run(async () => { await api(`work/${room.id}/message`, 'POST', { text }); setMessage(''); });
   };
   const inspect = () => { if (room) void run(async () => setCli(await api(`work/${room.id}/openspec?operation=${operation}&artifact=${artifact}`))); };
+  const testsBlocked = busy || !room || !['implementation', 'verification'].includes(room.phase) || !['idle', 'failed', 'interrupted'].includes(room.state) || !room.reviewedVersion || !!room.reviewRequired || dirty;
+  const runTests = (scope: TestScope) => {
+    if (!room || testsBlocked || activeOperations.current > 0) return;
+    setTab('results'); setPane('output');
+    void run(() => api(`work/${room.id}/verify-all`, 'POST', { scope }));
+  };
   return <section className="work-room" aria-label={t('workRoom.space')}>
     <header className="work-header">
       <AttentionBell />
@@ -285,7 +293,8 @@ export function WorkRoom({ change, onClose, attentionTarget, navigationRef }: { 
       <button disabled={busy || !room} onClick={() => action('plan')}>{t('workRoom.plan')}</button>
       <button disabled={busy || !room} onClick={() => action('review')}>{t('workRoom.review')}</button>
       <button disabled={busy || !room?.reviewedVersion} onClick={() => action('implement')}>{t('workRoom.implement')}</button>
-      <button disabled={busy || !room?.turnId || room?.toolCapabilities?.interrupt === false} onClick={() => room && void run(() => api(`work/${room.id}/interrupt`, 'POST', {}))}>{t('workRoom.interrupt')}</button>
+      <WorkTestActions disabled={testsBlocked} onRun={runTests} />
+      <button disabled={busy || !(room?.verifications.some(row => row.status === 'running') || (room?.turnId && room?.toolCapabilities?.interrupt !== false))} onClick={() => room && void run(() => api(`work/${room.id}/interrupt`, 'POST', {}))}>{t('workRoom.interrupt')}</button>
       <button disabled={busy || room?.phase !== 'verification'} onClick={() => action('complete')}>{t('workRoom.complete')}</button>
       {room?.phase === 'completed' && <><button onClick={() => action('reopen')}>{t('workRoom.reopen')}</button><button onClick={() => action('archive')}>{t('workRoom.archive')}</button></>}
     </nav>
@@ -322,9 +331,9 @@ export function WorkRoom({ change, onClose, attentionTarget, navigationRef }: { 
           {doc && (preview ? <article className="work-preview"><ReactMarkdown>{draft}</ReactMarkdown></article> : <textarea ref={editor} className="work-editor" aria-label={t('workRoom.content')} disabled={busy || room?.phase === 'archived' || room?.phase === 'completed'} value={draft} onChange={event => setDraft(event.target.value)} />)}
           {!room?.documents.length && <p className="work-hint">{t('workRoom.createHint')}</p>}
         </>}
-        {tab === 'results' && <div className="work-result-list"><h2>{t('workRoom.verification')}</h2>{!room?.verificationCommands.length && <p>{t('workRoom.addVerifyHint')}</p>}{room?.verificationCommands.map(value => <button key={value.id} disabled={busy || room.state === 'running'} onClick={() => void run(() => api(`work/${room.id}/verify`, 'POST', { commandId: value.id }))}>{t('workRoom.runCommand', { name: value.id })}</button>)}
-          <details><summary>{t('workRoom.addCommand')}</summary><input aria-label={t('workRoom.commandName')} placeholder={t('workRoom.commandName')} value={commandId} onChange={event => setCommandId(event.target.value)} /><input aria-label={t('workRoom.executable')} placeholder={t('workRoom.executableHint')} value={command} onChange={event => setCommand(event.target.value)} /><textarea aria-label={t('workRoom.args')} placeholder={t('workRoom.argsHint')} value={args} onChange={event => setArgs(event.target.value)} /><button disabled={busy} onClick={() => room && void run(() => api(`work/${room.id}/verification-plan`, 'PUT', { commands: [...room.verificationCommands.filter(x => x.id !== commandId), { id: commandId, command, args: args.split('\n').filter(Boolean) }] }))}>{t('workRoom.saveCommand')}</button></details>
-          {room?.verifications.map(result => <details key={result.id}><summary>{result.commandId} · {resultStates[result.status] || result.status} · {result.fresh ? t('workRoom.currentVersion') : t('workRoom.oldResult')}</summary><pre>{result.stdout}{'\n'}{result.stderr}{'\n'}{t('workRoom.exitCode')} {String(result.code)}</pre></details>)}
+        {tab === 'results' && <div className="work-result-list"><h2>{t('workRoom.verification')}</h2>
+          <WorkTestResults workCommands={room?.workVerificationCommands || []} fullCommands={room?.verificationCommands || []} results={room?.verifications || []} onFix={text => { setMessage(text); setPane('chat'); }} />
+          <details><summary>{t('workRoom.addCommand')}</summary><select aria-label={t('tests.scope')} value={commandScope} onChange={event => setCommandScope(event.target.value as TestScope)}><option value="work">{t('tests.work')}</option><option value="full">{t('tests.full')}</option></select><input aria-label={t('workRoom.commandName')} placeholder={t('workRoom.commandName')} value={commandId} onChange={event => setCommandId(event.target.value)} /><input aria-label={t('workRoom.executable')} placeholder={t('workRoom.executableHint')} value={command} onChange={event => setCommand(event.target.value)} /><textarea aria-label={t('workRoom.args')} placeholder={t('workRoom.argsHint')} value={args} onChange={event => setArgs(event.target.value)} /><button disabled={busy || !room || !['idle', 'failed', 'interrupted'].includes(room.state) || ['completed', 'archived'].includes(room.phase)} onClick={() => room && void run(() => api(`work/${room.id}/verification-plan`, 'PUT', { scope: commandScope, commands: [...(commandScope === 'work' ? room.workVerificationCommands || [] : room.verificationCommands).filter(x => x.id !== commandId), { id: commandId, command, args: args.split('\n').filter(Boolean) }] }))}>{t('workRoom.saveCommand')}</button></details>
           <h2>{t('workRoom.files')}</h2>{room?.changes.map(file => <details key={file.path}><summary>{fileStates[file.status] || file.status} · {file.path}</summary><h3>{t('workRoom.before')}</h3><pre>{file.before ?? t('workRoom.noFile')}</pre><h3>{t('workRoom.after')}</h3><pre>{file.after ?? t('workRoom.noFile')}</pre></details>)}
         </div>}
         {tab === 'openspec' && <div className="work-result-list"><p>{t('workRoom.specHint')}</p><select aria-label={t('workRoom.specFunction')} value={operation} onChange={event => { setOperation(event.target.value); setCli(null); }}>{Object.entries(operations).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{['instructions', 'spec'].includes(operation) && <input aria-label={operation === 'spec' ? t('workRoom.specName') : t('workRoom.artifact')} value={artifact} onChange={event => setArtifact(event.target.value)} />}<button disabled={busy || !room} onClick={inspect}>{t('workRoom.inspect')}</button>{cli && <><strong>{cli.ok ? t('workRoom.inspected') : t('workRoom.inspectError')}</strong>{cliStatus?.artifacts && <><h2>{t('workRoom.dependencies')}</h2><table><thead><tr><th>{t('workRoom.documents')}</th><th>{t('workRoom.status')}</th><th>{t('workRoom.requires')}</th></tr></thead><tbody>{cliStatus.artifacts.map(value => <tr key={value.id}><td>{value.id}</td><td>{{done: t('common.written'), ready: t('workRoom.ready'), blocked: t('workRoom.blocked')}[value.status] || value.status}</td><td>{value.requires?.join(', ') || t('common.none')}</td></tr>)}</tbody></table><h2>{t('workRoom.nextSteps')}</h2>{cliStatus.nextSteps?.map(step => <p key={step}>{step}</p>)}</>}<details open={!cliStatus?.artifacts}><summary>{t('workRoom.raw')}</summary><pre>{cli.json ? JSON.stringify(cli.json, null, 2) : cli.stdout}{'\n'}{cli.stderr}</pre></details><button onClick={() => setMessage(`OpenSpec ${operationRequestLabels[operation]} 결과를 확인하고 같은 업무에서 필요한 수정을 해 주세요.\n${cli.stdout}\n${cli.stderr}`)}>{t('workRoom.prepareRequest')}</button></>}</div>}

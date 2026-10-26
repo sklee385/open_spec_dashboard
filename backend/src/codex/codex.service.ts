@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { markdownFiles } from '../legacy/parser';
 import { textFile, within } from '../files';
 import { askUserTool, unresolvedQuestion } from './questions';
+import { testingInstructions } from '../work/testing-instructions';
 
 @Injectable()
 export class CodexService implements OnModuleDestroy {
@@ -69,7 +70,7 @@ export class CodexService implements OnModuleDestroy {
       work.documentVersions = this.documentVersions(work);
       work.state = 'running'; delete work.error; delete work.errorCode; this.store.save(work);
       this.store.event(id, 'user-message', { text });
-      const result = await this.client.rpc('turn/start', { threadId: work.threadId, approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', input: [{ type: 'text', text: `현재 업무: ${work.changeName}\n현재 단계: ${work.phase}\nOpenSpec 변경: openspec/changes/${work.changeName}\n\n${text}`, text_elements: [] }] });
+      const result = await this.client.rpc('turn/start', { threadId: work.threadId, approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', input: [{ type: 'text', text: `현재 업무: ${work.changeName}\n현재 단계: ${work.phase}\nOpenSpec 변경: openspec/changes/${work.changeName}\n\n${testingInstructions}\n\n${text}`, text_elements: [] }] });
       const latest = this.store.get(id)!; latest.turnId = result.turn.id; this.store.save(latest); this.legacy.updates.next(); return latest;
     } catch (error: any) {
       throw this.connectionFailure(id, error);

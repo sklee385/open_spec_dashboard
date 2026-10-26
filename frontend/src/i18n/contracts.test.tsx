@@ -59,9 +59,9 @@ it.each(['ko', 'en'] as const)('%s 검증 상태만 번역하고 실행·파일 
   expect(screen.getByText(/원문 stdout/)).toHaveTextContent('原文 stderr');
   expect(screen.getByText('원문 before')).toBeInTheDocument();
   expect(screen.getByText('原文 after')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: t('workRoom.runCommand', { name: '원문 test' }) }));
-  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url.endsWith('/verify'))).toBe(true));
-  expect(JSON.parse(fetch.mock.calls.find(([url]) => url.endsWith('/verify'))![1]!.body as string)).toEqual({ commandId: '원문 test' });
+  fireEvent.click(screen.getByRole('button', { name: t('tests.full') }));
+  await waitFor(() => expect(fetch.mock.calls.some(([url]) => url.endsWith('/verify-all'))).toBe(true));
+  expect(JSON.parse(fetch.mock.calls.find(([url]) => url.endsWith('/verify-all'))![1]!.body as string)).toEqual({ scope: 'full' });
 });
 
 it.each(['ko', 'en'] as const)('%s OpenSpec 요청과 AI 요청 준비 문구를 유지한다', async locale => {
