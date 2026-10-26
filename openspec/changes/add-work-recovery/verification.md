@@ -11,3 +11,14 @@
 - 증거: .logs/work-recovery-all-tests.log, .logs/work-recovery-build.log, .logs/recovery-release-backend-tests-final.log, .logs/recovery-release-frontend-tests.log, .logs/work-recovery-browser-success.png, .logs/work-recovery-browser-blocked.png, .logs/work-recovery-windows-success.png.
 
 배포 파일·공개 다운로드 검증은 생성과 게시 후 아래에 추가한다.
+
+## 배포 검증
+
+- 배포 소스 커밋: 6c7c086e22df352abfa8b5e024713ab487bc25b8. 별도 codex/work-recovery-v0.1.3 브랜치와 새 v0.1.3 태그로 게시했다.
+- 설치형 EXE·blockmap·latest.yml·무설치 ZIP·portable.json 생성과 SHA-512 메타데이터 검증 통과. 설치형·무설치 업데이트 정책, 백엔드 복구 모듈·Codex 서비스·업무 컨트롤러 및 프런트엔드 번들의 배포 소스 일치를 검사했다. 실제 ZIP 내부 복구 모듈도 검사했다.
+- 두 배포판을 별도 빈 프로필로 기동해 인증 API·렌더러 격리·GitHub 업데이트 활성·정상 종료·백업 검사를 통과했다.
+- GitHub Actions 40275310776은 기존 portable-install.test.cjs 테스트 5개에서 RUNNER~1과 runneradmin 경로 비교 차이로 실패했다. desktop와 .github/workflows/desktop.yml은 v0.1.2 대비 변경 없음. 자동 게시 단계는 skipped이며 이번 배포는 검증한 로컬 파일을 직접 게시한다. 원격 CI 성공으로 간주하지 않는다.
+- 초안 릴리스 423891838에 파일 5개를 올렸고 원격 크기·업로드 상태·SHA-256과 소스 태그 커밋을 대조했다.
+- 공개 릴리스: https://github.com/sklee385/open_spec_dashboard/releases/tag/v0.1.3
+- 공개 후 파일 5개를 인증 없이 스트리밍 다운로드해 크기·SHA-256을 대조했다. latest.yml의 EXE SHA-512, portable.json의 ZIP SHA-512·파일 크기·버전이 실제 다운로드와 일치한다. 근거는 .logs/recovery-release-public-verification.json에 저장했다.
+- 모든 추적 작업 12개 완료. 사용자 현재 앱은 자동 교체·재시작하지 않았으며 앱 업데이트 또는 공개 다운로드로 v0.1.3을 사용할 수 있다.
