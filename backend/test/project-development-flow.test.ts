@@ -1,0 +1,67 @@
+import { afterAll, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createApplication } from '../src/app';
+import { WorkStore } from '../src/work/store';
+
+let app: any;
+afterAll(async () => { await app?.close(); for (const key of ['CONFIG_PATH', 'DATA_DIR', 'WORKSPACE_ROOT', 'CODEX_BIN', 'CODEX_ARGS']) delete process.env[key]; });
+
+it('앱 API에서 파일 관리·같은 AI 대화·업무 코드 편집·검증·원본 반영·커밋·원격 동기화를 연결한다', async () => {
+  const baseDir = mkdtempSync(join(tmpdir(), 'project-development-flow-'));
+  const root = join(baseDir, 'source'), remote = join(baseDir, 'remote.git');
+  const docs = join(root, 'openspec', 'changes', 'feature'); mkdirSync(join(docs, 'specs', 'feature'), { recursive: true });
+  for (const file of ['proposal.md', 'design.md', 'specs/feature/spec.md']) writeFileSync(join(docs, file), '# Plan\n');
+  writeFileSync(join(docs, 'tasks.md'), '- [ ] result review\n');
+  const git = (args: string[], cwd = root) => execFileSync('git', args, { cwd, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git(['init', '-b', 'main']); git(['config', 'user.name', 'Fixture']); git(['config', 'user.email', 'fixture@example.invalid']); git(['config', 'commit.gpgSign', 'false']);
+  git(['add', '--', 'openspec']); git(['commit', '-m', 'baseline']); git(['init', '--bare', remote]); git(['remote', 'add', 'origin', remote]); git(['push', '-u', 'origin', 'main']);
+  process.env.CONFIG_PATH = join(baseDir, 'config.json'); process.env.DATA_DIR = join(baseDir, 'data'); process.env.WORKSPACE_ROOT = join(baseDir, 'spaces');
+  process.env.CODEX_BIN = process.execPath; process.env.CODEX_ARGS = JSON.stringify([resolve('test/fixtures/project-agent.cjs')]);
+  writeFileSync(process.env.CONFIG_PATH, JSON.stringify({ sources: [{ name: 'demo', path: join(root, 'openspec') }] }));
+  app = await createApplication(); await app.listen(0, '127.0.0.1'); const base = await app.getUrl();
+  const api = async (path: string, method = 'GET', body?: unknown) => {
+    const response = await fetch(`${base}/api/${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { code: response.status, data: await response.json() };
+  };
+  const project = 'projects/demo';
+  const operation = async (body: Record<string, unknown>) => {
+    const status = (await api(`${project}/git/status`)).data;
+    const start = await api(`${project}/git/operations`, 'POST', { ...body, token: status.token, requestKey: crypto.randomUUID() });
+    expect(start.code).toBe(202);
+    let result: any;
+    await expect.poll(async () => { result = (await api(`${project}/git/operations/${start.data.id}`)).data; return result.status; }, { timeout: 30000 }).toBe('succeeded');
+    return result;
+  };
+  // File operations are actual API calls, not direct fixture writes.
+  expect((await api(`${project}/entries`, 'POST', { path: 'new-folder', kind: 'directory' })).code).toBe(201);
+  const entry = (await api(`${project}/entries`, 'POST', { path: 'new-folder/new.txt', kind: 'file', content: 'new\n' })).data;
+  expect((await api(`${project}/entries/move`, 'POST', { path: entry.path, target: 'new-folder/moved.txt', version: entry.version })).code).toBe(201);
+  const moved = (await api(`${project}/file?path=new-folder/moved.txt`)).data;
+  expect((await api(`${project}/file`, 'DELETE', { path: moved.path, version: moved.version, confirmed: true })).code).toBe(200);
+  const work = (await api('work', 'POST', { sourceId: 'demo', changeName: 'feature', requestKey: 'flow-work' })).data;
+  expect((await api(`work/${work.id}/action`, 'POST', { action: 'review' })).code).toBe(200);
+  expect((await api(`work/${work.id}/action`, 'POST', { action: 'implement' })).code).toBe(200);
+  await expect.poll(() => app.get(WorkStore).get(work.id).state, { timeout: 10000 }).toBe('idle');
+  expect(existsSync(join(root, 'ai-change.txt'))).toBe(false);
+  const scope = `workId=${work.id}`;
+  const ai = (await api(`${project}/file?path=ai-change.txt&${scope}`)).data;
+  expect(ai.content).toBe('AI fixture change\n');
+  expect((await api(`${project}/file?${scope}`, 'PUT', { ...ai, content: 'AI and manual edit\n' })).code).toBe(200);
+  expect((await api(`work/${work.id}/verification-plan`, 'PUT', { commands: [{ id: 'check-code', command: process.execPath, args: ['-e', "require('node:assert/strict').equal(require('node:fs').readFileSync('ai-change.txt','utf8'),'AI and manual edit\\n')"] }] })).code).toBe(200);
+  expect((await api(`work/${work.id}/verify`, 'POST', { commandId: 'check-code' })).code).toBe(200);
+  await expect.poll(() => app.get(WorkStore).records(work.id, 'verification').at(-1)?.status, { timeout: 10000 }).toBe('passed');
+  expect((await api(`work/${work.id}/action`, 'POST', { action: 'apply-changes', confirmed: true })).code).toBe(200);
+  expect(readFileSync(join(root, 'ai-change.txt'), 'utf8')).toBe('AI and manual edit\n');
+  await operation({ kind: 'stage', paths: ['ai-change.txt'] });
+  const committed = await operation({ kind: 'commit', message: 'Integrated app development' });
+  const hash = committed.result?.hash || committed.head;
+  expect((await api(`${project}/git/commits/${hash}`)).data.message).toBe('Integrated app development');
+  expect((await api(`${project}/git/commits/${hash}/file?path=ai-change.txt`)).data.content).toBe('AI and manual edit\n');
+  await operation({ kind: 'push', confirmed: true });
+  expect(git(['--git-dir', remote, 'rev-parse', 'refs/heads/main'])).toBe(hash);
+  expect((await api(`work/${work.id}/action`, 'POST', { action: 'complete', confirmed: true })).code).toBe(409);
+  expect(app.get(WorkStore).get(work.id).phase).toBe('verification');
+}, 90000);

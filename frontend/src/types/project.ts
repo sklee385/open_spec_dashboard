@@ -1,0 +1,11 @@
+export type ProjectEntry = { path: string; name: string; kind: 'file' | 'directory' | 'boundary'; version?: string; reason?: string };
+export type ProjectPage = { entries: ProjectEntry[]; nextCursor: string | null; ignoredUnavailable?: boolean };
+export type ProjectFile = { path: string; content: string | null; version: string; size: number; encoding: string | null; bom: boolean; newline: string; editable: boolean; reason?: string };
+export type GitEntry = { path: string; originalPath?: string; index: string; worktree: string; untracked: boolean; conflicted: boolean };
+export type GitCommit = { hash: string; author: string; date: string; message: string };
+export type GitStatus = { available: boolean; reason?: string; root?: string; blocked?: string; protectedIndex?: boolean; hiddenChanges?: number; branch: string | null; head: string | null; upstream?: string | null; remote?: string; destinations?: string[]; ahead: number; behind: number; entries: GitEntry[]; token: string; remotes: string[]; outgoing?: GitCommit[]; progress: null | { kind: string; owned: boolean; operationId?: string } };
+export type GitDiff = { path: string; before: string | null; after: string | null; reason?: string; base?: string; originalPath?: string };
+export type GitDetail = GitCommit & { parents: string[]; base: string; files: { path: string; status: string; originalPath?: string }[] };
+export type GitOperation = { id: string; kind: string; status: 'running' | 'succeeded' | 'failed' | 'conflicted' | 'awaiting-continue' | 'uncertain'; error?: string; head?: string; result?: { hash?: string }; reviewedAt?: string; evidence?: unknown };
+export type GitReconciliation = { operation: GitOperation; evidence: unknown; status: GitStatus };
+export type OperationKind = 'stage' | 'unstage' | 'commit' | 'create-branch' | 'switch-branch' | 'fetch' | 'pull' | 'push' | 'continue-pull' | 'abort-pull';

@@ -1,0 +1,73 @@
+name: Desktop packages
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DESKTOP_RELEASE: ${{ github.event_name == 'push' && '1' || '0' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          architecture: x64
+          cache: npm
+      - name: Validate personal release prerequisites
+        if: github.event_name == 'push'
+        run: node -e "require('./desktop/release.cjs').validateRelease({platform:process.platform,arch:process.arch,version:require('./package.json').version,tag:process.env.GITHUB_REF_NAME,env:process.env})"
+      - run: npm ci
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+      - run: npm run desktop:test
+      - run: npm test
+      - run: npm run build
+      - name: Stage application
+        shell: bash
+        run: |
+          if [ "$DESKTOP_RELEASE" = "1" ]; then
+            node scripts/desktop-stage.cjs --release
+          else
+            node scripts/desktop-stage.cjs --personal-update
+          fi
+      - run: npm run desktop:dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-win32-x64
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .tools/desktop-dist/*.exe
+            .tools/desktop-dist/*.blockmap
+            .tools/desktop-dist/latest.yml
+  release:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: desktop-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-win32-x64
+          path: release-files
+      - name: Validate complete release
+        run: node desktop/artifacts.cjs release-files "${GITHUB_REF_NAME#v}"
+      - name: Publish verified draft without overwriting
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node desktop/publish.cjs release-files

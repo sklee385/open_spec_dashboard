@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import { createApplication } from '../src/app';
 import { WorkStore } from '../src/work/store';
+import { CodexService } from '../src/codex/codex.service';
 describe('Codex 프로세스와 동일 대화', () => {
   let app: INestApplication, base: string, work: any, log: string;
   const request = async (path: string, body?: any) => {
@@ -71,6 +72,27 @@ describe('Codex 프로세스와 동일 대화', () => {
     const q = (await request(`work/${work.id}`)).data.questions.find((x: any) => x.status === 'pending');
     expect((await request(`work/${work.id}/answer`, { questionId: q.id, answers: {} })).status).toBe(400);
     expect((await request(`work/${work.id}/approval`, { questionId: q.id, decision: 'accept' })).status).toBe(200);
+    await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+  });
+  it.each(['accept', 'decline'])('앱 접근 요청에 MCP 응답 형식으로 %s를 전달하고 실행을 재개한다', async decision => {
+    await request(`work/${work.id}/message`, { text: '앱 접근 승인' });
+    await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('waiting-approval');
+    const q = (await request(`work/${work.id}`)).data.questions.find((x: any) => x.status === 'pending');
+    expect(q.method).toBe('mcpServer/elicitation/request');
+    expect((await request(`work/${work.id}/approval`, { questionId: q.id, decision })).status).toBe(200);
+    await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+    const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(calls.findLast(x => x.id === 1001 && !x.method).result).toEqual({ action: decision, content: decision === 'accept' ? {} : null, _meta: null });
+    expect((await request(`work/${work.id}/approval`, { questionId: q.id, decision })).status).toBe(409);
+  });
+  it('추가 입력이 필요한 MCP 요청을 빈 승인으로 처리하지 않고 거절은 전달한다', async () => {
+    await request(`work/${work.id}/message`, { text: '앱 접근 승인' });
+    await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('waiting-approval');
+    const store = app.get(WorkStore), q = store.records(work.id, 'question').find((x: any) => x.status === 'pending');
+    store.record(q.id, work.id, 'question', { ...q, params: { ...q.params, requestedSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } });
+    expect((await request(`work/${work.id}/approval`, { questionId: q.id, decision: 'accept' })).status).toBe(400);
+    expect(store.records(work.id, 'question').find((x: any) => x.id === q.id).status).toBe('pending');
+    expect((await request(`work/${work.id}/approval`, { questionId: q.id, decision: 'decline' })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
   });
   it('실행 중 추가 지시는 같은 대화 대기열로 처리한다', async () => {
@@ -151,6 +173,31 @@ describe('Codex 프로세스와 동일 대화', () => {
     const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
     expect(calls.filter(x => x.method === 'thread/start')).toHaveLength(callsBefore.filter(x => x.method === 'thread/start').length);
     expect(calls.filter(x => x.method === 'turn/start')).toHaveLength(callsBefore.filter(x => x.method === 'turn/start').length);
+  });
+  it('ID 조회가 실패해도 원본 파일로 같은 대화를 복구하고 실행은 시작하지 않는다', async () => {
+    await app.close(); const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_TEST_MODE = 'missing-rollout'; process.env.CODEX_HOME = join(dirname(log), 'codex-home');
+    try {
+      const folder = join(process.env.CODEX_HOME, 'sessions', '2026', '10', '25'); await mkdir(folder, { recursive: true });
+      const file = join(folder, 'rollout-2026-10-25-thread-1.jsonl');
+      await writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'thread-1', cwd: work.projectPath } }) + '\n');
+      app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+      const before = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+      expect((await request(`work/${work.id}`)).data).toMatchObject({ threadId: 'thread-1', state: 'idle', rolloutPath: file });
+      const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(calls.findLast(x => x.method === 'thread/resume').params.path).toBe(file);
+      expect(calls.filter(x => ['thread/start','turn/start'].includes(x.method))).toHaveLength(before.filter(x => ['thread/start','turn/start'].includes(x.method)).length);
+    } finally { delete process.env.CODEX_TEST_MODE; if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome; }
+  });
+  it('문서가 보관 폴더로 이동해도 완료 알림으로 서버가 종료되지 않는다', async () => {
+    const active = join(dirname(log), 'openspec', 'changes', 'test'), archived = join(dirname(active), 'archive', '2026-10-25-test');
+    await mkdir(dirname(archived), { recursive: true }); await rename(active, archived);
+    try {
+      const service = app.get(CodexService);
+      expect(() => service.client.emit('notification', { method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })).not.toThrow();
+      expect((await request(`work/${work.id}`)).data.state).toBe('idle');
+    } finally { await rename(archived, active); }
   });
   it('대화 생성 결과를 잃으면 새 대화를 자동으로 중복 생성하지 않는다', async () => {
     const store = app.get(WorkStore), current = store.get(work.id)!; current.threadId = null; store.save(current);

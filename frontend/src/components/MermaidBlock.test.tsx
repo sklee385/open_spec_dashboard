@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { render } from '../test/render';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MermaidBlock } from './MermaidBlock';
 
@@ -47,6 +48,14 @@ it('UTF-8 64KiB 초과를 렌더링 전에 차단한다', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent('64KiB');
   expect(renderer.render).not.toHaveBeenCalled();
   expect(screen.getByText(source)).toBeVisible();
+});
+
+it('CSS가 지정하던 시퀀스 연결선을 stroke none 상태로 잃지 않는다', async () => {
+  renderer.render.mockResolvedValue({ svg: '<svg viewBox="0 0 200 100"><line class="messageLine1" x1="0" y1="10" x2="100" y2="10" stroke="none"/><text>응답</text></svg>' });
+  const view = render(<MermaidBlock source={'sequenceDiagram\nB-->>A: 응답'} />);
+  await screen.findByText('응답');
+  expect(view.container.querySelector('line')).toHaveAttribute('stroke', 'currentColor');
+  expect(view.container.querySelector('line')).toHaveAttribute('stroke-dasharray', '4 3');
 });
 
 it('이전 비동기 결과가 수정한 초안을 덮어쓰지 않는다', async () => {

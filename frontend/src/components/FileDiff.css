@@ -1,0 +1,19 @@
+.file-diff { min-width: 0; margin: 12px 0; }
+.file-diff-counts { font-weight: 600; font-variant-numeric: tabular-nums; }
+.file-diff-scroll { max-width: 100%; overflow: auto; max-height: 560px; border: 1px solid var(--border); border-radius: 6px; }
+.work-room .file-diff table { margin: 0; width: 100%; border-collapse: collapse; font-size: 12px; }
+.work-room .file-diff th { position: sticky; top: 0; background: var(--secondary); white-space: nowrap; z-index: 1; }
+.work-room .file-diff td { padding: 2px 6px; border: 0; vertical-align: top; }
+.file-diff-number { width: 1%; text-align: right; color: var(--muted-foreground); user-select: none; font-variant-numeric: tabular-nums; }
+.file-diff-sign { width: 1%; user-select: none; }
+.file-diff code { white-space: pre; font-family: ui-monospace, Consolas, monospace; tab-size: 2; }
+.file-diff-added { background: #15803d18; box-shadow: inset 3px 0 #22c55e; }
+.file-diff-removed { background: #dc262618; box-shadow: inset 3px 0 #ef4444; }
+.file-diff-added .file-diff-sign { color: #15803d; font-weight: bold; }
+.file-diff-removed .file-diff-sign { color: #dc2626; font-weight: bold; }
+.dark .file-diff-added { background: #22c55e20; }.dark .file-diff-removed { background: #ef444420; }
+.dark .file-diff-added .file-diff-sign { color: #86efac; }.dark .file-diff-removed .file-diff-sign { color: #fca5a5; }
+.file-diff-gap td { background: var(--secondary); text-align: left; }
+.work-room .file-diff-gap button { position: sticky; left: 8px; display: block; width: auto; max-width: 100%; font-size: 12px; text-align: left; }
+.file-diff-eof { display: block; color: var(--muted-foreground); font-style: italic; }
+.file-diff-full { margin-top: 12px; }

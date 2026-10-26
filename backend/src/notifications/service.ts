@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Get, Inject, Injectable, OnApplicationBootstrap, OnApplicationShutdown, Put } from '@nestjs/common';
 import { WorkStore } from '../work/store';
 import { WindowsNotifications } from './adapter';
-import { NotificationConfig, NotificationSettings, toastPayload } from './settings';
+import { NotificationConfig, NotificationSettings, toastPayload, notificationMode, notificationLaunchURI } from './settings';
 
 @Injectable()
 export class NativeNotifications implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -16,7 +16,7 @@ export class NativeNotifications implements OnApplicationBootstrap, OnApplicatio
   status() {
     let deliveryError: string | null = null;
     try { deliveryError = this.store.nativeProblem(); } catch { this.lastError = 'storage-error'; this.registrationStatus = 'failed'; }
-    return { enabled: this.config?.enabled ?? this.intent, dashboardUrl: this.config?.dashboardUrl ?? null,
+    return { enabled: this.config?.enabled ?? this.intent, dashboardUrl: notificationMode() === 'desktop' ? null : this.config?.dashboardUrl ?? null, activationTarget: notificationMode(),
     effectiveEnabled: !!this.config?.enabled && this.registrationStatus === 'registered' && !this.stopped && !this.updating,
     registrationStatus: this.registrationStatus, lastError: this.lastError || deliveryError }; }
   async onApplicationBootstrap() {
@@ -27,8 +27,9 @@ export class NativeNotifications implements OnApplicationBootstrap, OnApplicatio
     this.registrationStatus = 'uninitialized'; this.lastError = null;
     try { this.config = this.settings.read(); this.intent = this.config.enabled; } catch { this.config = undefined; this.intent = this.settings.readIntent(); this.registrationStatus = 'failed'; this.lastError = 'settings-error'; return; }
     if (!this.config.enabled) { this.registrationStatus = 'disabled'; return; }
+    if (notificationMode() === 'desktop' && process.env.OPENSPEC_DESKTOP_PROTOCOL_READY !== '1') { this.registrationStatus = 'failed'; this.lastError = 'activation-error'; return; }
     if (!this.adapter.supported) { this.registrationStatus = 'unsupported'; this.lastError = 'unsupported'; return; }
-    try { await this.adapter.register(this.config.dashboardUrl); if (!this.stopped) this.registrationStatus = 'registered'; }
+    try { await this.adapter.register(notificationLaunchURI(this.config.dashboardUrl)); if (!this.stopped) this.registrationStatus = 'registered'; }
     catch { this.registrationStatus = 'failed'; this.lastError = 'registration-error'; }
   }
   async update(input: unknown) {

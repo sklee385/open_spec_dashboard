@@ -1,0 +1,45 @@
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import type { INestApplication } from '@nestjs/common';
+import { createApplication } from '../src/app';
+import { WorkStore } from '../src/work/store';
+import { CodexService } from '../src/codex/codex.service';
+import { EdgeService } from '../src/browser/edge.service';
+let app: INestApplication, store: WorkStore, codex: CodexService, workId: string, log: string;
+beforeAll(async () => {
+  const root = await mkdtemp(join(tmpdir(), 'edge-codex-')); await mkdir(join(root, 'openspec/changes/demo'), { recursive: true });
+  await writeFile(join(root, 'openspec/changes/demo/proposal.md'), '# Edge\n');
+  process.env.CONFIG_PATH = join(root, 'config.json'); process.env.DATA_DIR = join(root, 'data');
+  process.env.CODEX_BIN = process.execPath; process.env.CODEX_ARGS = JSON.stringify([resolve('test/fixtures/codex.cjs')]);
+  process.env.CODEX_TEST_LOG = log = join(root, 'rpc.log');
+  await writeFile(process.env.CONFIG_PATH, JSON.stringify({ sources: [{ name: 'test', path: './openspec' }] }));
+  app = await createApplication(); await app.listen(0, '127.0.0.1'); store = app.get(WorkStore); codex = app.get(CodexService);
+  workId = 'edge-work'; store.save({ id: workId, sourceId: 'test', projectPath: root, changeName: 'demo', requestKey: workId, ideaIds: [], phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null, createdAt: '', updatedAt: '' });
+});
+afterAll(async () => { await app?.close(); for (const key of ['CONFIG_PATH', 'DATA_DIR', 'CODEX_BIN', 'CODEX_ARGS', 'CODEX_TEST_LOG']) delete process.env[key]; vi.restoreAllMocks(); });
+it('새 대화에 Edge 도구를 등록하고 기존 질문 도구를 유지한다', async () => {
+  await codex.send(workId, '계획 확인'); await expect.poll(() => store.get(workId)?.state).toBe('idle');
+  const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  const tools = calls.find(call => call.method === 'thread/start').params.dynamicTools;
+  expect(tools.map((tool: any) => tool.name)).toEqual(['ask_user', 'edge_browser']);
+  expect(store.get(workId)?.edgeToolsVersion).toBe(1);
+});
+it('Edge 도구 결과는 원래 요청에 전달하고 질문 대기를 만들지 않는다', async () => {
+  const edge = app.get(EdgeService), execute = vi.spyOn(edge, 'execute').mockResolvedValue({ url: 'http://localhost/', text: 'Board' });
+  const respond = vi.spyOn(codex.client, 'respond').mockImplementation(() => {});
+  codex.client.emit('notification', { id: 1200, method: 'item/tool/call', params: { threadId: 'thread-1', tool: 'edge_browser', arguments: { op: 'observe' } } });
+  await expect.poll(() => respond.mock.calls.length).toBe(1);
+  expect(execute).toHaveBeenCalledWith(workId, { op: 'observe' });
+  expect(respond).toHaveBeenCalledWith(1200, { success: true, contentItems: [{ type: 'inputText', text: expect.stringContaining('Board') }] });
+  expect(store.records(workId, 'question')).toEqual([]); expect(store.get(workId)?.state).toBe('idle');
+  execute.mockResolvedValueOnce({ url: 'http://localhost/', image: 'data:image/png;base64,YQ==' });
+  codex.client.emit('notification', { id: 1201, method: 'item/tool/call', params: { threadId: 'thread-1', tool: 'edge_browser', arguments: { op: 'capture' } } });
+  await expect.poll(() => respond.mock.calls.length).toBe(2);
+  expect(respond.mock.calls[1][1]).toMatchObject({ success: true, contentItems: [{ type: 'inputText' }, { type: 'inputImage', imageUrl: 'data:image/png;base64,YQ==' }] });
+  execute.mockRejectedValueOnce(new Error('연결 없음'));
+  codex.client.emit('notification', { id: 1202, method: 'item/tool/call', params: { threadId: 'thread-1', tool: 'edge_browser', arguments: { op: 'observe' } } });
+  await expect.poll(() => respond.mock.calls.length).toBe(3);
+  expect(respond.mock.calls[2][1]).toMatchObject({ success: false, contentItems: [{ type: 'inputText', text: '연결 없음' }] });
+});

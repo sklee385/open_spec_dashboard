@@ -42,8 +42,10 @@ export function AttentionOverlays({ sources }: { sources: Source[] }) {
       {model.navigationError && <p role="alert">{t('attention.navigationError')}</p>}
       <p>{t(model.nativeSettings?.effectiveEnabled ? 'attention.granted' : model.nativeSettings?.enabled === false ? 'attention.default' : model.nativeSettings?.registrationStatus === 'unsupported' ? 'attention.unsupported' : 'attention.denied')}</p>
       <button className="attention-enable" disabled={model.savingSettings} onClick={() => void model.updateWindows({ enabled: !model.nativeSettings?.enabled })}>{t(model.nativeSettings?.enabled ? 'attention.disable' : 'attention.enable')}</button>
-      <label>{t('attention.address')}<input type="url" value={address ?? model.nativeSettings?.dashboardUrl ?? ''} onChange={event => setAddress(event.target.value)} /></label>
-      <button disabled={model.savingSettings || address === null} onClick={() => void model.updateWindows({ dashboardUrl: address! })}>{t('attention.saveAddress')}</button>
+      {model.nativeSettings?.activationTarget === 'desktop' ? <p>{t('attention.desktopTarget')}</p> : <>
+        <label>{t('attention.address')}<input type="url" value={address ?? model.nativeSettings?.dashboardUrl ?? ''} onChange={event => setAddress(event.target.value)} /></label>
+        <button disabled={model.savingSettings || address === null} onClick={() => void model.updateWindows({ dashboardUrl: address! })}>{t('attention.saveAddress')}</button>
+      </>}
       <button disabled={model.savingSettings} onClick={() => void model.updateWindows({ enabled: false, unregister: true })}>{t('attention.unregister')}</button>
       <div className="attention-list">{model.items.length ? model.items.map(row) : !model.connectionError && <p>{t('attention.empty')}</p>}</div>
     </section>}

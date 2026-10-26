@@ -21,7 +21,8 @@ import {
   Archive,
   FolderOpen,
   Sparkles,
-  FilePenLine
+  FilePenLine,
+  Plus
 } from 'lucide-react';
 
 
@@ -47,7 +48,8 @@ interface KanbanBoardProps {
   onIdeaClick?: (idea: Idea) => void;
   selectedSourceId: string | null;
   showArchived?: boolean;
-  onOpenSettings?: () => void;
+  onOpenSources?: () => void;
+  onOpenNewIdea?: () => void;
 }
 
 export function KanbanBoard({ 
@@ -60,7 +62,8 @@ export function KanbanBoard({
   onIdeaClick, 
   selectedSourceId, 
   showArchived = false, 
-  onOpenSettings 
+  onOpenSources,
+  onOpenNewIdea
 }: KanbanBoardProps) {
   const { t, locale } = useI18n();
   const ARCHIVED_COLUMN = {
@@ -321,8 +324,14 @@ export function KanbanBoard({
             }
           </p>
         </div>
+        {!hasNoSources && onOpenNewIdea && (
+          <Button size="sm" onClick={onOpenNewIdea} className="gap-1.5" aria-label={t('header.createIdea')}>
+            <Plus className="h-3.5 w-3.5" />
+            {t('header.newIdea')}
+          </Button>
+        )}
         {hasNoSources && (
-          <Button onClick={onOpenSettings} size="sm" className="mt-2">
+          <Button onClick={onOpenSources} size="sm" className="mt-2">
             <FolderOpen className="h-4 w-4 mr-2" />
             {t('kanban.configure')}
           </Button>
@@ -464,6 +473,12 @@ export function KanbanBoard({
              }}
             >
               <div className="flex flex-col gap-3 pb-4">
+                {isIdeasColumn && onOpenNewIdea && (
+                  <Button size="sm" onClick={onOpenNewIdea} className="self-end h-8 gap-1.5" aria-label={t('header.createIdea')}>
+                    <Plus className="h-3.5 w-3.5" />
+                    {t('header.newIdea')}
+                  </Button>
+                )}
                 {columnItems.map((item) => {
                   // Type guard based on unique properties: Idea doesn't have 'status'
                   const isIdea = !('status' in item);
@@ -542,14 +557,20 @@ export function KanbanBoard({
             >
               {/* Column header */}
               <div className="sticky top-0 bg-background/95 backdrop-blur-sm py-3 z-10 border-b border-border/50 mb-3">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-h-7">
                   <span className={color}>{icon}</span>
                   <h2 className="text-sm font-semibold text-foreground">
                     {label}
                   </h2>
-                  <span className="ml-auto text-xs font-medium text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full">
+                  <span className={cn("text-xs font-medium text-muted-foreground bg-muted/50 px-2 py-0.5 rounded-full", !isIdeasColumn && 'ml-auto')}>
                     {formatNumber(locale, totalCount)}
                   </span>
+                  {isIdeasColumn && onOpenNewIdea && (
+                    <Button size="sm" onClick={onOpenNewIdea} className="ml-auto h-7 shrink-0 gap-1 px-2 text-xs" aria-label={t('header.createIdea')}>
+                      <Plus className="h-3.5 w-3.5" />
+                      {t('header.newIdea')}
+                    </Button>
+                  )}
                 </div>
               </div>
               

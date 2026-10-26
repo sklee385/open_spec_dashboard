@@ -2,6 +2,7 @@
 const { mkdtempSync, mkdirSync, writeFileSync } = require('node:fs');
 const { resolve, join } = require('node:path');
 const { createApplication } = require('../../dist/app');
+const { createGateway } = require('../../dist/gateway');
 const { WorkStore } = require('../../dist/work/store');
 const { NativeNotifications } = require('../../dist/notifications/service');
 const { createInterface } = require('node:readline');
@@ -15,15 +16,15 @@ mkdirSync(join(directory, 'openspec/changes/notification-check'), { recursive: t
 writeFileSync(process.env.CONFIG_PATH, JSON.stringify({ sources: [{ name: 'notification-test', path: './openspec' }] }));
 writeFileSync(join(directory, 'openspec/changes/notification-check/proposal.md'), '# Windows notification verification\n\nIsolated manual verification.');
 (async () => {
-  const app = await createApplication();
-  app.use(require('express').static(join(root, 'frontend/dist')));
-  await app.listen(13101, '127.0.0.1');
+  const app = await createApplication(); await app.listen(0, '127.0.0.1');
+  const gateway = createGateway(Number(new URL(await app.getUrl()).port), join(directory, 'trash'), { staticDirectory: join(root, 'frontend/dist') });
+  await new Promise((accept, reject) => { gateway.once('error', reject); gateway.listen(13101, '127.0.0.1', accept); });
   const store = app.get(WorkStore), notifications = app.get(NativeNotifications);
   store.save({ id: 'native-check', sourceId: 'notification-test', changeName: 'notification-check', projectPath: directory, requestKey: 'native-check', ideaIds: [], phase: 'planning', state: 'waiting-input', threadId: null, reviewedVersion: null, createdAt: new Date().toISOString() });
   store.event('native-check', 'source-idea', { title: 'OpenSpecBoard 알림 검증' });
   let count = 0;
   const emit = async () => { const id = `native-question-${++count}`; store.record(id, 'native-check', 'question', { kind: 'input', status: 'pending', createdAt: new Date().toISOString(), params: { questions: [{ id: 'manual', question: 'Windows 알림 검증용 질문입니다. 답변은 전송하지 마세요.' }] } }); await notifications.scan(); console.log(JSON.stringify({ questionId: id, status: notifications.status(), records: store.records('native-check', 'native-notification') })); };
-  const stop = async () => { app.getHttpServer().closeAllConnections(); await app.close(); process.exit(0); };
+  const stop = async () => { gateway.closeAllConnections(); gateway.close(); app.getHttpServer().closeAllConnections(); await app.close(); process.exit(0); };
   createInterface({ input: process.stdin }).on('line', async line => { if (line === 'question') await emit(); else if (line === 'stop') await stop(); else if (line === 'status') console.log(JSON.stringify(notifications.status())); });
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
   console.log(`Isolated preview http://127.0.0.1:13101/; data=${directory}; commands: question/status/stop`);

@@ -9,6 +9,24 @@ $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'OpenSpecBoard 
 try {
   if ([Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { throw 'Interactive user session required' }
   $data = [Console]::In.ReadToEnd() | ConvertFrom-Json
+  if ($data.target -and $data.target -notin @('desktop','browser')) { throw 'Invalid target mode' }
+  $desktop = $data.target -eq 'desktop'
+  if ($desktop) {
+    $appId = 'OpenSpecBoard.DesktopNotifications'
+    $key = 'HKCU:\Software\Classes\AppUserModelId\OpenSpecBoard.DesktopNotifications'
+    $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'OpenSpecBoard Desktop Notifications.lnk'
+  }
+  function Test-ActivationUri([string]$candidate, [bool]$rootOnly) {
+    try {
+      if ($desktop) {
+        $u = [Uri]$candidate
+        return $u.IsAbsoluteUri -and $u.Scheme -eq 'openspecboard' -and $u.Host -eq 'attention' -and $u.AbsolutePath -in @('','/') -and -not $u.UserInfo -and -not $u.Fragment -and $u.Port -eq -1 -and (-not $rootOnly -or -not $u.Query)
+      }
+      if (-not $candidate.StartsWith('microsoft-edge:')) { return $false }
+      $u = [Uri]$candidate.Substring(15)
+      return $u.IsAbsoluteUri -and $u.Scheme -in @('http','https') -and $u.Host -in @('localhost','127.0.0.1','[::1]','::1') -and -not $u.UserInfo -and -not $u.Fragment -and (-not $rootOnly -or -not $u.Query)
+    } catch { return $false }
+  }
   Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -44,8 +62,8 @@ public static class OpenSpecShortcut {
       if (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut }
       if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key }
     } else {
-      $url = [Uri]$data.dashboardUrl
-      if (-not $url.IsAbsoluteUri -or $url.Scheme -notin @('http','https') -or $url.Host -notin @('localhost','127.0.0.1','[::1]','::1') -or $url.UserInfo -or $url.Query -or $url.Fragment) { throw 'Invalid dashboard URL' }
+      $launchUri = [string]$data.launchUri
+      if (-not (Test-ActivationUri $launchUri $true)) { throw 'Invalid application URI' }
       New-Item -Path $key -Force | Out-Null
       New-ItemProperty -LiteralPath $key -Name Owner -Value $marker -PropertyType String -Force | Out-Null
       New-ItemProperty -LiteralPath $key -Name DisplayName -Value 'OpenSpecBoard' -PropertyType String -Force | Out-Null
@@ -53,7 +71,7 @@ public static class OpenSpecShortcut {
       try {
         $link = $shell.CreateShortcut($shortcut)
         $link.TargetPath = Join-Path $env:SystemRoot 'explorer.exe'
-        $link.Arguments = '"microsoft-edge:' + $url.AbsoluteUri + '"'
+        $link.Arguments = '"' + $launchUri + '"'
         $link.Description = 'OpenSpecBoard notifications'
         $link.Save()
         [OpenSpecShortcut]::Write($shortcut, $appId)
@@ -66,9 +84,7 @@ public static class OpenSpecShortcut {
     $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
     $xml.LoadXml([string]$data.xml)
     $toastElement = $xml.DocumentElement
-    if ($toastElement.NodeName -ne 'toast' -or $toastElement.GetAttribute('activationType') -ne 'protocol' -or $toastElement.GetAttribute('launch') -ne $data.url -or -not ([string]$data.url).StartsWith('microsoft-edge:')) { throw 'Invalid toast' }
-    $target = [Uri](([string]$data.url).Substring(15))
-    if ($target.Scheme -notin @('http','https') -or $target.Host -notin @('localhost','127.0.0.1','[::1]','::1') -or $target.UserInfo -or $target.Fragment) { throw 'Invalid target' }
+    if ($toastElement.NodeName -ne 'toast' -or $toastElement.GetAttribute('activationType') -ne 'protocol' -or $toastElement.GetAttribute('launch') -ne $data.url -or -not (Test-ActivationUri ([string]$data.url) $false)) { throw 'Invalid toast' }
     $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
     if ([int]$notifier.Setting -ne 0) { throw 'Windows notifications disabled' }
     $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><title>OpenSpecBoard Edge 연결</title><style>
+body { width: 340px; margin: 16px; font: 14px system-ui; color: #202020; }
+label { display: block; margin-top: 12px; } input { box-sizing: border-box; width: 100%; padding: 8px; margin-top: 4px; }
+button { padding: 8px 12px; margin-top: 12px; } #status { overflow-wrap: anywhere; white-space: pre-wrap; }
+</style></head>
+<body>
+<h3>OpenSpecBoard Edge 연결</h3>
+<p>현재 선택한 HTTP/HTTPS 탭을 업무에 연결합니다. 연결 주소와 코드는 업무 화면에서 확인하세요.</p>
+<form id="pair-form">
+<label>로컬 연결 주소<input id="endpoint" required placeholder="http://127.0.0.1:포트" autocomplete="off"></label>
+<label>일회용 연결 코드<input id="code" required maxlength="200" autocomplete="off"></label>
+<button id="pair" type="submit">현재 탭 연결</button>
+</form>
+<button id="disconnect" type="button" hidden>연결 해제</button>
+<p id="status" role="status" aria-live="polite"></p>
+<script src="popup.js"></script>
+</body></html>

@@ -1,6 +1,6 @@
 import { useI18n } from '@/i18n/context';
-import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { useEffect, useState } from 'react';
+import { MarkdownDocument } from './MarkdownDocument';
 import { Menu, FileText, Folder, Loader2 } from 'lucide-react';
 import { useSpecs, useSpec } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useMediaQuery';
@@ -19,16 +19,19 @@ import { cn } from "@/lib/utils";
 
 interface SpecsViewProps {
   selectedSourceId: string | null;
+  refreshVersion?: number;
 }
 
-export function SpecsView({ selectedSourceId }: SpecsViewProps) {
+export function SpecsView({ selectedSourceId, refreshVersion = 0 }: SpecsViewProps) {
   const { t } = useI18n();
 
 
-  const { specs, loading, error } = useSpecs();
+  const { specs, loading, error, refetch } = useSpecs();
+  useEffect(() => { if (refreshVersion > 0) void refetch(); }, [refreshVersion, refetch]);
   const [selectedSpecId, setSelectedSpecId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { spec: specDetail, loading: detailLoading } = useSpec(selectedSpecId);
+  const activeSpecId = specs.some(spec => spec.id === selectedSpecId && (!selectedSourceId || spec.sourceId === selectedSourceId)) ? selectedSpecId : null;
+  const { spec: specDetail, loading: detailLoading } = useSpec(activeSpecId);
   const isMobile = useIsMobile();
 
   // Filter specs by selected source
@@ -129,7 +132,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
   // Content area
   const ContentArea = () => (
     <div className="p-4 md:p-8 overflow-hidden">
-      {selectedSpecId ? (
+      {activeSpecId ? (
         detailLoading ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <Loader2 className="h-8 w-8 text-primary animate-spin" />
@@ -151,7 +154,7 @@ export function SpecsView({ selectedSourceId }: SpecsViewProps) {
               </div>
             </div>
             <article className="prose prose-sm md:prose dark:prose-invert max-w-none prose-headings:font-semibold prose-a:text-primary prose-code:text-sm overflow-hidden break-words">
-              <ReactMarkdown>{specDetail.content}</ReactMarkdown>
+              <MarkdownDocument text={specDetail.content} />
             </article>
           </div>
         ) : (

@@ -1,0 +1,20 @@
+const { validateStageName } = require('./stage-directory.cjs');
+const stage = `.tools/${validateStageName(process.env.DESKTOP_STAGE_NAME ?? 'desktop-stage')}`;
+module.exports = {
+  appId: 'io.github.sklee385.openspecboard', productName: 'OpenSpecBoard', electronVersion: '45.0.0',
+  electronDist: 'node_modules/electron/dist',
+  directories: { app: stage, output: '.tools/desktop-dist' },
+  files: ['desktop/**/*', 'package.json', '!node_modules/**/*'],
+  extraResources: [
+    { from: `${stage}/service`, to: 'service', filter: ['**/*'] },
+    // electron-builder filters node_modules at each source root; copy this graph explicitly.
+    { from: `${stage}/service/node_modules`, to: 'service/node_modules', filter: ['**/*'] },
+  ],
+  afterPack: require('./after-pack.cjs'),
+  asar: true, npmRebuild: false,
+  protocols: [{ name: 'OpenSpecBoard attention', schemes: ['openspecboard'] }],
+  artifactName: 'OpenSpecBoard-${version}-${os}-${arch}.${ext}',
+  publish: { provider: 'github', owner: 'sklee385', repo: 'open_spec_dashboard', releaseType: 'draft' },
+  win: { target: [{ target: 'nsis', arch: ['x64'] }], forceCodeSigning: false, verifyUpdateCodeSignature: false },
+  nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, deleteAppDataOnUninstall: false },
+};

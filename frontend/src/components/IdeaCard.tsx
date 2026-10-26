@@ -1,4 +1,5 @@
 import { useI18n } from '@/i18n/context';
+import { DeleteBoardItem } from './BoardTrash';
 import { cn } from '@/lib/utils';
 import type { Idea } from '../types';
 import { formatRelativeTime } from '@/lib/utils';
@@ -13,7 +14,7 @@ export function IdeaCard({ idea, onClick }: IdeaCardProps) {
 
 
   return (
-    <button
+    <div className="relative"><div className="absolute right-2 top-2 z-10"><DeleteBoardItem id={idea.id} kind="idea" /></div><button
       onClick={onClick}
       className={cn(
         "w-full text-left p-4 rounded-lg border border-border/50 bg-card hover:border-border hover:shadow-sm transition-all duration-200 group"
@@ -24,7 +25,7 @@ export function IdeaCard({ idea, onClick }: IdeaCardProps) {
           <span className="text-violet-600 dark:text-violet-400">💡</span>
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-medium text-foreground mb-1 truncate group-hover:text-primary transition-colors">
+          <h3 className="text-sm font-medium text-foreground mb-1 pr-6 whitespace-normal break-words [overflow-wrap:anywhere] group-hover:text-primary transition-colors">
             {idea.title}
           </h3>
           <p className="text-xs text-muted-foreground/70 line-clamp-2 mb-2">
@@ -40,6 +41,6 @@ export function IdeaCard({ idea, onClick }: IdeaCardProps) {
           </div>
         </div>
       </div>
-    </button>
+    </button></div>
   );
 }

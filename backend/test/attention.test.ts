@@ -6,11 +6,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { Server } from 'node:http';
 import { createApplication } from '../src/app';
 import { WorkStore, type Work } from '../src/work/store';
-import { createServer, request } from 'node:http';
-const createGateway = (port: number) => createServer((req, res) => {
-  const upstream = request({ host: '127.0.0.1', port, path: req.url, method: req.method, headers: req.headers }, response => { res.writeHead(response.statusCode || 502, response.headers); response.pipe(res); });
-  upstream.on('error', () => { res.writeHead(503); res.end(); }); req.pipe(upstream);
-});
+import { createGateway } from '../src/gateway';
 
 let app: INestApplication, gateway: Server, store: WorkStore, base: string;
 beforeAll(async () => {

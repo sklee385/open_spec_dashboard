@@ -118,6 +118,8 @@ describe('업무·문서 영속성과 실행 조건', () => {
     await request(`work/${work.id}/action`, 'POST', { action: 'review' });
     expect((await request(`work/${work.id}/action`, 'POST', { action: 'implement' })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+    const originalRoot = root;
+    root = app.get(WorkStore).get(work.id)!.executionPath!;
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'tasks.md'), '- [x] 구현\n');
     expect((await request(`work/${work.id}/verification-plan`, 'PUT', { commands: [{ id: 'test', command: process.execPath, args: ['-e', 'process.exit(1)'] }] })).status).toBe(200);
     await request(`work/${work.id}/verify`, 'POST', { commandId: 'test' });
@@ -141,7 +143,9 @@ describe('업무·문서 영속성과 실행 조건', () => {
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'tasks.md'), '- [ ] 구현\n');
     expect((await request(`work/${work.id}/action`, 'POST', { action: 'complete', confirmed: true })).status).toBe(409);
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'tasks.md'), '- [x] 구현\n');
+    expect((await request(`work/${work.id}/action`, 'POST', { action: 'apply-changes', confirmed: true })).status).toBe(200);
     expect((await request(`work/${work.id}/action`, 'POST', { action: 'complete', confirmed: true })).data.phase).toBe('completed');
+    root = originalRoot;
   });
   it('완료된 문서는 다시 열기 전 수정할 수 없고 실행 중 강제 재개가 불가능하다', async () => {
     const doc = (await request(`work/${work.id}/document?path=design.md`)).data;
@@ -181,6 +185,15 @@ describe('업무·문서 영속성과 실행 조건', () => {
     current.state = 'idle'; store.save(current);
   });
   it('실행 중 검증을 중단하면 성공으로 처리하지 않는다', async () => {
+    // A fresh active work is required; the previous work was archived above.
+    const docs = join(root, 'openspec', 'changes', 'interrupt-check');
+    await mkdir(join(docs, 'specs', 'feature'), { recursive: true });
+    for (const file of ['proposal.md', 'design.md', 'specs/feature/spec.md']) await writeFile(join(docs, file), '# plan\n');
+    await writeFile(join(docs, 'tasks.md'), '- [ ] check\n');
+    work = (await request('work', 'POST', { sourceId: 'demo', changeName: 'interrupt-check', requestKey: 'interrupt-check' })).data;
+    await request(`work/${work.id}/action`, 'POST', { action: 'review' });
+    await request(`work/${work.id}/action`, 'POST', { action: 'implement' });
+    await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
     await request(`work/${work.id}/verification-plan`, 'PUT', { commands: [{ id: 'slow', command: process.execPath, args: ['-e', 'setTimeout(()=>{},10000)'] }] });
     await request(`work/${work.id}/verify`, 'POST', { commandId: 'slow' });
     expect((await request(`work/${work.id}/interrupt`, 'POST', {})).status).toBe(200);

@@ -23,6 +23,7 @@ export interface Artifact {
 }
 
 export interface Change {
+  workState?: string;
   id: string;
   name: string;
   title?: string;

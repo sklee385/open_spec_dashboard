@@ -30,3 +30,9 @@ it('영어·권한 거부·저장소·표시·이동 오류를 표시하고 명�
   fireEvent.click(screen.getByRole('button', { name: 'Disable Windows notifications' }));
   expect(model.updateWindows).toHaveBeenCalledWith({ enabled: false });
 });
+it('desktop notification settings show the program destination instead of a browser address', () => {
+  const model = state(); model.nativeSettings = { ...model.nativeSettings!, activationTarget: 'desktop', dashboardUrl: null };
+  render(<AttentionContext.Provider value={model}><AttentionOverlays sources={[]} /></AttentionContext.Provider>);
+  expect(screen.getByText('알림을 클릭하면 이 프로그램의 해당 업무·질문으로 이동합니다.')).toBeVisible();
+  expect(screen.queryByRole('textbox', { name: '로컬 대시보드 주소' })).not.toBeInTheDocument();
+});
