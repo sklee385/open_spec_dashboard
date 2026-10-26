@@ -174,6 +174,78 @@ describe('Codex 프로세스와 동일 대화', () => {
     expect(calls.filter(x => x.method === 'thread/start')).toHaveLength(callsBefore.filter(x => x.method === 'thread/start').length);
     expect(calls.filter(x => x.method === 'turn/start')).toHaveLength(callsBefore.filter(x => x.method === 'turn/start').length);
   });
+  it('격리 도입 전 구현 업무는 원래 경로에서 대화만 복구하고 격리 없는 실행은 차단한다', async () => {
+    const store = app.get(WorkStore), current = store.get(work.id)!;
+    const originalPhase = current.phase;
+    store.record('legacy-baseline', current.id, 'baseline', { files: {} });
+    current.phase = 'implementation'; current.state = 'recovery-required'; store.save(current);
+    const before = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    try {
+      expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+      expect((await request(`work/${work.id}`)).data).toMatchObject({ threadId: 'thread-1', state: 'idle', phase: 'implementation' });
+      const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(calls.findLast(x => x.method === 'thread/resume').params.cwd).toBe(current.projectPath);
+      expect(calls.filter(x => ['thread/start', 'turn/start'].includes(x.method))).toHaveLength(before.filter(x => ['thread/start', 'turn/start'].includes(x.method)).length);
+      expect(() => (app.get(CodexService) as any).executionCwd(store.get(work.id))).toThrow(/복구/);
+    } finally {
+      const restored = store.get(work.id)!; restored.phase = originalPhase; restored.state = 'idle'; store.save(restored);
+    }
+  });
+  it('기존 업무 복구 진단을 제공하고 같은 대화·단계·검토 상태를 보존한다', async () => {
+    const store = app.get(WorkStore), original = store.get(work.id)!;
+    store.save({ ...original, phase: 'implementation', state: 'recovery-required', error: '업무 전용 공간의 식별 정보가 없거나 달라 복구가 필요합니다' });
+    try {
+      const diagnosed = await request(`work/${work.id}`);
+      expect(diagnosed.status).toBe(200);
+      expect(diagnosed.data.recovery).toMatchObject({ required: true, canReconnect: true, code: 'legacy-workspace', mode: 'shared' });
+      const before = (await readFile(log, 'utf8')).split('\n').filter(line => /"method":"(thread|turn)\/start"/.test(line));
+      expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+      const restored = (await request(`work/${work.id}`)).data;
+      expect(restored).toMatchObject({ phase: 'implementation', state: 'idle', threadId: original.threadId });
+      expect(store.get(work.id)?.reviewedVersion).toBe(original.reviewedVersion);
+      expect(restored.recovery.required).toBe(false);
+      expect(restored.events.at(-1)).toMatchObject({ type: 'thread-reconnected', data: { mode: 'shared' } });
+      expect((await readFile(log, 'utf8')).split('\n').filter(line => /"method":"(thread|turn)\/start"/.test(line))).toEqual(before);
+    } finally { store.save(original); }
+  });
+  it('업무 복구는 이전 대기 메시지를 보존하되 자동 실행하지 않는다', async () => {
+    const store = app.get(WorkStore), original = store.get(work.id)!;
+    store.save({ ...original, state: 'recovery-required' });
+    store.record('recovery-queued', work.id, 'queued-message', { text: '복구 전에 대기하던 지시', status: 'queued' });
+    const calls = () => readFile(log, 'utf8').then(text => text.split('\n').filter(line => /"method":"(thread|turn)\/start"/.test(line)));
+    const before = await calls();
+    try {
+      expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(await calls()).toEqual(before);
+      expect(store.records(work.id, 'queued-message').find(row => row.id === 'recovery-queued')).toMatchObject({ text: '복구 전에 대기하던 지시', status: 'blocked' });
+      expect(store.get(work.id)?.state).toBe('idle');
+    } finally { store.db.prepare('DELETE FROM records WHERE id=?').run('recovery-queued'); store.save(original); }
+  });
+  it('대화 ID가 없거나 실행 중이면 복구 불가 이유를 진단한다', async () => {
+    const store = app.get(WorkStore), original = store.get(work.id)!;
+    try {
+      store.save({ ...original, state: 'recovery-required', threadId: null });
+      expect((await request(`work/${work.id}`)).data.recovery).toMatchObject({ required: true, canReconnect: false, code: 'thread-unknown' });
+      expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(409);
+      store.save({ ...original, state: 'waiting-input' });
+      expect((await request(`work/${work.id}`)).data.recovery).toMatchObject({ canReconnect: false, code: 'busy' });
+      expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(409);
+    } finally { store.save(original); }
+  });
+  it('격리 기준이 남고 경로가 없으면 업무 화면에 진단을 제공하되 원본으로 복구하지 않는다', async () => {
+    const store = app.get(WorkStore), original = store.get(work.id)!;
+    store.record('damaged-isolation', work.id, 'isolated-baseline', { executionPath: join(dirname(log), 'lost-space'), files: {} });
+    store.save({ ...original, state: 'recovery-required', phase: 'implementation' });
+    try {
+      const diagnosed = await request(`work/${work.id}`);
+      expect(diagnosed.status).toBe(200);
+      expect(diagnosed.data.recovery).toMatchObject({ required: true, canReconnect: false, code: 'workspace-unavailable' });
+      const result = await request(`work/${work.id}/reconnect`, {});
+      expect(result.status).toBe(409); expect(result.data.errorCode).toBe('workspace-unavailable');
+      expect(store.get(work.id)?.state).toBe('recovery-required');
+    } finally { store.db.prepare('DELETE FROM records WHERE id=?').run('damaged-isolation'); store.save(original); }
+  });
   it('ID 조회가 실패해도 원본 파일로 같은 대화를 복구하고 실행은 시작하지 않는다', async () => {
     await app.close(); const previousHome = process.env.CODEX_HOME;
     process.env.CODEX_TEST_MODE = 'missing-rollout'; process.env.CODEX_HOME = join(dirname(log), 'codex-home');

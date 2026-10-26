@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createApplication } from '../src/app';
 import { WorkStore } from '../src/work/store';
@@ -28,6 +28,36 @@ it('동일 대화의 실행 위치를 전환하고 별도 반영 후에만 완�
   expect((await request(`work/${work.id}/action`, { action: 'implement' })).status).toBe(200);
   await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
   work = app.get(WorkStore).get(work.id); expect(work.executionPath).toBeTruthy();
+  expect((await request(`work/${work.id}`)).data.recovery).toMatchObject({ mode: 'isolated', canReconnect: true, required: false });
+  expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+  const resumes = readFileSync(log, 'utf8').trim().split('\n').map(x => JSON.parse(x)).filter(x => x.method === 'thread/resume');
+  expect(resumes.at(-1).params.cwd).toBe(work.executionPath);
+  const previousHome = process.env.CODEX_HOME;
+  await app.close();
+  process.env.CODEX_TEST_MODE = 'missing-rollout'; process.env.CODEX_HOME = join(root, 'codex-home');
+  const sessions = join(process.env.CODEX_HOME, 'sessions', '2026', '10', '26'); mkdirSync(sessions, { recursive: true });
+  const rollout = join(sessions, `rollout-isolated-${work.threadId}.jsonl`);
+  writeFileSync(rollout, JSON.stringify({ type: 'session_meta', payload: { id: work.threadId, cwd: work.executionPath } }) + '\n');
+  try {
+    app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+    expect(app.get(WorkStore).get(work.id)?.rolloutPath).toBe(rollout);
+  } finally {
+    await app.close(); delete process.env.CODEX_TEST_MODE;
+    if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome;
+    app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+  }
+  const identityFile = join(dirname(work.executionPath), 'identity.json'), identity = readFileSync(identityFile, 'utf8');
+  writeFileSync(identityFile, JSON.stringify({ workId: 'foreign', projectPath: work.projectPath }));
+  try {
+    const damaged = await request(`work/${work.id}`);
+    expect(damaged.status).toBe(200);
+    expect(damaged.data.recovery).toMatchObject({ code: 'workspace-unavailable', canReconnect: false, required: true });
+    expect(damaged.data.documents).toEqual([]);
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(409);
+    expect((await request(`work/${work.id}/document?path=proposal.md`)).status).toBe(409);
+    expect(readFileSync(identityFile, 'utf8')).toContain('foreign');
+  } finally { writeFileSync(identityFile, identity); }
   const calls = readFileSync(log, 'utf8').trim().split('\n').map(x => JSON.parse(x));
   expect(calls.filter(x => x.method === 'thread/start')).toHaveLength(1);
   expect(calls.filter(x => x.method === 'turn/start').at(-1).params.cwd).toBe(work.executionPath);
@@ -70,4 +100,4 @@ it('동일 대화의 실행 위치를 전환하고 별도 반영 후에만 완�
   expect((await request(`work/${work.id}`)).status).toBe(200);
   expect((await request(`work/${work.id}`)).data.changeReport).toEqual(completed);
   expect((await request(`work/${work.id}/document?path=proposal.md`)).data.content).toBe('# Plan\n');
-});
+}, 20000);

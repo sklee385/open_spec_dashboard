@@ -62,3 +62,13 @@ PUT은 `{enabled?:boolean,dashboardUrl?:string,unregister?:true}`만 받는다. 
 서버는 질문 복구·만료 후 즉시, 처리 완료 후 5초마다 확인한다. `(workId,questionId)` SHA-256 키의 native-notification 레코드를 INSERT OR IGNORE로 먼저 확보하고 claimed/submitted/failed/uncertain을 기록한다. 미완결 claimed는 재시작 때 uncertain으로 바꾸며 명확한 실패도 재시도하지 않는다. 저장 실패 시 OS를 호출하지 않는다. 설정·브라우저 데이터 삭제는 발행 기록을 초기화하지 않는다. IndexedDB는 화면 안내 중복 방지에만 쓴다.
 
 고정 PowerShell 실행 파일·인자와 stdin JSON, XML 이스케이프, 로컬 microsoft-edge: 링크를 사용한다. 토스트에는 업무명·요청 종류와 기본 알림음 한 번만 넣는다. 링크는 workId와 questionId를 함께 포함하며 앱 최초 복원 전에 검증한다. 링크 처리는 조회·화면 이동만 수행하고 생성·재연결·답변·승인·검토·구현 API는 호출하지 않는다.
+
+## 업무 복구 진단 (v0.1.3)
+
+GET `/api/work/:id`는 `recovery: {required,canReconnect,code,mode}`를 추가한다. mode는 shared 또는 isolated다. 기존 공유 폴더 업무의 legacy-workspace와 정상 격리 업무의 isolated-workspace는 같은 대화로 복구한다. workspace-unavailable·project-unavailable은 실제 폴더 복원이 필요하고, thread-unknown은 기존 대화 ID 확인이 필요하다. thread-in-use는 다른 Codex의 점유 해제 후 재시도한다. busy·completed는 재연결할 수 없다. session-restarted·connection-failed도 재시도할 수 있다.
+
+기존 POST `/api/work/:id/reconnect`를 그대로 사용한다. 요청마다 현재 상태·경로·식별 정보를 다시 검사한다. 성공은 동일 work/thread ID와 원래 업무 단계로 반환하며 thread-reconnected 이벤트에 mode/code를 기록한다. 실제 연결을 시도하다 실패하면 recovery-failed 이벤트에 원인을 기록한다. 복구는 새 대화나 AI 턴을 시작하지 않는다. 오류는 409와 message/errorCode로 반환한다. 완료·보관·진행 중 업무 및 활성 질문·승인은 재연결을 차단한다.
+
+격리 경로가 손상돼도 업무 조회는 진단과 기존 이벤트를 반환하며 문서·검증 명령을 비워 제공하고 이전 검증은 fresh:false로 표시한다. 문서 직접 조회·구현·반영은 계속 식별 검증을 적용하며 원본 프로젝트를 대체 경로로 사용하지 않는다. 화면의 검토 가능 버전은 비활성화하되 저장된 검토 기록은 변경하지 않는다.
+
+복구 성공 시 연결이 끊기기 전에 queued로 남은 지시는 blocked로 보존한다. 복구 이벤트가 대기열 자동 실행을 유발하지 않도록 같은 저장 트랜잭션에서 처리한다. 사용자는 문서·실행 기록을 확인한 뒤 필요한 지시만 다시 보낸다. 기존 pending 질문·승인은 복구 요청을 차단하며, 만료된 질문의 복구 기능은 유지한다.

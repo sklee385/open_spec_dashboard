@@ -2,6 +2,7 @@ import { ProductError, errorMessage } from '@/i18n/errors';
 import { useI18n } from '@/i18n/context';
 import { EdgeConnection } from './EdgeConnection';
 import { AiActivity } from './AiActivity';
+import { WorkRecovery, type RecoveryStatus } from './WorkRecovery';
 import { DeleteBoardItem } from './BoardTrash';
 import { QuestionAnswers, RecoveredAnswer, recoveredAnswer } from './QuestionAnswers';
 import { useCallback, useEffect, useRef, useState, useImperativeHandle, type Ref } from 'react';
@@ -23,6 +24,7 @@ type Question = { id: string; kind: string; status: string; reflection?: string;
 type Verification = { id: string; commandId: string; status: string; fresh: boolean; stdout: string; stderr: string; code: number | null };
 type Command = { id: string; command: string; args: string[] };
 type Room = { id: string; changeName: string; phase: string; state: string; threadId: string | null; turnId?: string; error?: string; errorCode?: string; updatedAt: string; reviewedVersion: string | null; reviewRequired?: boolean;
+  recovery?: RecoveryStatus;
   toolId?: string; toolConfigSnapshot?: { name: string; kind: string }; toolCapabilities?: { conversation: boolean; questions: boolean; approval: boolean; interrupt: boolean; nativeResume: boolean }; toolReadiness?: { ready: boolean; message: string };
   documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationCommands: Command[];
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
@@ -117,6 +119,8 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
   const messageList = useRef<HTMLDivElement>(null);
   const toolName = room?.toolConfigSnapshot?.name || 'Codex';
   const nativeResume = room?.toolCapabilities?.nativeResume ?? true;
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const needsRecovery = nativeResume && (room?.recovery?.required || room?.state === 'recovery-required');
   const guidedReviewBlocked = !room || !['idle', 'interrupted', 'failed'].includes(room.state) || ['completed', 'archived'].includes(room.phase) || room.questions.some(question => ['pending', 'sending', 'uncertain', 'recovering'].includes(question.status) || (question.kind === 'input' && question.status === 'expired'));
   const guidedReviewUnsupported = room?.toolCapabilities?.questions === false;
   const messages = conversation(room?.events || [], toolName);
@@ -258,6 +262,15 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
     setBusy(true); setError('');
     try { await action(); if (room) await refresh(room.id); return true; } catch (e) { if (e instanceof RequestError && e.latest) setConflict(e.latest); setError(errorMessage(e, t)); return false; } finally { setBusy(--activeOperations.current > 0); }
   };
+  const recover = async () => {
+    if (!room || busy) return;
+    setRecoveryDone(false);
+    const ok = await run(async () => {
+      try { await api(`work/${room.id}/reconnect`, 'POST', {}); }
+      catch (error) { await refresh(room.id).catch(() => {}); throw error; }
+    });
+    if (ok) setRecoveryDone(true);
+  };
   const save = async (version = doc?.version) => {
     if (!room || !doc) return false;
     return run(async () => { const result = await api<Doc>(`work/${room.id}/document`, 'PUT', { path: doc.path, version, content: draft }); setConflict(null); setDoc(result); setDraft(result.content); setReviewRevision(value => value + 1); localStorage.removeItem(`work-draft:${room.id}:${doc.path}`); });
@@ -306,12 +319,13 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
       <AiActivity state={loadError ? undefined : room?.state} />
       <details><summary><span>{toolName}</span> · <span>{t('workRoom.sessionInfo')} {connection}</span></summary><small>{nativeResume ? room?.threadId ? `${toolName} ${room.threadId}` : t('workRoom.sessionHint') : t('aiTools.logicalSession')}</small><p>{nativeResume ? t('workRoom.approvalHint') : t('aiTools.limitations')}</p></details>
     </header>
-    {error && <div className="work-error" role="alert">{error}</div>}
-    {loadError && <div className="work-error" role="status">{loadError}</div>}
-    {room?.error && <div className="work-error">{room.error}</div>}
+    {error && !needsRecovery && <div className="work-error" role="alert">{error}</div>}
+    {loadError && !needsRecovery && <div className="work-error" role="status">{loadError}</div>}
+    {room?.error && !needsRecovery && <div className="work-error">{room.error}</div>}
     {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
     {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}
-    {nativeResume && room?.state === 'recovery-required' && room.threadId && <button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/reconnect`, 'POST', {}))}>{t('workRoom.reconnect')}</button>}
+    {needsRecovery && room && <WorkRecovery status={room.recovery || { required: true, canReconnect: !!room.threadId, code: room.errorCode || 'connection-failed' }} busy={busy} error={room.error || error || loadError} onRecover={() => void recover()} />}
+    {recoveryDone && !needsRecovery && <div className="work-notice" role="status">{t('recovery.done')}</div>}
     {room?.reviewRequired && <div className="work-notice">{t('workRoom.reviewAgain')}</div>}
     {pending && <div className="work-notice">{t('workRoom.unsaved')}
       <button onClick={() => void save().then(ok => { if (ok) { const target = pending; setPending(null); void navigate(target); } })}>{t('workRoom.saveMove')}</button>

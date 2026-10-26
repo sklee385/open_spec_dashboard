@@ -13,6 +13,7 @@ import { askUserTool, unresolvedQuestion } from './questions';
 import { reviewInstructions } from '../review/instructions';
 import { findRollout } from './rollout';
 import { FileResults } from '../work/file-results';
+import { WorkRecovery } from '../work/recovery';
 import { projectCoordinator } from '../projects/coordinator';
 import { EdgeService } from '../browser/edge.service';
 import { edgeBrowserTool, edgeToolResponse } from '../browser/edge-tools';
@@ -100,12 +101,15 @@ export class CodexService implements OnModuleDestroy {
     return ['implementation', 'verification'].includes(phase) ? new FileResults(this.store).path(work) : work.projectPath;
   }
   private async resume(work: Work) {
-    const params = { threadId: work.threadId, cwd: this.executionCwd(work), excludeTurns: true, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' };
+    // Legacy shared-folder work has no isolated workspace. Restoring its thread
+    // does not start a turn; implementation still requires a validated workspace.
+    const cwd = new WorkRecovery(this.store).path(work);
+    const params = { threadId: work.threadId, cwd, excludeTurns: true, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' };
     let result;
     try { result = await this.client.rpc('thread/resume', params); }
     catch (error: any) {
       if (!/no rollout found for thread id/.test(error.message)) throw error;
-      const path = await findRollout(work.threadId!, work.projectPath);
+      const path = await findRollout(work.threadId!, cwd) || (cwd !== work.projectPath ? await findRollout(work.threadId!, work.projectPath) : undefined);
       if (!path) throw error;
       result = await this.client.rpc('thread/resume', { ...params, path });
       if (result.thread.id !== work.threadId) throw new Error('대화 원본의 ID가 일치하지 않습니다. 기존 업무 연결을 보존했습니다.');
@@ -121,23 +125,35 @@ export class CodexService implements OnModuleDestroy {
     latest.state = 'recovery-required';
     latest.error = conflict ? '다른 Codex 앱에서 이 업무 대화를 사용 중입니다. 해당 앱에서 이 대화를 닫은 뒤 ‘같은 대화 다시 연결’을 눌러 주세요. 문서와 대화 기록은 유지됩니다.' : error.message;
     if (conflict) { latest.errorCode = 'thread-in-use'; if (latest.threadId) this.loaded.delete(latest.threadId); }
-    else delete latest.errorCode;
+    else latest.errorCode = 'connection-failed';
     this.store.save(latest); this.legacy.updates.next();
     return new ConflictException({ message: latest.error, errorCode: latest.errorCode });
   }
   async reconnect(id: string) {
     const work = this.store.get(id);
-    if (!work?.threadId) throw new ConflictException('복구할 기존 대화가 없습니다. 새 대화를 자동 생성하지 않습니다.');
+    if (!work) throw new NotFoundException('업무를 찾을 수 없습니다');
+    const recovery = new WorkRecovery(this.store).assertReconnect(work);
     projectCoordinator(this.store).assertWorkCanStart(work);
     if (this.locks.has(id) || !['recovery-required', 'idle', 'interrupted', 'failed'].includes(work.state)) throw new ConflictException('실행을 마친 뒤 다시 연결해 주세요.');
     this.locks.add(id); work.state = 'connecting'; this.store.save(work);
     try {
       await this.client.ready();
       await this.resume(work);
-      this.loaded.add(work.threadId);
-      const latest = this.store.get(id)!; latest.state = 'idle'; delete latest.error; delete latest.errorCode; this.store.save(latest);
-      this.store.event(id, 'thread-reconnected', { threadId: work.threadId }); this.legacy.updates.next(); return latest;
-    } catch (error: any) { throw this.connectionFailure(id, error); }
+      this.loaded.add(work.threadId!);
+      const latest = this.store.get(id)!; latest.state = 'idle'; delete latest.error; delete latest.errorCode;
+      this.store.transaction(() => {
+        // A reconnect must not dispatch instructions left over from a lost turn.
+        for (const queued of this.store.records(id, 'queued-message').filter(message => message.status === 'queued')) {
+          this.store.record(queued.id, id, 'queued-message', { ...queued, status: 'blocked', error: '업무 복구 후 문서와 실행 기록을 확인하고 필요한 내용만 다시 보내주세요.' });
+        }
+        this.store.save(latest);
+      });
+      this.store.event(id, 'thread-reconnected', { threadId: work.threadId, mode: recovery.mode, code: recovery.code }); this.legacy.updates.next(); return latest;
+    } catch (error: any) {
+      const failure = this.connectionFailure(id, error);
+      this.store.event(id, 'recovery-failed', { threadId: work.threadId, code: this.store.get(id)!.errorCode, mode: recovery.mode });
+      throw failure;
+    }
     finally { this.locks.delete(id); }
   }
   private notification(message: any) {

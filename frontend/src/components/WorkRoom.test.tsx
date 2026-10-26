@@ -193,8 +193,8 @@ it('복구 버튼은 메시지를 보내지 않고 기존 대화만 다시 연�
   });
   vi.stubGlobal('fetch', mock);
   render(<WorkRoom change={change} onClose={() => {}} />);
-  fireEvent.click(await screen.findByRole('button', { name: '같은 대화 다시 연결' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: '같은 대화 다시 연결' })).not.toBeInTheDocument());
+  fireEvent.click(await screen.findByRole('button', { name: '업무 복구' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '업무 복구' })).not.toBeInTheDocument());
   expect(mock.mock.calls.filter(([url]) => url.endsWith('/reconnect'))).toHaveLength(1);
   expect(mock.mock.calls.some(([url]) => url.endsWith('/message'))).toBe(false);
 });

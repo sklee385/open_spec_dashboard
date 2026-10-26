@@ -3,8 +3,10 @@ import { enCopy, koCopy } from './catalog';
 import { enProjectCopy, koProjectCopy } from './projectMessages';
 import { enSourceCopy, koSourceCopy } from './sourceMessages';
 import { enEdgeCopy, koEdgeCopy } from './edgeMessages';
+import { enRecoveryCopy, koRecoveryCopy } from './recoveryMessages';
 
 const en = {
+  ...enRecoveryCopy,
   ...enCopy,
   ...enProjectCopy,
   ...enSourceCopy,
@@ -54,6 +56,7 @@ type MessageArgs<K extends keyof typeof en> = (typeof en)[K] extends (args: infe
 export type MessageKey = keyof typeof en;
 type Dictionary = { [K in MessageKey]: (typeof en)[K] extends string ? string : (typeof en)[K] };
 const ko: Dictionary = {
+  ...koRecoveryCopy,
   ...koProjectCopy,
   ...koSourceCopy,
   ...koEdgeCopy,
