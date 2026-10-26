@@ -17,8 +17,7 @@ export function detectLocale(read = () => navigator): Locale {
   } catch { return 'en'; }
 }
 
-export function initializeLocale(): Locale {
-  const locale = detectLocale();
+export function initializeLocale(locale: Locale = 'ko'): Locale {
   document.documentElement.lang = locale;
   return locale;
 }

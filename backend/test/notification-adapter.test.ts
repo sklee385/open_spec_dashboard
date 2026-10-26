@@ -18,7 +18,7 @@ it('passes fixed executable and arguments, data only through stdin, no shell and
   const [file, args, options] = vi.mocked(spawn).mock.calls[0];
   expect(String(file)).toMatch(/System32[\\/]WindowsPowerShell[\\/]v1.0[\\/]powershell.exe$/);
   expect(args).toContain('show'); expect(JSON.stringify(args)).not.toContain('example'); expect(options).toMatchObject({ shell: false, windowsHide: true });
-  expect(JSON.parse(sent)).toEqual(input); expect(spawn).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(sent)).toEqual({ ...input, target: 'browser' }); expect(spawn).toHaveBeenCalledTimes(1);
 });
 it('reports timeout as uncertain, kills children on shutdown and never retries', async () => {
   vi.useFakeTimers(); const value = child(), adapter = new WindowsNotifications(); Object.defineProperty(adapter, 'supported', { value: true });

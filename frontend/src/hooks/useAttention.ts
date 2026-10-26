@@ -6,7 +6,7 @@ export interface AttentionItem {
   questionId: string; kind: 'input' | 'approval'; status: 'pending'; createdAt: string;
 }
 export const attentionKey = (item: AttentionItem) => JSON.stringify([item.workId, item.questionId]);
-export interface NativeNotificationStatus { enabled: boolean | null; effectiveEnabled: boolean; dashboardUrl: string | null; registrationStatus: string; lastError: string | null }
+export interface NativeNotificationStatus { enabled: boolean | null; effectiveEnabled: boolean; dashboardUrl: string | null; registrationStatus: string; lastError: string | null; activationTarget?: 'desktop' | 'browser' }
 function isItem(value: unknown): value is AttentionItem {
   if (!value || typeof value !== 'object') return false;
   const item = value as Record<string, unknown>;

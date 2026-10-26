@@ -3,6 +3,12 @@ import type { Change, ChangeDetail } from '../types';
 export interface AttentionTarget { workId: string; questionId: string; token: number }
 export interface WorkRoomNavigation { preserveDrafts(): boolean }
 export interface AttentionLink { workId: string; questionId: string; title?: string }
+export type DesktopAttentionRequest = AttentionLink | { invalid: true };
+declare global {
+  interface Window {
+    desktopAttention?: { onRequest(listener: (target: DesktopAttentionRequest) => void): () => void; ready(): Promise<unknown> };
+  }
+}
 export function parseAttentionLink(href: string): AttentionLink | null {
   const url = new URL(href), names = ['workId', 'questionId'];
   if (!names.some(key => url.searchParams.has(key))) return null;

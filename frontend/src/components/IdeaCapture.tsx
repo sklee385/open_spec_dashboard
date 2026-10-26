@@ -28,10 +28,11 @@ interface IdeaCaptureProps {
   onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
   idea?: Idea | null;
+  defaultSourceId?: string | null;
   onSuccess?: () => void;
 }
 
-export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea, onSuccess }: IdeaCaptureProps) {
+export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea, defaultSourceId = null, onSuccess }: IdeaCaptureProps) {
   const { t } = useI18n();
 
 
@@ -47,6 +48,7 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
   const isEditing = !!idea;
 
   useEffect(() => {
+    if (!open) return;
     if (idea) {
       setTitle(idea.title);
       setDescription(idea.description);
@@ -54,9 +56,9 @@ export function IdeaCapture({ open: controlledOpen, onOpenChange, trigger, idea,
     } else {
       setTitle('');
       setDescription('');
-      setSourceId(null);
+      setSourceId(defaultSourceId);
     }
-  }, [idea]);
+  }, [idea, open, defaultSourceId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

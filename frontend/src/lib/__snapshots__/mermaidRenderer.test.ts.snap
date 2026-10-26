@@ -1,0 +1,17 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`flowchart의 정제된 SVG 구조를 보존한다 1`] = `
+{
+  "height": 100,
+  "svg": "<svg viewBox="0 0 200 100" width="100%" height="100%" role="img" aria-label="Mermaid 다이어그램"><g class="node" transform="translate(20,20)"><rect width="80" height="40" fill="none" stroke="currentColor"/><text fill="currentColor">시작</text></g><path class="flowchart-link" d="M100 40L180 40" fill="none" stroke="currentColor"/></svg>",
+  "width": 200,
+}
+`;
+
+exports[`sequenceDiagram의 정제된 SVG 구조를 보존한다 1`] = `
+{
+  "height": 100,
+  "svg": "<svg viewBox="0 0 200 100" width="100%" height="100%" role="img" aria-label="Mermaid 다이어그램"><rect class="actor" width="60" height="30" fill="#eaeaea" stroke="currentColor"/><text fill="currentColor">사용자</text><line class="messageLine1" x1="20" y1="40" x2="180" y2="40" stroke="currentColor" stroke-width="2" fill="none" stroke-dasharray="4 3"/></svg>",
+  "width": 200,
+}
+`;

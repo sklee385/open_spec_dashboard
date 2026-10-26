@@ -11,6 +11,30 @@ const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo', status: 
 const item = { id: 'item', path: 'design.md', startLine: 3, endLine: 3, text: '범위 확인', kind: 'confirm', version: 'v1' };
 const work = { id: 'w', phase: 'reviewed', state: 'idle', reviewedVersion: 'reviewed', documents: ['proposal.md', 'design.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+it('전체 변경 SSE가 없어도 검토 대화의 문서 반영 후 해결된 항목을 목록에서 제거한다', async () => {
+  let resolved = false;
+  class Stream {
+    static work: Stream;
+    callbacks: Record<string, (event: { data: string }) => void> = {};
+    constructor(url: string) { if (url.includes('/api/work/')) Stream.work = this; }
+    addEventListener(name: string, callback: (event: { data: string }) => void) { this.callbacks[name] = callback; }
+    close() {}
+  }
+  vi.stubGlobal('EventSource', Stream);
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => {
+    if (url.endsWith('/review-items')) return { items: resolved ? [] : [item], documentVersions: {}, errors: [] };
+    if (url.includes('/document')) return { path: 'proposal.md', content: '문서', version: 'v1' };
+    return { ...work, events: resolved ? [{ seq: 1, type: 'turn/completed', data: {} }] : [] };
+  } })));
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByRole('textbox', { name: '문서 내용' });
+  fireEvent.click(screen.getByRole('button', { name: '사용자 검토' }));
+  expect(await screen.findByRole('button', { name: /범위 확인/ })).toBeVisible();
+  resolved = true;
+  act(() => Stream.work.callbacks['work-update']({ data: JSON.stringify({ seq: 1 }) }));
+  expect(await screen.findByText('검토 항목이 없습니다.')).toBeVisible();
+  expect(screen.queryByRole('button', { name: /범위 확인/ })).not.toBeInTheDocument();
+});
 it('업무 공간에서 변경 상세의 문서·검토 탭을 열 수 있다', async () => {
   setup(); render(<WorkRoom change={change} onClose={() => {}} />);
   await screen.findByRole('textbox', { name: '문서 내용' });

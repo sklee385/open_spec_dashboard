@@ -1,5 +1,7 @@
 import type { Translator } from '@/i18n/messages';
 import { useI18n } from '@/i18n/context';
+import { AiActivity } from './AiActivity';
+import { DeleteBoardItem } from './BoardTrash';
 import type { Change, Artifact } from '../types';
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -66,14 +68,16 @@ export function ChangeCard({ change, onClick }: ChangeCardProps) {
       onClick={onClick}
     >
       <CardContent className="p-4">
-        {/* Header: Title + Source */}
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <h3 className="font-semibold text-sm flex-1 line-clamp-2 leading-snug">
+        {['draft','todo','in_progress'].includes(change.status) && <div className="flex justify-end mb-1"><DeleteBoardItem id={change.id} kind="change" state={change.workState} /></div>}
+        {change.workState && !['idle', 'interrupted'].includes(change.workState) && <div className="mb-3"><AiActivity state={change.workState} /></div>}
+        {/* Keep the project badge on its own row so narrow cards retain the full title. */}
+        <div className="flex flex-col items-start gap-2 mb-3 min-w-0">
+          <h3 className="font-semibold text-sm w-full min-w-0 whitespace-normal break-words [overflow-wrap:anywhere] leading-snug">
             {change.title || change.name}
           </h3>
           <Badge 
             variant="secondary" 
-            className="text-[10px] font-medium px-2 py-0.5 shrink-0 bg-muted/80"
+            className="text-[10px] font-medium px-2 py-0.5 max-w-full whitespace-normal break-all bg-muted/80"
           >
             {change.sourceId}
           </Badge>

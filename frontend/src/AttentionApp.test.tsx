@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { render } from './test/render';
 import App from './App';
 vi.mock('./hooks/useApi', () => ({ useSSE: () => {}, useSources: () => ({ sources: [{ id: 'demo', name: 'demo' }], refetch: vi.fn() }), useChanges: () => ({ changes: [], refetch: vi.fn() }), useSpecs: () => ({ refetch: vi.fn() }), useIdeas: () => ({ ideas: [], refetch: vi.fn() }) }));
+vi.mock('./hooks/useAiActivity', () => ({ useAiActivity: () => ({ state: 'idle', count: 0, byChange: new Map() }) }));
 vi.mock('./lib/attentionStore', () => ({ claimAttention: async () => true }));
 vi.mock('./components/Header', async () => { const { AttentionBell } = await import('./components/AttentionCenter'); return { Header: () => <AttentionBell /> }; });
 vi.mock('./components/KanbanBoard', () => ({ KanbanBoard: () => <p>보드</p> }));
@@ -11,11 +12,41 @@ vi.mock('./components/IdeaCapture', () => ({ IdeaCapture: () => null }));
 const item = { workId: 'w', sourceId: 'demo', changeName: 'feature', title: '알림 업무', questionId: 'q', kind: 'input', status: 'pending', createdAt: '2026-10-25T01:00:00Z' };
 const work = { id: 'w', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'waiting-input', threadId: 't', reviewedVersion: null, documents: [], events: [], questions: [{ id: 'q', kind: 'input', status: 'pending', params: { questions: [{ id: 'choice', question: '대상 질문' }] } }], verifications: [], verificationCommands: [], changes: [] };
 const change = { id: 'demo/feature', sourceId: 'demo', name: 'feature', title: '알림 업무', status: 'draft', proposal: null, design: null, specs: [], tasks: null, schema: 'spec-driven', artifacts: [] };
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, '', '/'); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, '', '/'); delete window.desktopAttention; });
 function mockFetch(currentWork = work) {
   const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.endsWith('/attention') ? { items: [item] } : url === '/api/notifications/settings' ? { enabled: true, effectiveEnabled: true, dashboardUrl: 'http://localhost/', registrationStatus: 'registered', lastError: null } : url.endsWith('/trash') ? { entries: [] } : url.endsWith('/review-items') ? { items: [], errors: [], documentVersions: {} } : url.includes('/changes/') ? change : currentWork }));
   vi.stubGlobal('fetch', mock); return mock;
 }
+it('desktop running-app clicks use the current window and preserve drafts without POST or reload', async () => {
+  let receive!: (target: { workId: string; questionId: string } | { invalid: true }) => void;
+  const ready = vi.fn().mockResolvedValue(true), unsubscribe = vi.fn();
+  window.desktopAttention = { onRequest: listener => { receive = listener; return unsubscribe; }, ready };
+  const mock = mockFetch(); const view = render(<App />); await waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+  await act(async () => { receive({ workId: 'w', questionId: 'q' }); });
+  await waitFor(() => expect(screen.getByRole('textbox', { name: '대상 질문' }).closest('.work-question')).toHaveFocus());
+  fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: '프로그램 초안' } });
+  await act(async () => { receive({ workId: 'w', questionId: 'q' }); receive({ workId: 'w', questionId: 'q' }); });
+  expect(screen.getByRole('textbox', { name: 'AI와 문답' })).toHaveValue('프로그램 초안');
+  expect(mock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+  await act(async () => { receive({ invalid: true }); }); expect(screen.getAllByText(/요청을 열지 못했습니다/).length).toBeGreaterThan(0);
+  view.unmount(); expect(unsubscribe).toHaveBeenCalledTimes(1);
+});
+it('desktop readiness follows initial deep link resolution and never restores a different recent work', async () => {
+  window.history.replaceState(null, '', '/?workId=w&questionId=q'); localStorage.setItem('openspec-active-change', JSON.stringify({ ...change, id: 'old/work' }));
+  const ready = vi.fn().mockResolvedValue(true); window.desktopAttention = { onRequest: () => () => {}, ready };
+  const mock = mockFetch(); render(<App />);
+  await waitFor(() => expect(ready).toHaveBeenCalledTimes(1)); expect(window.location.search).toBe('');
+  expect(mock.mock.calls.some(([url]) => url.includes('old'))).toBe(false); expect(mock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+});
+it('desktop navigation keeps the current work and drafts when persistence fails', async () => {
+  let receive!: (target: { workId: string; questionId: string } | { invalid: true }) => void;
+  window.desktopAttention = { onRequest: listener => { receive = listener; return () => {}; }, ready: vi.fn().mockResolvedValue(true) };
+  mockFetch(); render(<App />); await act(async () => { receive({ workId: 'w', questionId: 'q' }); });
+  const message = await screen.findByRole('textbox', { name: 'AI와 문답' }); fireEvent.change(message, { target: { value: '유지할 초안' } });
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+  await act(async () => { receive({ workId: 'w', questionId: 'q' }); });
+  expect(message).toHaveValue('유지할 초안'); expect(screen.getAllByText(/요청을 열지 못했습니다/).length).toBeGreaterThan(0);
+});
 it('initial notification link precedes recent work restoration and only performs reads', async () => {
   localStorage.setItem('openspec-active-change', JSON.stringify({ ...change, id: 'other/old', sourceId: 'other', name: 'old' }));
   window.history.replaceState(null, '', '/?keep=yes&workId=w&questionId=q#fragment');

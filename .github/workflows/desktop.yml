@@ -1,0 +1,82 @@
+name: Desktop packages
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DESKTOP_RELEASE: ${{ github.event_name == 'push' && '1' || '0' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          architecture: x64
+          cache: npm
+      - name: Validate personal release prerequisites
+        if: github.event_name == 'push'
+        run: node -e "require('./desktop/release.cjs').validateRelease({platform:process.platform,arch:process.arch,version:require('./package.json').version,tag:process.env.GITHUB_REF_NAME,env:process.env})"
+      - name: Prepare project Node runtime
+        shell: pwsh
+        run: ./scripts/setup-runtime.ps1 -NodeDirectory (Split-Path (Get-Command node).Source)
+      - run: ./scripts/npm.ps1 ci
+      - name: Install Electron binary
+        run: ./scripts/node.ps1 node_modules/electron/install.js
+      - name: Prepare verification browser and process guard
+        run: ./scripts/setup-browser.ps1
+      - run: ./scripts/npm.ps1 run desktop:test
+      - run: ./scripts/npm.ps1 test
+      - run: ./scripts/npm.ps1 run build
+      - name: Stage application
+        shell: pwsh
+        run: |
+          if ($env:DESKTOP_RELEASE -eq '1') {
+            ./scripts/node.ps1 scripts/desktop-stage.cjs --release
+          } else {
+            ./scripts/node.ps1 scripts/desktop-stage.cjs --personal-update
+          }
+      - run: ./scripts/npm.ps1 run desktop:dist
+      - name: Build portable ZIP and metadata
+        run: ./scripts/node.ps1 scripts/desktop-portable-build.cjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-win32-x64
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .tools/desktop-dist/*.exe
+            .tools/desktop-dist/*.blockmap
+            .tools/desktop-dist/*-portable.zip
+            .tools/desktop-dist/portable.json
+            .tools/desktop-dist/latest.yml
+  release:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: desktop-release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-win32-x64
+          path: release-files
+      - name: Validate complete release
+        run: node desktop/artifacts.cjs release-files "${GITHUB_REF_NAME#v}"
+      - name: Publish verified draft without overwriting
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node desktop/publish.cjs release-files

@@ -2,28 +2,28 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { render } from '../test/render';
 import { WorkRoom } from '../components/WorkRoom';
-import { SettingsModal } from '../components/SettingsModal';
+import { SourceManagementModal } from '../components/SourceManagementModal';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { createTranslator } from './messages';
 import { ProductError, errorMessage } from './errors';
 import type { Change } from '../types';
 
 const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo' } as Change;
-const base = { id: 'w', phase: 'implementation', state: 'idle', reviewedVersion: 'v1', documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
+const base = { id: 'w', phase: 'implementation', state: 'idle', reviewedVersion: 'v1', documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [], changeReport: { source: 'current', isolated: true } };
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
 
-it.each(['ko', 'en'] as const)('%s 설정 저장 값과 실패 시 복구를 유지한다', async locale => {
+it.each(['ko', 'en'] as const)('%s 소스 저장 값과 실패 시 복구를 유지한다', async locale => {
   const t = createTranslator(locale);
   const original = { name: '원문 source', path: '/original/openspec' };
   const fetch = vi.fn(async (_url: string, init?: RequestInit) => ({ ok: !init, status: 500, text: async () => JSON.stringify(init ? { error: '원문 server error' } : { sources: [original] }) }));
   vi.stubGlobal('fetch', fetch);
-  render(<SettingsModal open onOpenChange={() => {}} />, { locale });
+  render(<SourceManagementModal open onOpenChange={() => {}} />, { locale });
   await screen.findByText('원문 source');
-  const name = screen.getByLabelText(t('settings.name'));
+  const name = screen.getByLabelText(t('sources.name'));
   await waitFor(() => expect(name).not.toBeDisabled());
   fireEvent.change(name, { target: { value: '새 original' } });
-  fireEvent.change(screen.getByLabelText(t('settings.path')), { target: { value: '/new/원문' } });
-  fireEvent.click(screen.getByRole('button', { name: t('settings.add') }));
+  fireEvent.change(screen.getByLabelText(t('sources.path')), { target: { value: '/new/원문' } });
+  fireEvent.click(screen.getByRole('button', { name: t('sources.add') }));
   await waitFor(() => expect(fetch.mock.calls.some(([, init]) => init?.method === 'PUT')).toBe(true));
   const body = JSON.parse(fetch.mock.calls.find(([, init]) => init?.method === 'PUT')![1]!.body as string);
   expect(body).toEqual({ sources: [original, { name: '새 original', path: '/new/원문' }] });
@@ -57,8 +57,9 @@ it.each(['ko', 'en'] as const)('%s 검증 상태만 번역하고 실행·파일 
   expect(screen.getByText(`원문 test · ${t('workRoom.passed')} · ${t('workRoom.currentVersion')}`)).toBeInTheDocument();
   expect(screen.getByText(`${t('workRoom.modified')} · 원문/file.ts`)).toBeInTheDocument();
   expect(screen.getByText(/원문 stdout/)).toHaveTextContent('原文 stderr');
-  expect(screen.getByText('원문 before')).toBeInTheDocument();
-  expect(screen.getByText('原文 after')).toBeInTheDocument();
+  fireEvent.click(screen.getByText(`${t('workRoom.modified')} · 원문/file.ts`));
+  expect(await screen.findByText('원문 before')).toBeInTheDocument();
+  expect(await screen.findByText('原文 after')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: t('tests.full') }));
   await waitFor(() => expect(fetch.mock.calls.some(([url]) => url.endsWith('/verify-all'))).toBe(true));
   expect(JSON.parse(fetch.mock.calls.find(([url]) => url.endsWith('/verify-all'))![1]!.body as string)).toEqual({ scope: 'full' });
@@ -85,7 +86,7 @@ it.each(['ko', 'en'] as const)('%s 제품 기본 오류는 번역하고 서버 �
   expect(errorMessage(new Error('workRoom.noResponse'), t)).toBe('workRoom.noResponse');
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, json: async () => ({}) })));
   render(<WorkRoom change={change} onClose={() => {}} />, { locale });
-  expect(await screen.findByRole('status')).toHaveTextContent(t('workRoom.requestError'));
+  expect(await screen.findByText(t('workRoom.requestError'))).toHaveAttribute('role', 'status');
 });
 
 it('사용자 정의 오류 fallback에 기존 props를 전달한다', () => {

@@ -1,12 +1,23 @@
 import { render } from '../test/render';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { WorkRoom } from './WorkRoom';
 import type { Change } from '../types';
 const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo' } as Change;
 const work = { id: 'work-1', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null,
   documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
-afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
+it('문서 목록에서 verification.md를 선택해 검증 기록 원문과 미리보기를 연다', async () => {
+  const mock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document')
+    ? { path: new URL(url, 'http://localhost').searchParams.get('path'), content: url.includes('verification.md') ? '# 검증 결과\n488개 통과' : '# 계획', version: 'v1' }
+    : { ...work, documents: ['proposal.md', 'verification.md'] } }));
+  vi.stubGlobal('fetch', mock); render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByRole('option', { name: 'verification.md' });
+  fireEvent.change(screen.getByRole('combobox', { name: '문서 선택' }), { target: { value: 'verification.md' } });
+  await waitFor(() => expect(screen.getByRole('textbox', { name: '문서 내용' })).toHaveValue('# 검증 결과\n488개 통과'));
+  fireEvent.click(screen.getByRole('button', { name: '미리보기' }));
+  expect(await screen.findByRole('heading', { name: '검증 결과' })).toBeVisible();
+});
 it('저장된 외부 도구 이름과 기능 제한을 표시하고 고유 재개와 승인 동작을 제공하지 않는다', async () => {
   const room = { ...work, toolId: 'local', toolConfigSnapshot: { name: '저장된 로컬 CLI', kind: 'external-cli' }, toolCapabilities: { conversation: true, questions: false, approval: false, interrupt: true, nativeResume: false }, state: 'recovery-required', threadId: 'old', errorCode: 'session-restarted',
     events: [{ seq: 1, type: 'item/agentMessage/delta', data: { turnId: 't', itemId: 'i', delta: '외부 응답' } }],
@@ -20,7 +31,106 @@ it('저장된 외부 도구 이름과 기능 제한을 표시하고 고유 재�
   expect(screen.queryByRole('button', { name: '이 요청 승인' })).not.toBeInTheDocument();
   expect(fetch.mock.calls.some(([url]) => url.endsWith('/reconnect') || url.includes('/ai-tools'))).toBe(false);
 });
+it('계획 버튼 옆 사용자 검토 진행으로 같은 업무의 검토를 요청한다', async () => {
+  const mock = vi.fn(async (url: string, _options?: RequestInit) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : work }));
+  vi.stubGlobal('fetch', mock); render(<WorkRoom change={change} onClose={() => {}} />);
+  const button = await screen.findByRole('button', { name: '사용자 검토 진행' });
+  await waitFor(() => expect(button).toBeEnabled());
+  expect(screen.getByRole('button', { name: 'AI와 계획 작성·수정' }).nextElementSibling).toBe(button);
+  fireEvent.click(button);
+  await waitFor(() => expect(mock.mock.calls.some(([url, options]) => url === '/api/work/work-1/action' && JSON.parse(String(options?.body)).action === 'guided-review')).toBe(true));
+  expect(mock.mock.calls.some(([url]) => url.endsWith('/message') || url.endsWith('/answer'))).toBe(false);
+});
+it('미저장 초안이 있으면 저장 안내 후 검토 요청을 보내지 않는다', async () => {
+  const mock = vi.fn(async (url: string, _options?: RequestInit) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : work }));
+  vi.stubGlobal('fetch', mock); render(<WorkRoom change={change} onClose={() => {}} />);
+  fireEvent.change(await screen.findByRole('textbox', { name: '문서 내용' }), { target: { value: '저장하지 않은 내용' } });
+  fireEvent.click(screen.getByRole('button', { name: '사용자 검토 진행' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('저장');
+  expect(mock.mock.calls.some(([url]) => url.endsWith('/action'))).toBe(false);
+  expect(screen.getByRole('textbox', { name: '문서 내용' })).toHaveValue('저장하지 않은 내용');
+});
+it.each(['running', 'waiting-input', 'waiting-approval', 'recovery-required'])('%s 중 사용자 검토를 중복 시작하지 않는다', async state => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, state } })));
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByRole('textbox', { name: '문서 내용' });
+  expect(screen.getByRole('button', { name: '사용자 검토 진행' })).toBeDisabled();
+});
+it('외부 도구의 사용자 검토 버튼은 비활성화 이유를 표시한다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, toolCapabilities: { questions: false } } })));
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  await screen.findByRole('textbox', { name: '문서 내용' });
+  expect(screen.getByRole('button', { name: '사용자 검토 진행' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '사용자 검토 진행' })).toHaveAttribute('title', expect.stringContaining('구조화 질문'));
+});
 
+it('업무를 열고 새 대화가 추가되면 최신 메시지로 이동한다', async () => {
+  let events = [{ seq: 1, type: 'user-message', data: { text: '처음 대화' } }];
+  class Stream { static current: Stream; callbacks: Record<string, (event: { data: string }) => void> = {}; close() {} addEventListener(name: string, callback: (event: { data: string }) => void) { this.callbacks[name] = callback; } constructor() { Stream.current = this; } }
+  vi.stubGlobal('EventSource', Stream);
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, events } })));
+  const height = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(900);
+  try {
+    const view = render(<WorkRoom change={change} onClose={() => {}} />);
+    await screen.findByText('처음 대화');
+    const messages = view.container.querySelector('.work-messages')!;
+    await waitFor(() => expect(messages.scrollTop).toBe(900));
+    messages.scrollTop = 0;
+    events = [...events, { seq: 2, type: 'user-message', data: { text: '최신 대화' } }];
+    act(() => Stream.current.callbacks['work-update']({ data: JSON.stringify({ seq: 2 }) }));
+    await screen.findByText('최신 대화');
+    await waitFor(() => expect(messages.scrollTop).toBe(900));
+  } finally { height.mockRestore(); }
+});
+
+it('권한 요청을 이유·명령·경로로 설명하고 기존 승인 요청을 보낸다', async () => {
+  const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, questions: [{ id: 'approval-1', kind: 'approval', status: 'pending', method: 'item/commandExecution/requestApproval', params: { reason: '테스트 실행을 위해 필요합니다', command: 'npm test', cwd: 'D:/project' } }] } }));
+  vi.stubGlobal('fetch', mock);
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  expect(await screen.findByText('테스트 실행을 위해 필요합니다')).toBeVisible();
+  expect(screen.getByText('요청 이유')).toBeVisible();
+  expect(screen.getByText('작업 경로')).toBeVisible();
+  expect(screen.getByText('D:/project')).toBeVisible();
+  expect(screen.getByText('원본 요청').closest('details')).not.toHaveAttribute('open');
+  fireEvent.click(screen.getByRole('button', { name: '이 요청 승인' }));
+  await waitFor(() => expect(mock.mock.calls.some(([url, init]) => url.endsWith('/approval') && JSON.parse(init!.body as string).decision === 'accept')).toBe(true));
+});
+
+it('사용자와 AI 대화의 표·제목·목록을 마크다운으로 표시한다', async () => {
+  const table = '| 항목 | 이전 설계 | 변경 설계 |\n|---|---|---|\n| 수신 범위 | 탭이 열려 있어야 함 | 세션 서버 실행 중 |';
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, events: [
+    { seq: 1, type: 'user-message', data: { text: table } },
+    { seq: 2, type: 'item/completed', data: { turnId: 'turn', item: { id: 'msg', type: 'agentMessage', text: `## 변경 안내\n\n${table}\n\n- [x] **알림** 적용\n  - 하위 항목\n\n~~이전 방식~~\n\n[설명](https://example.com)` } } },
+  ] } })));
+  const view = render(<WorkRoom change={change} onClose={() => {}} />);
+  expect(await screen.findByRole('heading', { name: '변경 안내' })).toBeVisible();
+  expect(screen.getAllByRole('table')).toHaveLength(2);
+  expect(screen.getAllByRole('columnheader', { name: '변경 설계' })).toHaveLength(2);
+  expect(screen.getAllByRole('cell', { name: '세션 서버 실행 중' })).toHaveLength(2);
+  expect(screen.getByRole('checkbox')).toBeChecked();
+  expect(screen.getByText('하위 항목').closest('ul')?.parentElement?.tagName).toBe('LI');
+  expect(screen.getByText('이전 방식').tagName).toBe('DEL');
+  expect(screen.getByRole('link', { name: '설명' })).toHaveAttribute('href', 'https://example.com');
+  for (const tableElement of view.container.querySelectorAll('.work-message table')) {
+    expect(tableElement.parentElement).toHaveClass('markdown-scroll');
+  }
+});
+
+it('대화의 코드와 JSON을 구분해 표시하고 복사한다', async () => {
+  const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
+  const previous = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard });
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, events: [{ seq: 1, type: 'item/completed', data: { turnId: 'turn', item: { id: 'msg', type: 'agentMessage', text: '```json\n{"ready":true}\n```\n\n```typescript\nconst count = 1;\n```' } } }] } })));
+  try {
+    const view = render(<WorkRoom change={change} onClose={() => {}} />);
+    await screen.findByText('typescript');
+    const code = view.container.querySelector('code.language-json')!;
+    expect(code.textContent).toBe('{\n  "ready": true\n}');
+    expect(code.querySelector('.syntax-key')).not.toBeNull();
+    fireEvent.click(screen.getAllByRole('button', { name: '코드 복사' })[0]);
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith('{\n  "ready": true\n}'));
+  } finally { if (previous) Object.defineProperty(navigator, 'clipboard', previous); else Reflect.deleteProperty(navigator, 'clipboard'); }
+});
 it('새로 열어도 선택 문서와 초안·화면 탭을 같은 업무로 복원한다', async () => {
   const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document')
     ? { path: new URL(url, 'http://localhost').searchParams.get('path'), content: '서버 문서', version: 'v1' }
@@ -94,8 +204,8 @@ it('복구 버튼은 메시지를 보내지 않고 기존 대화만 다시 연�
   });
   vi.stubGlobal('fetch', mock);
   render(<WorkRoom change={change} onClose={() => {}} />);
-  fireEvent.click(await screen.findByRole('button', { name: '같은 대화 다시 연결' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: '같은 대화 다시 연결' })).not.toBeInTheDocument());
+  fireEvent.click(await screen.findByRole('button', { name: '업무 복구' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '업무 복구' })).not.toBeInTheDocument());
   expect(mock.mock.calls.filter(([url]) => url.endsWith('/reconnect'))).toHaveLength(1);
   expect(mock.mock.calls.some(([url]) => url.endsWith('/message'))).toBe(false);
 });

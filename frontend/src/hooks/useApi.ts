@@ -208,8 +208,10 @@ export async function createIdea(title: string, description: string, sourceId?: 
 }
 
 export async function deleteIdea(id: string): Promise<void> {
-  await fetchJson<void>(`${API_BASE}/ideas/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
+  await fetchJson<void>(`${API_BASE}/trash`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, kind: 'idea' }),
   });
 }
 

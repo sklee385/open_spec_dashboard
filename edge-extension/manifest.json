@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "OpenSpecBoard Edge 연결",
+  "version": "0.1.0",
+  "description": "사용자가 선택한 탭을 OpenSpecBoard 업무에 연결합니다.",
+  "permissions": ["activeTab", "scripting", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" },
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }
+}

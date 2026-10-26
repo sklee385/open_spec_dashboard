@@ -9,7 +9,7 @@ export function matchReviewItem(item: ReviewItem, data: ReviewResponse): ReviewI
   const matches = data.items.filter(candidate => candidate.path === item.path && candidate.kind === item.kind && candidate.text === item.text);
   return matches.length === 1 ? matches[0] : undefined;
 }
-export function useReviewItems(endpoint: string | null, revision = 0) {
+export function useReviewItems(endpoint: string | null, revision: number | string = 0) {
   const [data, setData] = useState<ReviewResponse | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState(false);
   const sequence = useRef(0);
   const refresh = useCallback(async () => {

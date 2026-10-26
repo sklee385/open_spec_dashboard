@@ -39,6 +39,32 @@ describe('업무·문서 영속성과 실행 조건', () => {
     expect(await readFile(join(root, 'openspec', 'changes', 'feature', 'proposal.md'), 'utf8')).toBe('# 수정\n');
     expect((await request(`work/${work.id}/document`, 'PUT', { path: 'proposal.md', version: doc.data.version, content: '충돌' })).status).toBe(409);
   });
+  it('선택 검증 기록을 문서 목록에서 읽고 저장해도 계획 검토 버전은 바꾸지 않는다', async () => {
+    if (!work) work = (await request('work', 'POST', { sourceId: 'demo', changeName: 'feature', requestKey: 'create-feature' })).data;
+    const verification = join(root, 'openspec', 'changes', 'feature', 'verification.md');
+    const store = app.get(WorkStore), originalWork = { ...store.get(work.id)! };
+    try {
+    expect((await request(`work/${work.id}`)).data.documents).not.toContain('verification.md');
+    expect((await request(`work/${work.id}/document?path=verification.md`)).status).toBe(404);
+    const service = app.get(WorkService), version = service.planVersion(app.get(WorkStore).get(work.id)!);
+    await writeFile(verification, '# 검증 결과\n');
+    expect((await request(`work/${work.id}`)).data.documents).toContain('verification.md');
+    const doc = await request(`work/${work.id}/document?path=verification.md`);
+    expect(doc.status).toBe(200); expect(doc.data.content).toBe('# 검증 결과\n');
+    expect(service.planVersion(app.get(WorkStore).get(work.id)!)).toBe(version);
+    expect((await request(`work/${work.id}/action`, 'POST', { action: 'review' })).status).toBe(200);
+    const reviewed = (await request(`work/${work.id}`)).data.reviewedVersion;
+    expect((await request(`work/${work.id}/document`, 'PUT', { ...doc.data, content: '# 검증 통과\n' })).status).toBe(200);
+    const current = (await request(`work/${work.id}`)).data;
+    expect(current.reviewedVersion).toBe(reviewed); expect(current.reviewRequired).toBe(false);
+    expect((await request(`work/${work.id}/document`, 'PUT', { ...doc.data, content: 'stale' })).status).toBe(409);
+    await unlink(verification);
+    expect((await request(`work/${work.id}`)).data.documents).not.toContain('verification.md');
+    } finally {
+      await unlink(verification).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      store.save(originalWork);
+    }
+  });
   it('문서 경계 이탈을 거부한다', async () => {
     expect((await request(`work/${work.id}/document?path=${encodeURIComponent('../../config.yaml')}`)).status).toBe(400);
     expect((await request(`work/${work.id}/document`, 'PUT', { path: '../x', version: 'x', content: 'x' })).status).toBe(400);
@@ -118,6 +144,8 @@ describe('업무·문서 영속성과 실행 조건', () => {
     await request(`work/${work.id}/action`, 'POST', { action: 'review' });
     expect((await request(`work/${work.id}/action`, 'POST', { action: 'implement' })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+    const originalRoot = root;
+    root = app.get(WorkStore).get(work.id)!.executionPath!;
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'tasks.md'), '- [x] 구현\n');
     expect((await request(`work/${work.id}/verification-plan`, 'PUT', { commands: [{ id: 'test', command: process.execPath, args: ['-e', 'process.exit(1)'] }] })).status).toBe(200);
     await request(`work/${work.id}/verify`, 'POST', { commandId: 'test' });
@@ -141,7 +169,9 @@ describe('업무·문서 영속성과 실행 조건', () => {
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'tasks.md'), '- [ ] 구현\n');
     expect((await request(`work/${work.id}/action`, 'POST', { action: 'complete', confirmed: true })).status).toBe(409);
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'tasks.md'), '- [x] 구현\n');
+    expect((await request(`work/${work.id}/action`, 'POST', { action: 'apply-changes', confirmed: true })).status).toBe(200);
     expect((await request(`work/${work.id}/action`, 'POST', { action: 'complete', confirmed: true })).data.phase).toBe('completed');
+    root = originalRoot;
   });
   it('완료된 문서는 다시 열기 전 수정할 수 없고 실행 중 강제 재개가 불가능하다', async () => {
     const doc = (await request(`work/${work.id}/document?path=design.md`)).data;

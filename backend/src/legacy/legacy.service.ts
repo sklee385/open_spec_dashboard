@@ -19,7 +19,7 @@ export class LegacyService implements OnModuleDestroy, OnModuleInit {
     if (!existsSync(this.configPath)) {
       mkdirSync(dirname(this.configPath), { recursive: true });
       const root = resolve(__dirname, '../../..');
-      atomicWrite(this.configPath, JSON.stringify({ port: 13002, sources: [{ name: 'open_spec_dashboard', path: join(root, 'openspec') }] }, null, 2));
+      atomicWrite(this.configPath, JSON.stringify({ port: 13002, sources: process.env.DESKTOP_TOKEN ? [] : [{ name: 'open_spec_dashboard', path: join(root, 'openspec') }] }, null, 2));
     }
     this.readiness = this.restartWatcher();
   }
@@ -51,7 +51,9 @@ export class LegacyService implements OnModuleDestroy, OnModuleInit {
   }
   private async restartWatcher() {
     await this.watcher?.close();
-    this.watcher = watch(this.sources().filter(s => s.valid).map(s => s.path), { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 }, ignored: /(^|[/\\])\.[^/\\]+\.tmp$/ });
+    const paths = this.sources().filter(s => s.valid).map(s => s.path);
+    if (!paths.length) { this.watcher = undefined; return; }
+    this.watcher = watch(paths, { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 }, ignored: /(^|[/\\])\.[^/\\]+\.tmp$/ });
     this.watcher.on('all', () => this.updates.next());
     this.watcher.on('error', error => console.error('OpenSpec file watcher:', error));
     await new Promise<void>((resolveReady, reject) => { this.watcher!.once('ready', () => resolveReady()); this.watcher!.once('error', reject); });

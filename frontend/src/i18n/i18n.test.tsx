@@ -20,12 +20,14 @@ it.each([
 it('브라우저 접근 실패는 영어로 표시한다', () => {
   expect(detectLocale(() => { throw new Error('unavailable'); })).toBe('en');
 });
-it('초기화마다 언어와 문서 lang을 새로 설정한다', () => {
+it('브라우저 언어와 관계없이 한국어로 시작하고 명시한 언어는 적용한다', () => {
   vi.stubGlobal('navigator', { languages: ['ko-KR'] });
   expect(initializeLocale()).toBe('ko');
   expect(document.documentElement.lang).toBe('ko');
   vi.stubGlobal('navigator', { languages: ['en-US'] });
-  expect(initializeLocale()).toBe('en');
+  expect(initializeLocale()).toBe('ko');
+  expect(document.documentElement.lang).toBe('ko');
+  expect(initializeLocale('en')).toBe('en');
   expect(document.documentElement.lang).toBe('en');
 });
 it('사전 키는 완전하며 누락된 한국어는 영어로 대체한다', () => {

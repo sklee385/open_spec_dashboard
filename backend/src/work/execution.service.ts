@@ -1,15 +1,27 @@
 import { BadRequestException, ConflictException, Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
-import { ChildProcess, spawn, spawnSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { ChildProcess, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { LegacyService } from '../legacy/legacy.service';
 import { Work, WorkStore } from './store';
+import { runtimeCommand, runtimeEnvironment } from '../runtime';
+import { collectFiles, FileResults, Snapshot, snapshotRevision } from './file-results';
+import { projectCoordinator } from '../projects/coordinator';
 import { relatedTestCommands, type TestScope } from './test-commands';
 
 export interface VerificationCommand { id: string; command: string; args: string[]; }
 @Injectable()
 export class ExecutionService implements OnModuleDestroy {
+  private get files() { return new FileResults(this.store); }
+  prepare(work: Work, transition = false) { return this.files.prepare(work, transition); }
+  executionPath(work: Work) { return this.files.path(work); }
+  changeReport(work: Work) { return this.files.report(work); }
+  apply(work: Work) {
+    const release = projectCoordinator(this.store).acquire(work.projectPath);
+    try { return this.files.apply(work); } finally { release(); }
+  }
+  freeze(work: Work, files?: Snapshot) { work.completedCommands = this.commands(work); return this.files.freeze(work, files); }
   private children = new Map<string, ChildProcess>();
   private batches = new Map<string, { scope: TestScope; remaining: string[] }>();
   private closing = false;
@@ -17,38 +29,15 @@ export class ExecutionService implements OnModuleDestroy {
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService) {
     for (const work of store.list()) for (const record of store.records(work.id, 'verification').filter(x => x.status === 'running')) store.record(record.id, work.id, 'verification', { ...record, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
   }
-  snapshot(work: Work): Record<string, { hash: string; content: string | null }> {
-    const files: Record<string, { hash: string; content: string | null }> = {};
-    const excluded = new Set(['.git', '.data', '.reference', '.tools', '.logs', '.idea-trash', 'node_modules', 'dist', '.nuxt', '.output']);
-    const dataDir = resolve(process.env.DATA_DIR || '../.data');
-    const visit = (dir: string, prefix = '') => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const absolute = join(dir, entry.name), path = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (entry.isSymbolicLink() || excluded.has(entry.name) || absolute === dataDir || entry.name.endsWith('.tsbuildinfo')) continue;
-        if (entry.isDirectory()) { visit(absolute, path); continue; }
-        if (!entry.isFile()) continue;
-        const bytes = readFileSync(absolute), content = bytes.length < 200000 && !bytes.includes(0) ? bytes.toString('utf8') : null;
-        const normalized = path.endsWith('/tasks.md') && content ? content.replace(/- \[[xX ]\]/g, '- [ ]') : bytes;
-        files[path] = { hash: createHash('sha256').update(normalized).digest('hex'), content };
-      }
-    };
-    visit(work.projectPath); return files;
-  }
-  revision(work: Work) { return createHash('sha256').update(JSON.stringify(Object.entries(this.snapshot(work)).map(([path, value]) => [path, value.hash]).sort())).digest('hex'); }
-  baseline(work: Work) {
-    if (this.store.records(work.id, 'baseline').length) return;
-    const result = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: work.projectPath, shell: false, windowsHide: true, encoding: 'utf8', timeout: 2000 });
-    const gitHead = result.status === 0 ? result.stdout.trim() : null;
-    this.store.record(`${work.id}:baseline`, work.id, 'baseline', { files: this.snapshot(work), gitHead });
-  }
-  changes(work: Work) {
-    const previous = this.store.records(work.id, 'baseline')[0]?.files || {}, current = this.snapshot(work);
-    return [...new Set([...Object.keys(previous), ...Object.keys(current)])].filter(path => previous[path]?.hash !== current[path]?.hash).map(path => ({ path, before: previous[path]?.content ?? null, after: current[path]?.content ?? null, status: !previous[path] ? 'added' : !current[path] ? 'removed' : 'modified' }));
-  }
+  snapshot(work: Work): Snapshot { return collectFiles(this.executionPath(work)); }
+  revision(work: Work) { return snapshotRevision(this.snapshot(work)); }
+  baseline(work: Work) { this.prepare(work); }
+  changes(work: Work) { return this.changeReport(work).files; }
   commands(work: Work, scope: TestScope = 'full'): VerificationCommand[] {
-    if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : relatedTestCommands(String(work.executionPath || work.projectPath), this.changes(work).map((file: { path: string }) => file.path));
+    if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : relatedTestCommands(work.executionPath || work.projectPath, this.changes(work).map((file: { path: string }) => file.path));
+    if (['completed', 'archived'].includes(work.phase) && Array.isArray(work.completedCommands)) return work.completedCommands as VerificationCommand[];
     if (Array.isArray(work.verificationCommands)) return work.verificationCommands as VerificationCommand[];
-    const pkg = join(work.projectPath, 'package.json');
+    const pkg = join(work.executionPath && !['completed', 'archived'].includes(work.phase) ? this.executionPath(work) : work.projectPath, 'package.json');
     if (!existsSync(pkg)) return [];
     const scripts = JSON.parse(readFileSync(pkg, 'utf8')).scripts || {};
     return [scripts['test:run'] ? 'test:run' : 'test', 'typecheck', 'build', 'lint'].filter(id => scripts[id]).map(id => ({ id, command: process.env.NPM_BIN || 'npm', args: ['run', id] }));
@@ -60,10 +49,12 @@ export class ExecutionService implements OnModuleDestroy {
     if (body.scope !== undefined && !['work', 'full'].includes(body.scope)) throw new BadRequestException('잘못된 테스트 범위입니다');
     work[body.scope === 'work' ? 'workVerificationCommands' : 'verificationCommands'] = body.commands; this.store.save(work); return this.commands(work, body.scope || 'full');
   }
-  results(work: Work) {
-    const revision = this.revision(work);
+  results(work: Work, capturedRevision?: string) {
+    let revision: string | null = null;
+    try { revision = ['completed', 'archived'].includes(work.phase) ? this.store.records(work.id, 'completed-changes')[0]?.report?.revision ?? null : this.revision(work); } catch { /* Missing historical isolation is not a current result. */ }
+    if (capturedRevision) revision = capturedRevision;
     const commands = { full: this.commands(work), work: this.commands(work, 'work') };
-    return this.store.records(work.id, 'verification').map(record => ({ ...record, scope: record.scope || 'full', fresh: record.revision === revision && record.commandVersion === JSON.stringify(commands[record.scope === 'work' ? 'work' : 'full'].find(x => x.id === record.commandId)) }));
+    return this.store.records(work.id, 'verification').map(record => ({ ...record, scope: record.scope || 'full', fresh: record.sourceMutationVersion === work.sourceMutationVersion && record.revision === revision && record.commandVersion === JSON.stringify(commands[record.scope === 'work' ? 'work' : 'full'].find(x => x.id === record.commandId)) }));
   }
   runAll(work: Work, scope: TestScope) {
     if (!['work', 'full'].includes(scope)) throw new BadRequestException('잘못된 테스트 범위입니다');
@@ -76,12 +67,21 @@ export class ExecutionService implements OnModuleDestroy {
   }
   run(work: Work, commandId: string, scope: TestScope = 'full') {
     if (!['work', 'full'].includes(scope)) throw new BadRequestException('잘못된 테스트 범위입니다');
+    projectCoordinator(this.store).assertWorkCanStart(work);
     if (this.children.has(work.id) || !['idle', 'interrupted', 'failed'].includes(work.state) || ['completed', 'archived'].includes(work.phase)) throw new ConflictException('업무의 다른 실행이 진행 중이거나 완료되었습니다');
+    const cwd = this.executionPath(work);
+    this.files.assertSourcePlan(work);
     const command = this.commands(work, scope).find(c => c.id === commandId); if (!command) throw new BadRequestException('등록된 검증 명령이 아닙니다');
     const started = Date.now();
-    const record = { id: randomUUID(), commandId, scope, commandVersion: JSON.stringify(command), revision: this.revision(work), status: 'running', stdout: '', stderr: '', code: null as number | null, createdAt: new Date().toISOString(), durationMs: null as number | null };
+    const record = { id: randomUUID(), commandId, scope, commandVersion: JSON.stringify(command), revision: this.revision(work), sourceMutationVersion: work.sourceMutationVersion, status: 'running', stdout: '', stderr: '', code: null as number | null, createdAt: new Date().toISOString(), durationMs: null as number | null };
     this.store.record(record.id, work.id, 'verification', record); work.phase = 'verification'; work.state = 'running'; this.store.save(work);
-    const child = spawn(command.command, command.args, { cwd: work.projectPath, shell: false, windowsHide: true }); this.children.set(work.id, child);
+    const runtime = join(cwd, '.tools', 'node-runtime');
+    const local = existsSync(join(runtime, process.platform === 'win32' ? 'node.exe' : 'node')) ? runtime : undefined;
+    const executable = runtimeCommand(command.command, command.args, local);
+    const env = runtimeEnvironment(process.env, local);
+    for (const key of ['DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY']) delete env[key];
+    if (local) env.OPENSPEC_NODE_DIRECTORY = local;
+    const child = spawn(executable.command, executable.args, { cwd, shell: false, windowsHide: true, env }); this.children.set(work.id, child);
     const timer = setTimeout(() => child.kill(), 600000);
     let finished = false;
     const finish = (code: number | null, error?: string) => {

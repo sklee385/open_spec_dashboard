@@ -11,6 +11,8 @@ import { reviewInstructions } from '../review/instructions';
 import { testingInstructions } from '../work/testing-instructions';
 import { readiness, ToolConfig } from './config.service';
 import { windowsProcessTreeScript } from './windows-process-tree';
+import { FileResults } from '../work/file-results';
+import { projectCoordinator } from '../projects/coordinator';
 
 type Running = { child: ChildProcess; stopped?: string; kill?: Promise<boolean>; done: Promise<void> };
 const diagnostics: Record<string, string> = {
@@ -30,17 +32,19 @@ export class ExternalCliAdapter implements OnModuleDestroy {
     }
   }
   private documents(work: Work) {
-    const root = within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`);
+    const root = work.executionPath ? within(new FileResults(this.store).path(work), `openspec/changes/${work.changeName}`) : within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`);
     return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(path => `specs/${path}`)].flatMap(path => {
       const content = textFile(within(root, path)); return content === null ? [] : [{ path: join(root, path), content }];
     });
   }
   send(id: string, text: string, tool: ToolConfig, phase?: string) {
     const work = this.store.get(id)!;
+    const cwd = ['implementation', 'verification'].includes(phase || work.phase) ? new FileResults(this.store).path(work) : work.projectPath;
     if (this.running.has(id) || ['running', 'connecting', 'waiting-input', 'waiting-approval'].includes(work.state)) throw new ConflictException('이미 실행 중입니다. 종료 확인 후 요청해 주세요.');
+    projectCoordinator(this.store).assertWorkCanStart(work);
     const docs = this.documents(work);
     const history = this.store.events(id).filter(event => ['user-message', 'item/agentMessage/delta', 'answer', 'approval'].includes(event.type));
-    const prompt = `현재 업무: ${work.changeName}\n업무 ID: ${work.id}\n현재 단계: ${phase || work.phase}\n작업 경로: ${work.projectPath}\n${reviewInstructions}\n${testingInstructions}\n사용자와 한국어로 문답한다. 계획 단계에서는 지정된 OpenSpec 변경 문서만 작성·수정하며 제품 코드를 구현하지 않는다. 문서·구현·검증 결과만으로 사용자 검토나 완료를 대체하지 않는다.\n저장 대화:\n${JSON.stringify(history)}\n최신 문서:\n${JSON.stringify(docs)}\n사용자 요청:\n${text}`;
+    const prompt = `현재 업무: ${work.changeName}\n업무 ID: ${work.id}\n현재 단계: ${phase || work.phase}\n작업 경로: ${cwd}\n${reviewInstructions}\n${testingInstructions}\n사용자와 한국어로 문답한다. 계획 단계에서는 지정된 OpenSpec 변경 문서만 작성·수정하며 제품 코드를 구현하지 않는다. 문서·구현·검증 결과만으로 사용자 검토나 완료를 대체하지 않는다.\n저장 대화:\n${JSON.stringify(history)}\n최신 문서:\n${JSON.stringify(docs)}\n사용자 요청:\n${text}`;
     if (Buffer.byteLength(prompt, 'utf8') > 256 * 1024) throw new BadRequestException('입력이 256KiB를 초과했습니다. 문서·대화 축약이 필요합니다. 원본 기록은 유지됩니다.');
     if (phase) work.phase = phase;
     work.turnId = randomUUID(); work.state = 'running'; delete work.error; delete work.errorCode;
@@ -48,7 +52,7 @@ export class ExternalCliAdapter implements OnModuleDestroy {
     if (!readiness(tool).ready) { this.finish(id, 'missing-executable', null); return this.store.get(id); }
     const args = tool.input === 'argument' ? tool.args!.map(arg => arg === '{prompt}' ? prompt : arg) : tool.args!;
     let child: ChildProcess;
-    try { child = spawn(tool.executable!, args, { cwd: work.projectPath, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] }); }
+    try { child = spawn(tool.executable!, args, { cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] }); }
     catch (error: any) { this.finish(id, ['E2BIG', 'ENAMETOOLONG'].includes(error.code) ? 'argument-limit' : 'execution-failed', null); return this.store.get(id); }
     let resolveDone!: () => void;
     const execution: Running = { child, done: new Promise(resolve => { resolveDone = resolve; }) }; this.running.set(id, execution);

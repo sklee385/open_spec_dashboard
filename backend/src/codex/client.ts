@@ -1,6 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
+import { runtimeEnvironment, localRuntimeDirectory } from '../runtime';
 
 export class CodexClient extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
@@ -17,8 +18,9 @@ export class CodexClient extends EventEmitter {
   private async initialize() {
     this.generation = Math.random().toString(36).slice(2);
     const generation = this.generation;
-    const args = process.env.CODEX_ARGS ? JSON.parse(process.env.CODEX_ARGS) : ['app-server'];
-    this.child = spawn(process.env.CODEX_BIN || 'codex', args, { stdio: 'pipe', windowsHide: true, shell: false });
+    const env = runtimeEnvironment();
+    const args = process.env.CODEX_ARGS ? JSON.parse(process.env.CODEX_ARGS) : ['app-server', ...(localRuntimeDirectory() ? ['-c', `shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`] : [])];
+    this.child = spawn(process.env.CODEX_BIN || 'codex', args, { stdio: 'pipe', windowsHide: true, shell: false, env });
     createInterface({ input: this.child.stdout }).on('line', line => {
       if (this.generation !== generation) return;
       let message: any;

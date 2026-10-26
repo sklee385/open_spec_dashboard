@@ -1,0 +1,108 @@
+import { afterAll, beforeAll, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, renameSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createApplication } from '../src/app';
+import { WorkStore } from '../src/work/store';
+let app: any, base: string, root: string, log: string, work: any;
+const request = async (path: string, body?: any) => {
+  const response = await fetch(`${base}/api/${path}`, { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  return { status: response.status, data: await response.json() };
+};
+beforeAll(async () => {
+  root = mkdtempSync(join(tmpdir(), 'isolated-workflow-')); log = join(root, 'rpc.log');
+  const docs = join(root, 'source', 'openspec', 'changes', 'feature'); mkdirSync(join(docs, 'specs', 'feature'), { recursive: true });
+  for (const file of ['proposal.md', 'design.md', 'specs/feature/spec.md']) writeFileSync(join(docs, file), '# Plan\n');
+  writeFileSync(join(docs, 'tasks.md'), '- [ ] implement\n');
+  process.env.CONFIG_PATH = join(root, 'config.json'); process.env.DATA_DIR = join(root, 'data'); process.env.WORKSPACE_ROOT = join(root, 'spaces');
+  process.env.CODEX_BIN = process.execPath; process.env.CODEX_ARGS = JSON.stringify([resolve('test/fixtures/codex.cjs')]); process.env.CODEX_TEST_LOG = log;
+  writeFileSync(process.env.CONFIG_PATH, JSON.stringify({ sources: [{ name: 'demo', path: './source/openspec' }] }));
+  app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+  work = (await request('work', { sourceId: 'demo', changeName: 'feature', requestKey: 'feature' })).data;
+});
+afterAll(async () => { await app?.close(); for (const key of ['CONFIG_PATH','DATA_DIR','WORKSPACE_ROOT','CODEX_BIN','CODEX_ARGS','CODEX_TEST_LOG']) delete process.env[key]; });
+it('동일 대화의 실행 위치를 전환하고 별도 반영 후에만 완료하며 결과를 보존한다', async () => {
+  await request(`work/${work.id}/action`, { action: 'plan' });
+  await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+  await request(`work/${work.id}/action`, { action: 'review' });
+  expect((await request(`work/${work.id}/action`, { action: 'implement' })).status).toBe(200);
+  await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+  work = app.get(WorkStore).get(work.id); expect(work.executionPath).toBeTruthy();
+  expect((await request(`work/${work.id}`)).data.recovery).toMatchObject({ mode: 'isolated', canReconnect: true, required: false });
+  expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+  const resumes = readFileSync(log, 'utf8').trim().split('\n').map(x => JSON.parse(x)).filter(x => x.method === 'thread/resume');
+  expect(resumes.at(-1).params.cwd).toBe(work.executionPath);
+  const previousHome = process.env.CODEX_HOME;
+  await app.close();
+  process.env.CODEX_TEST_MODE = 'missing-rollout'; process.env.CODEX_HOME = join(root, 'codex-home');
+  const sessions = join(process.env.CODEX_HOME, 'sessions', '2026', '10', '26'); mkdirSync(sessions, { recursive: true });
+  const rollout = join(sessions, `rollout-isolated-${work.threadId}.jsonl`);
+  writeFileSync(rollout, JSON.stringify({ type: 'session_meta', payload: { id: work.threadId, cwd: work.executionPath } }) + '\n');
+  try {
+    app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
+    expect(app.get(WorkStore).get(work.id)?.rolloutPath).toBe(rollout);
+  } finally {
+    await app.close(); delete process.env.CODEX_TEST_MODE;
+    if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome;
+    app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+  }
+  const identityFile = join(dirname(work.executionPath), 'identity.json'), identity = readFileSync(identityFile, 'utf8');
+  writeFileSync(identityFile, JSON.stringify({ workId: 'foreign', projectPath: work.projectPath }));
+  try {
+    const damaged = await request(`work/${work.id}`);
+    expect(damaged.status).toBe(200);
+    expect(damaged.data.recovery).toMatchObject({ code: 'workspace-unavailable', canReconnect: false, required: true });
+    expect(damaged.data.documents).toEqual([]);
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(409);
+    expect((await request(`work/${work.id}/document?path=proposal.md`)).status).toBe(409);
+    expect(readFileSync(identityFile, 'utf8')).toContain('foreign');
+  } finally { writeFileSync(identityFile, identity); }
+  const calls = readFileSync(log, 'utf8').trim().split('\n').map(x => JSON.parse(x));
+  expect(calls.filter(x => x.method === 'thread/start')).toHaveLength(1);
+  expect(calls.filter(x => x.method === 'turn/start').at(-1).params.cwd).toBe(work.executionPath);
+  expect(calls.filter(x => x.method === 'turn/start').at(-1).params.sandboxPolicy.writableRoots).toEqual([work.executionPath]);
+  const sourcePlan = join(root, 'source', 'openspec', 'changes', 'feature', 'proposal.md');
+  writeFileSync(sourcePlan, '# Changed by another operation\n');
+  expect((await request(`work/${work.id}/message`, { text: 'resume without reviewing' })).status).toBe(409);
+  writeFileSync(sourcePlan, '# Plan\n');
+  await request(`work/${work.id}/action`, { action: 'plan' });
+  await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+  const planning = readFileSync(log, 'utf8').trim().split('\n').map(x => JSON.parse(x)).filter(x => x.method === 'turn/start').at(-1);
+  expect(planning.params.cwd).toBe(join(root, 'source'));
+  const planningContext = planning.params.input[0].text.split('\n');
+  expect(planningContext).toContain(`작업 경로: ${join(root, 'source')}`);
+  expect(planningContext).toContain(`OpenSpec 변경: ${join(work.executionPath, 'openspec', 'changes', 'feature')}`);
+  expect(planning.params.sandboxPolicy.writableRoots).toEqual([join(root, 'source'), work.executionPath]);
+  await request(`work/${work.id}/action`, { action: 'review' });
+  await request(`work/${work.id}/action`, { action: 'implement' });
+  await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
+  work = app.get(WorkStore).get(work.id);
+  writeFileSync(join(work.executionPath, 'result.txt'), 'A'); writeFileSync(join(work.executionPath, 'openspec', 'changes', 'feature', 'tasks.md'), '- [x] implement\n');
+  writeFileSync(join(work.executionPath, 'openspec', 'changes', 'feature', 'verification.md'), '# Stored verification\n');
+  expect((await request(`work/${work.id}`)).data.documents).toContain('verification.md');
+  work.verificationCommands = [{ id: 'test', command: process.execPath, args: ['-e', "require('fs').writeFileSync('verified-cwd.txt',process.cwd())"] }]; app.get(WorkStore).save(work);
+  await request(`work/${work.id}/verify`, { commandId: 'test' });
+  await expect.poll(async () => (await request(`work/${work.id}`)).data.verifications.at(-1)?.status).toBe('passed');
+  // A second verification now sees the output generated by the first one.
+  await request(`work/${work.id}/verify`, { commandId: 'test' });
+  await expect.poll(async () => (await request(`work/${work.id}`)).data.verifications.at(-1)?.status).toBe('passed');
+  expect(readFileSync(join(work.executionPath, 'verified-cwd.txt'), 'utf8')).toBe(work.executionPath);
+  expect((await request(`work/${work.id}/action`, { action: 'complete', confirmed: true })).status).toBe(409);
+  expect((await request(`work/${work.id}/action`, { action: 'apply-changes', confirmed: true })).status).toBe(200);
+  expect((await request(`work/${work.id}/action`, { action: 'complete', confirmed: true })).status).toBe(200);
+  const completed = (await request(`work/${work.id}`)).data.changeReport;
+  expect(completed.source).toBe('completed'); expect(readFileSync(join(root, 'source', 'result.txt'), 'utf8')).toBe('A');
+  writeFileSync(join(root, 'source', 'result.txt'), 'B');
+  await app.close(); app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+  expect((await request(`work/${work.id}`)).data.changeReport).toEqual(completed);
+  expect((await request(`work/${work.id}`)).data.documents).toContain('verification.md');
+  expect((await request(`work/${work.id}/document?path=verification.md`)).data.content).toBe('# Stored verification\n');
+  await app.close();
+  renameSync(join(root, 'source'), join(root, 'source-moved')); renameSync(work.executionPath, `${work.executionPath}-moved`);
+  app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+  expect((await request(`work/${work.id}`)).status).toBe(200);
+  expect((await request(`work/${work.id}`)).data.changeReport).toEqual(completed);
+  expect((await request(`work/${work.id}/document?path=proposal.md`)).data.content).toBe('# Plan\n');
+  expect((await request(`work/${work.id}/document?path=verification.md`)).data.content).toBe('# Stored verification\n');
+}, 20000);

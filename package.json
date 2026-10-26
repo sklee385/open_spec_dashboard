@@ -1,12 +1,18 @@
 {
   "name": "open-spec-dashboard",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.4",
   "workspaces": [
     "frontend",
     "backend"
   ],
   "scripts": {
+    "desktop:test": "node --test desktop/test/*.test.cjs",
+    "desktop:stage": "node scripts/desktop-stage.cjs",
+    "desktop:dev": "electron .tools/desktop-stage",
+    "desktop:pack": "electron-builder --config desktop/electron-builder.cjs --dir --publish never",
+    "desktop:dist": "electron-builder --config desktop/electron-builder.cjs --publish never",
+    "desktop:portable": "node scripts/desktop-portable-build.cjs",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test:run --workspaces --if-present",
     "dev:frontend": "npm run dev --workspace frontend -- --host 127.0.0.1 --port 13001",
@@ -19,6 +25,12 @@
     "multer": "2.5.0"
   },
   "dependencies": {
-    "multer": "2.5.0"
+    "electron-updater": "6.8.11",
+    "multer": "2.5.0",
+    "unzipper": "0.12.5"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0"
   }
 }

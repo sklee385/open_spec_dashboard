@@ -11,6 +11,8 @@ export interface Work {
   ideaIds: string[]; phase: string; state: string; threadId: string | null;
   reviewedVersion: string | null; createdAt: string; updatedAt: string;
   toolId?: string; toolConfigSnapshot?: ToolConfig; toolCapabilities?: ToolCapabilities; providerSessionId?: string | null;
+  executionPath?: string;
+  edgeToolsVersion?: number;
   error?: string; turnId?: string; [key: string]: unknown;
 }
 @Injectable()

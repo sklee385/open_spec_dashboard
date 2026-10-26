@@ -1,0 +1,19 @@
+.work-code-block { margin: 10px 0; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--secondary); }
+.work-code-toolbar { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted-foreground); }
+.work-code-toolbar > span:first-child { font-family: ui-monospace, Consolas, monospace; }
+.work-code-toolbar button { margin-left: auto; padding: 3px 8px; }
+.work-room .work-code-block pre { margin: 0; padding: 14px; white-space: pre; overflow-wrap: normal; overflow-x: auto; max-height: 480px; line-height: 1.7; tab-size: 2; }
+.work-code-block code { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.syntax-key { color: #2563a6; }.syntax-string { color: #277537; }.syntax-number { color: #a34713; }.syntax-keyword { color: #8750af; }.syntax-comment { color: #64748b; }
+.dark .syntax-key { color: #8bc8ff; }.dark .syntax-string { color: #a4d697; }.dark .syntax-number { color: #f2bc8d; }.dark .syntax-keyword { color: #d7acff; }.dark .syntax-comment { color: #a0aec0; }
+.work-approval-summary { margin: 10px 0; line-height: 1.6; }
+.work-approval-fields { display: grid; grid-template-columns: minmax(75px, auto) minmax(0, 1fr); gap: 8px 14px; margin: 8px 0; }
+.work-approval-fields dt { font-weight: 600; color: var(--muted-foreground); }
+.work-approval-fields dd { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.work-approval-fields ul { padding-left: 18px; list-style: disc; }
+.work-approval-fields .work-code-block { margin: 0; }
+.work-approval-raw { margin-top: 12px; font-size: 12px; }
+.work-message > ul,.work-message > ol { padding-left: 22px; list-style: revert; }
+.work-message :not(pre) > code { border-radius: 4px; padding: 2px 5px; background: var(--secondary); font-family: ui-monospace, Consolas, monospace; }
+.work-message .markdown-document table { min-width: 32rem; }
+.work-message .markdown-document th,.work-message .markdown-document td { min-width: 8rem; vertical-align: top; }

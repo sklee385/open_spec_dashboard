@@ -6,6 +6,7 @@ import { KanbanBoard } from '../components/KanbanBoard';
 import { IdeaCapture } from '../components/IdeaCapture';
 import { IdeaDetailModal } from '../components/IdeaDetailModal';
 import { SettingsModal } from '../components/SettingsModal';
+import { SourceManagementModal } from '../components/SourceManagementModal';
 import { SpecsView } from '../components/SpecsView';
 import { WorkRoom } from '../components/WorkRoom';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -45,8 +46,15 @@ it('영어 아이디어의 콘텐츠는 한국어 원문을 보존한다', () =>
   expect(screen.getByRole('textbox', { name: 'Change name' })).toBeInTheDocument();
 });
 it('한국어 설정 화면을 표시한다', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify({ sources: [] }) })));
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ tools: [], defaultToolId: 'codex', version: 'v1' }) })));
   render(<SettingsModal open onOpenChange={() => {}} />);
+  expect(screen.getByRole('dialog', { name: '설정' })).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '외부 도구 추가' })).toBeInTheDocument();
+  expect(screen.queryByText('새 소스 추가')).not.toBeInTheDocument();
+});
+it('한국어 소스 관리 화면을 표시한다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, text: async () => JSON.stringify({ sources: [] }) })));
+  render(<SourceManagementModal open onOpenChange={() => {}} />);
   expect(await screen.findByText('새 소스 추가')).toBeInTheDocument();
 });
 it('영어 업무 공간에서도 사용자 메시지 역할과 AI 요청은 원문을 유지한다', async () => {

@@ -1,15 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
+import { notificationMode } from './settings';
 
 export const NOTIFICATION_APP_ID = 'OpenSpecBoard.Notifications';
 @Injectable()
 export class WindowsNotifications {
   readonly supported = process.platform === 'win32';
   private children = new Set<ChildProcess>();
-  register(dashboardUrl: string) { return this.run('register', { dashboardUrl }); }
-  unregister() { return this.run('unregister', {}); }
-  show(payload: { xml: string; url: string }) { return this.run('show', payload); }
+  register(launchUri: string) { return this.run('register', { launchUri, target: notificationMode() }); }
+  unregister() { return this.run('unregister', { target: notificationMode() }); }
+  show(payload: { xml: string; url: string }) { return this.run('show', { ...payload, target: notificationMode() }); }
   close() { for (const child of this.children) child.kill(); }
   private run(action: 'register' | 'unregister' | 'show', data: unknown): Promise<void> {
     if (!this.supported) return Promise.reject(new Error('unsupported'));
