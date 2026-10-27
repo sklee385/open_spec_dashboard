@@ -44,6 +44,8 @@ jobs:
             ./scripts/node.ps1 scripts/desktop-stage.cjs --personal-update
           }
       - run: ./scripts/npm.ps1 run desktop:dist
+      - name: Verify packaged renderer recovery and session preservation
+        run: ./scripts/node.ps1 scripts/desktop-smoke.cjs --security --personal-update --renderer-recovery
       - name: Build portable ZIP and metadata
         run: ./scripts/node.ps1 scripts/desktop-portable-build.cjs
       - uses: actions/upload-artifact@v4

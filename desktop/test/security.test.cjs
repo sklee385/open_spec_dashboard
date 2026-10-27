@@ -11,6 +11,7 @@ async function launch(t, smoke = false, controls = {}) {
   const file = join(__dirname, '..', 'main.cjs'), localRequire = createRequire(file);
   const windows = [], handlers = new Map(), external = [], menus = [], dialogs = [], requests = [], files = [];
   const app = new EventEmitter();
+  app.commandLine = { appendSwitch() {} };
   app.setAsDefaultProtocolClient = () => controls.protocolFailure !== true;
   app.isDefaultProtocolClient = () => controls.protocolFailure !== true;
   Object.assign(app, { isPackaged: true, requestSingleInstanceLock: () => controls.duplicate !== true, getPath: () => '/isolated-profile', setPath() {}, exit(code) { app.exitCode = code; }, quit() { let blocked = false; app.emit('before-quit', { preventDefault() { blocked = true; } }); if (!blocked) { app.quitted = true; app.emit('will-quit'); } }, getVersion: () => '0.1.0', whenReady: () => ({ then(start) { const started = Promise.resolve().then(start); return { catch(recover) { app.completed = started.catch(recover); return app.completed; } }; } }) });
@@ -21,7 +22,7 @@ async function launch(t, smoke = false, controls = {}) {
       this.webContents = new EventEmitter();
       Object.assign(this.webContents, { id: windows.length, session, mainFrame: {}, getLastWebPreferences: () => options.webPreferences, setWindowOpenHandler(callback) { this.open = callback; }, executeJavaScript: async script => { if (smoke && !controls.smokeSuccess) throw new Error('isolated smoke failure'); if (script === 'window.desktopUpdates.status()') return { state: controls.personal ? 'idle' : 'disabled', currentVersion: '0.1.0' }; return controls.unsaved !== true; } });
     }
-    async loadURL(url) { this.url = url; this.webContents.mainFrame.url = url; }
+    async loadURL(url) { this.url = url; this.webContents.mainFrame.url = url; if (controls.loadFailure) throw Error('fixture page load failure'); }
     async loadFile(file) { this.url = pathToFileURL(file).href; }
     show() { this.visible = true; } hide() { this.visible = false; } focus() { this.focused = true; } isDestroyed() { return false; }
     isVisible() { return !!this.visible; }
@@ -37,7 +38,7 @@ async function launch(t, smoke = false, controls = {}) {
   const gateway = new EventEmitter();
   Object.assign(gateway, { listen(_port, _host, done) { if (controls.gatewayFailure) { gateway.emit('error', new Error('fixture gateway failure')); return; } gateway.listening = true; done(); }, address: () => ({ port: 15001 }), closeAllConnections() {}, close(done) { gateway.listening = false; done?.(); } });
   let child;
-  const electron = { app, BrowserWindow: Window, Tray, nativeImage: { createFromDataURL: () => ({}) }, Menu: { buildFromTemplate: menu => menu, setApplicationMenu() {} }, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, shell: { openExternal: async url => { external.push(url); } }, dialog: { async showMessageBox(value) { dialogs.push(value); return { response: 1 }; } } };
+  const electron = { app, BrowserWindow: Window, Tray, nativeImage: { createFromDataURL: () => ({}) }, Menu: { buildFromTemplate: menu => menu, setApplicationMenu() {} }, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, shell: { openExternal: async url => { external.push(url); } }, dialog: { async showMessageBox(value, options) { dialogs.push(options || value); return { response: 1 }; } } };
   const requireMock = id => {
     if (id === './portable-updater.cjs') return { PortableUpdater: class { constructor(options) { updater.portable = true; updater.installConfig = options; return updater; } } };
     if (id === 'electron') return electron;
@@ -206,4 +207,22 @@ test('개인용 배포 검사는 업데이트가 비활성이면 실패하고 �
 test('업데이트가 활성화된 개인용 배포 검사는 정상 종료한다', async t => {
   const { app, child } = await launch(t, true, { smokeSuccess: true, personalTest: true, personal: true });
   assert.equal(app.quitted, true); assert.equal(child.exitCode, 0);
+});
+
+test('최초 화면 로드 실패는 서버를 종료하지 않고 네이티브 화면 복구를 안내한다', async t => {
+  const { child, app, dialogs, requests } = await launch(t, false, { loadFailure: true });
+  assert.equal(child.exitCode, null); assert.equal(app.quitted, undefined);
+  assert.equal(dialogs.length, 1); assert.equal(dialogs[0].title, 'OpenSpecBoard 화면 복구');
+  assert.equal(requests.filter(url => url.endsWith('/prepare')).length, 0);
+});
+
+test('실행 중 화면 충돌과 수동 복구는 같은 서버를 유지하며 종료 중 복구는 열지 않는다', async t => {
+  const { windows, child, dialogs, menus } = await launch(t);
+  windows[0].webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  windows[0].emit('unresponsive');
+  await new Promise(setImmediate);
+  assert.equal(dialogs.length, 1); assert.equal(child.exitCode, null);
+  menus[0].find(item => item.label === '화면 복구').click();
+  await new Promise(setImmediate);
+  assert.equal(dialogs.length, 2); assert.equal(child.exitCode, null);
 });

@@ -32,12 +32,12 @@ it.each(['running','connecting','creating-thread','waiting-input','waiting-appro
   const { call, store } = await setup(); work(store, state);
   expect((await call('desktop/prepare', 'POST')).status).toBe(409);
 });
-it('idle이어도 미답변 질문과 불확실한 대기열이 있으면 종료하지 않는다', async () => {
+it('idle이어도 미답변 질문과 자동 전송 대기열이 있으면 종료하지 않는다', async () => {
   const { call, store } = await setup(); work(store, 'idle');
-  store.record('q', 'one', 'question', { kind: 'input', status: 'expired' });
+  store.record('q', 'one', 'question', { kind: 'input', status: 'pending' });
   expect((await call('desktop/prepare', 'POST')).status).toBe(409);
   store.record('q', 'one', 'question', { kind: 'input', status: 'answered' });
-  store.record('queued', 'one', 'queued-message', { status: 'uncertain' });
+  store.record('queued', 'one', 'queued-message', { status: 'queued' });
   expect((await call('desktop/prepare', 'POST')).status).toBe(409);
 });
 it('유휴 상태 전환 후 새로운 실행 요청을 차단하고 취소하면 다시 받는다', async () => {

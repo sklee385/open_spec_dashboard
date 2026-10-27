@@ -9,17 +9,28 @@ const { configureUpdateSelection } = require('./update-selection.cjs');
 const { allowPersonalUpdates, allowPortableUpdates } = require('./update-policy.cjs');
 const { reportPortableReady, reportPortableFailure, isPortableUpdateLaunch, validateConfig } = require('./portable-swap.cjs');
 const { assertRendererClosable } = require('./renderer-close.cjs');
+const { RendererRecovery } = require('./renderer-recovery.cjs');
 const { ShutdownGuard } = require('./shutdown-guard.cjs');
 const shutdownGuard = new ShutdownGuard();
 const { AttentionRouter, registerAttentionProtocol, trustedAttentionSender } = require('./attention-links.cjs');
 
-let window, updateWindow, tray, child, gateway, manager, origin;
+let window, updateWindow, tray, child, gateway, manager, origin, rendererRecovery;
 function showDashboard() { if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } }
 const attentionRouter = new AttentionRouter({ send: target => window.webContents.send('desktop:attention', target), show: showDashboard });
 attentionRouter.accept(process.argv);
 let startupPhase = 'initialization';
 let smokeServiceDiagnostics = '';
 const smoke = process.argv.includes('--desktop-smoke-test');
+const recoverySmoke = smoke && process.argv.includes('--desktop-recovery-test');
+let recoverySmokePrompts = 0;
+let recoverySmokeReadyCount = 0, recoverySmokeReadyWaiter;
+function waitForRecoverySmokeReady(after) {
+  if (recoverySmokeReadyCount > after) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { recoverySmokeReadyWaiter = undefined; reject(new Error('격리 화면 준비 응답 시간 초과')); }, 15000);
+    recoverySmokeReadyWaiter = () => { clearTimeout(timer); recoverySmokeReadyWaiter = undefined; resolve(); };
+  });
+}
 if (smoke) {
   if (!process.env.DESKTOP_SMOKE_DIRECTORY) throw new Error('격리한 smoke 데이터 경로가 필요합니다');
   mkdirSync(process.env.DESKTOP_SMOKE_DIRECTORY, { recursive: true });
@@ -36,6 +47,7 @@ let allowQuit = false, stopping = false, shutdownRequested = false;
 const gate = { locked: false, pending: 0 };
 const token = randomBytes(32).toString('hex');
 const userDirectory = app.getPath('userData');
+const graphics = require('./graphics.cjs').configureGraphics(app, userDirectory, process.platform);
 const serviceDirectory = app.isPackaged ? join(process.resourcesPath, 'service') : join(__dirname, '..', 'service');
 const nodeDirectory = join(serviceDirectory, 'runtime');
 const nodeBinary = join(nodeDirectory, process.platform === 'win32' ? 'node.exe' : 'node');
@@ -43,6 +55,8 @@ const dataDirectory = join(userDirectory, 'data');
 const configPath = join(userDirectory, 'config.json');
 const updateURL = pathToFileURL(join(__dirname, 'updates.html')).href;
 const log = message => { mkdirSync(join(userDirectory, 'logs'), { recursive: true }); appendFileSync(join(userDirectory, 'logs', 'desktop.log'), `${new Date().toISOString()} ${message}\n`); };
+app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') log(`GPU process exited: ${details.reason}; hardwareAcceleration=${graphics.hardwareAcceleration}`); });
+app.on('will-quit', () => rendererRecovery?.dispose());
 
 if (!app.requestSingleInstanceLock()) { app.exit(0); }
 else {
@@ -137,6 +151,14 @@ function showUpdates() {
 }
 async function start() {
   startupPhase = 'session';
+  rendererRecovery?.dispose();
+  rendererRecovery = undefined;
+  let portableReported = false;
+  const confirmPortableReady = async () => { if (!portableReported && isPortableUpdateLaunch(process.argv)) {
+    const portableReady = await reportPortableReady({ argv: process.argv, userDirectory, appDirectory: dirname(process.execPath), version: app.getVersion() });
+    if (!portableReady) throw new Error('무설치 업데이트 시작 확인 실패');
+    portableReported = true;
+  } };
   attentionRouter.reset();
   const protocolReady = registerAttentionProtocol(app, process.execPath, process.defaultApp ? process.argv[1] : null, smoke);
   mkdirSync(dataDirectory, { recursive: true });
@@ -163,8 +185,19 @@ async function start() {
   origin = `http://127.0.0.1:${gateway.address().port}`;
   startupPhase = 'window';
   window = new BrowserWindow({ width: 1440, height: 960, minWidth: 900, minHeight: 600, title: 'OpenSpecBoard', show: false, webPreferences: { preload: join(__dirname, 'dashboard-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  if (!smoke || recoverySmoke) {
+    const dashboard = window;
+    const recoveryDialog = recoverySmoke ? { showMessageBox: async () => { recoverySmokePrompts++; return { response: 0 }; } } : dialog;
+    rendererRecovery = new RendererRecovery({ window: dashboard, dialog: recoveryDialog, log,
+      reload: () => dashboard.loadURL(attentionRouter.initialURL(origin)),
+      isStopping: () => stopping || allowQuit || shutdownGuard.active || gate.locked,
+    });
+  }
   ipcMain.handle('desktop:attention-ready', event => {
     if (!trustedAttentionSender(event, window, origin)) throw new Error('허용되지 않은 알림 요청입니다');
+    if (recoverySmoke) { recoverySmokeReadyCount++; recoverySmokeReadyWaiter?.(); }
+    rendererRecovery?.ready();
+    if (!smoke) void confirmPortableReady().catch(() => log('portable readiness report failed; retained update diagnostics'));
     attentionRouter.ready(); return true;
   });
   window.webContents.on('did-start-loading', () => attentionRouter.reset());
@@ -178,7 +211,10 @@ async function start() {
   window.webContents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
   window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(`${origin}/`)) { event.preventDefault(); external(url); } });
   window.on('close', event => { log(`window-close allowed=${allowQuit}`); if (!allowQuit) { event.preventDefault(); window.hide(); } });
-  window.webContents.on('will-prevent-unload', () => log('window-unload-veto; unsaved UI retained'));
+  window.webContents.on('will-prevent-unload', event => {
+    if (rendererRecovery?.reloading) { event.preventDefault(); log('window-unload allowed by explicit screen recovery'); }
+    else log('window-unload-veto; unsaved UI retained');
+  });
   child.on('exit', () => { if (!stopping && !allowQuit) { log('session lost; automatic duplicate restart prevented'); void dialog.showMessageBox({ type: 'error', message: '대화 서버 연결이 끊겼습니다.', detail: '업무 데이터를 보존했습니다. 실행 상태를 확인한 뒤 앱을 다시 실행해 주세요.' }); } });
 
   startupPhase = 'updater';
@@ -211,16 +247,17 @@ async function start() {
   startupPhase = 'tray';
   const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFUlEQVR42mNkYPj/n4ECwESJ5lEDRg0AAH6zAh8HBnNmAAAAAElFTkSuQmCC');
   tray = new Tray(icon); tray.setToolTip('OpenSpecBoard · 창을 닫아도 업무를 유지합니다');
-  const menu = Menu.buildFromTemplate([{ label: 'OpenSpecBoard 열기', click: () => window.show() }, { label: '앱 업데이트', click: showUpdates }, { type: 'separator' }, { label: '앱 종료', click: () => void requestQuit() }]);
+  const recoverScreen = () => { void rendererRecovery?.report('manual'); };
+  const menu = Menu.buildFromTemplate([{ label: 'OpenSpecBoard 열기', click: () => window.show() }, { label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { type: 'separator' }, { label: '앱 종료', click: () => void requestQuit() }]);
   tray.setContextMenu(menu); tray.on('double-click', () => window.show());
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'OpenSpecBoard', submenu: [{ label: '앱 업데이트', click: showUpdates }, { label: '앱 종료', click: () => void requestQuit() }] }, { role: 'editMenu' }, { role: 'viewMenu' }]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'OpenSpecBoard', submenu: [{ label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { label: '앱 종료', click: () => void requestQuit() }] }, { role: 'editMenu' }, { role: 'viewMenu' }]));
   startupPhase = 'page';
-  await window.loadURL(attentionRouter.initialURL(origin)); if (!smoke) window.show(); log('desktop ready');
-  const confirmPortableReady = async () => { if (isPortableUpdateLaunch(process.argv)) {
-    const portableReady = await reportPortableReady({ argv: process.argv, userDirectory, appDirectory: dirname(process.execPath), version: app.getVersion() });
-    if (!portableReady) throw new Error('무설치 업데이트 시작 확인 실패');
-  } };
-  if (!smoke) await confirmPortableReady();
+  try { await window.loadURL(attentionRouter.initialURL(origin)); }
+  catch (error) {
+    if (smoke) throw error;
+    await rendererRecovery.report('load-failed');
+  }
+  if (!smoke) window.show(); log('desktop page loaded; awaiting renderer readiness');
   if (smoke) {
     const rendererSafe = await window.webContents.executeJavaScript("typeof require === 'undefined' && typeof process === 'undefined' && typeof window.desktopUpdates === 'undefined'");
     if (!rendererSafe) throw new Error('대시보드 렌더러의 권한 격리 실패');
@@ -238,6 +275,19 @@ async function start() {
     console.log('DESKTOP_SECURITY_READY');
     const status = await api('status');
     if (!status.idle) throw new Error('격리한 앱이 유휴 상태가 아닙니다');
+    if (recoverySmoke) {
+      await waitForRecoverySmokeReady(0);
+      const sessionPid = child.pid;
+      let afterCrash;
+      const crashed = new Promise(resolve => window.webContents.once('render-process-gone', () => { afterCrash = recoverySmokeReadyCount; resolve(); }));
+      window.webContents.forcefullyCrashRenderer();
+      await crashed;
+      await rendererRecovery.pending;
+      await waitForRecoverySmokeReady(afterCrash);
+      const recovered = await window.webContents.executeJavaScript("document.getElementById('root')?.textContent.includes('OpenSpecBoard') === true");
+      if (!recovered || recoverySmokePrompts !== 1 || child.pid !== sessionPid || child.exitCode !== null || !(await api('status')).idle) throw new Error('격리 화면 충돌 복구 또는 동일 세션 유지 실패');
+      console.log('DESKTOP_RECOVERY_READY');
+    }
     const sources = await fetch(`${origin}/api/sources`, { headers: { 'x-desktop-token': token } }).then(r => r.json());
     if (sources.sources.length && !isPortableUpdateLaunch(process.argv)) throw new Error('새 프로필에 프로젝트가 자동 등록되었습니다');
     if (process.argv.includes('--desktop-lifecycle-test')) {

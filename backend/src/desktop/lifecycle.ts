@@ -11,8 +11,11 @@ export class DesktopLifecycle {
     const blockers = this.store.list().flatMap(work => {
       const reasons: string[] = [];
       if (!['idle', 'failed', 'interrupted'].includes(work.state)) reasons.push(work.state);
-      if (this.store.records(work.id, 'question').some(unresolvedQuestion)) reasons.push('미처리 질문·승인');
-      if (this.store.records(work.id, 'queued-message').some(q => ['pending','queued','dispatching','uncertain'].includes(q.status))) reasons.push('대기 메시지');
+      // Expired input is recoverable history, not a live request awaiting a response.
+      if (this.store.records(work.id, 'question').some(q => q.status !== 'expired' && unresolvedQuestion(q))) reasons.push('미처리 질문·승인');
+      // Uncertain messages are retained for review and never automatically drained.
+      // Active work and requests are checked separately; this history cannot run on its own.
+      if (this.store.records(work.id, 'queued-message').some(q => ['pending','queued','dispatching'].includes(q.status))) reasons.push('대기 메시지');
       if (this.store.records(work.id, 'verification').some(q => q.status === 'running')) reasons.push('검증 실행');
       if (this.store.records(work.id, 'browser-verification').some(q => q.status === 'running')) reasons.push('브라우저 검증 실행');
       return reasons.length ? [{ workId: work.id, reasons }] : [];
