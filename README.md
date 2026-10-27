@@ -4,7 +4,7 @@
 
 아이디어부터 개발 완료까지 같은 Codex 대화로 진행하는 로컬 작업 공간.
 
-Windows 설치형과 무설치 ZIP은 [v0.1.6 릴리스](https://github.com/sklee385/open_spec_dashboard/releases/tag/v0.1.6)에서 내려받을 수 있다. 실행·업데이트 방법은 [데스크톱 안내](docs/DESKTOP.md)와 [무설치 안내](docs/PORTABLE.md)를 참고한다.
+Windows 설치형과 무설치 ZIP은 [v0.1.8 릴리스](https://github.com/sklee385/open_spec_dashboard/releases/tag/v0.1.8)에서 내려받을 수 있다. 실행·업데이트 방법은 [데스크톱 안내](docs/DESKTOP.md)와 [무설치 안내](docs/PORTABLE.md)를 참고한다.
 
 ## 참고 프로젝트
 

@@ -58,10 +58,12 @@ it('미설치·종료 실패·인증·시간·출력 제한을 구분하고 비�
     ['fail', {}, 'authentication-failed'], ['slow', { timeoutMs: 100 }, 'timeout'], ['overflow', {}, 'output-limit'],
   ] as const) {
     const w = await work(mode, extra); await request(`work/${w.id}/message`, { text: '테스트' });
-    await expect.poll(async () => (await state(w.id)).state, { timeout: 5000 }).toBe('failed');
+    // A configured CLI timeout (10s) can be followed by Windows tree cleanup (10s).
+    // Keep checking the actual terminal state and diagnostic, rather than racing cleanup.
+    await expect.poll(async () => (await state(w.id)).state, { timeout: 25000, message: `CLI failure mode: ${mode}` }).toBe('failed');
     const result = await state(w.id); expect(result.errorCode).toBe(code); expect(JSON.stringify(result)).not.toContain('PRIVATE_SECRET');
   }
-}, 30000);
+}, 90000);
 it('지원하지 않는 질문·승인·고유 재개와 잘못된 연결을 거부한다', async () => {
   const w = await work();
   for (const action of ['answer', 'approval', 'reconnect']) expect((await request(`work/${w.id}/${action}`, {})).status).toBe(400);

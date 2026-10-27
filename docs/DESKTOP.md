@@ -4,7 +4,7 @@
 
 ## Windows 무설치 ZIP 다운로드
 
-[v0.1.6 무설치 ZIP 다운로드](https://github.com/sklee385/open_spec_dashboard/releases/download/v0.1.6/OpenSpecBoard-0.1.6-win-x64-portable.zip)를 새 쓰기 가능한 폴더에 **전체 압축 해제**하고 안의 `OpenSpecBoard.exe`를 실행한다. 기존 앱은 창 닫기 대신 **앱 종료**로 정상 종료한다. 기존 앱이 트레이에 남아 있으면 같은 사용자 프로필의 이전 창이 다시 열릴 수 있다. ZIP 안에서 실행하거나 EXE만 복사하지 않는다. [무설치 사용 안내](PORTABLE.md)를 참고한다.
+[v0.1.8 무설치 ZIP 다운로드](https://github.com/sklee385/open_spec_dashboard/releases/download/v0.1.8/OpenSpecBoard-0.1.8-win-x64-portable.zip)를 새 쓰기 가능한 폴더에 **전체 압축 해제**하고 안의 `OpenSpecBoard.exe`를 실행한다. 기존 앱은 창 닫기 대신 **앱 종료**로 정상 종료한다. 기존 앱이 트레이에 남아 있으면 같은 사용자 프로필의 이전 창이 다시 열릴 수 있다. ZIP 안에서 실행하거나 EXE만 복사하지 않는다. [무설치 사용 안내](PORTABLE.md)를 참고한다.
 
 무설치판은 전용 ZIP을 확인·다운로드하고 사용자 재시작 요청과 업무 유휴 조건을 만족할 때 실행 폴더를 교체한다. 설치형 EXE로 전환하지 않는다. 데이터는 기존 `%APPDATA%/openspecboard`에 유지한다. 설치형 파일·latest.yml도 기존 설치형 사용자의 업데이트 호환을 위해 별도로 유지한다. 실제 GitHub Actions 실행 검증은 남아 있으며 사용자가 보고한 설치 문제의 원인을 확정한 것은 아니다.
 
