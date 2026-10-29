@@ -139,6 +139,14 @@ Git 요청은 `{requestKey, selectedBranch?, previewToken, excludedConfirmed:tru
 
 Git 업무의 `changeReport`는 `workspaceBaselineCommit` 대비 해당 공간의 변경만 반환한다. 파일 내용 외 mode 변경은 `beforeMode`/`afterMode`로 표시하고 검증 revision에도 포함한다. 수집 중 내용·mode·Git 상태가 바뀌면 `source:unavailable`과 오류를 반환한다. 신규 관리 공간의 로컬 비밀/준비 경로는 소스·Git 및 업무 결과 응답에서 제외한다. 공유 hardlink/링크 또는 미지원 Git 경계는 확인 불가로 차단한다. 기존 원본·과거 copy의 정책은 별도로 유지한다.
 
+### 통합 요청 예약
+
+`GET /api/work/:id/integration`은 해당 업무의 보존된 `requests`와 활성 `active` 후보(없으면 null)를 반환한다. `POST /api/work/:id/integration`은 `{requestKey, confirmed:true, targetBranch, expectedWorkHead, expectedTargetHead, reviewedVersion}`을 받는다. 대상은 명시한 로컬 브랜치이며 임의 경로·명령·추가 필드는 허용하지 않는다.
+
+신규 요청은 검증 단계의 idle Git 업무, 최신 계획 검토, 필수 업무 검증 통과, 실제 업무 공간 등록·브랜치·공통 저장소와 두 HEAD를 확인한다. 업무 공간·공유 관리·대상/업무 ref의 점유와 영향 범위의 영속 미확인 Git 작업을 검사하는 짧은 잠금 아래 예약하며 다른 업무 공간과 별도 ref의 실행은 유지한다. 현재 선택한 확인 루트의 ID·고정 후보 경로와 용량을 확인하고 설치 Git의 예정 경로 사전 점검을 통과한 뒤 `queued` 의도를 저장한다. 후보는 별도 식별자로 `projects/<projectId>/integrations/<candidateId>/project`에 예약되며 기존 업무 경로와 대화는 유지된다. 이 API는 아직 후보 폴더·브랜치 생성, 결과 커밋·병합·반영을 실행하지 않는다.
+
+같은 업무의 같은 요청 키·내용은 현재 검토·HEAD·루트·용량 검사보다 먼저 저장된 요청을 재조회한다. 같은 키에 다른 내용은 409다. 공통 Git 저장소당 활성 후보 하나를 DB transaction으로 제한하며 failed·uncertain도 복구·명시적 취소 전에는 슬롯을 유지한다. applied·cancelled·removed 기록은 보존한다. 요청에는 확인한 업무/대상 HEAD·검토/소스 revision·업무 검증 참조를 남기고 후보의 `candidateCommit`은 null, `verificationRefs`는 빈 목록으로 저장한다. 업무 통과를 후보 통과로 사용하지 않으며 실제 후보 생성·변경 시 기준을 다시 검사해야 한다. Git 상태 조회와 DB 저장은 서로 다른 시스템이므로 외부 Git 변경까지 원자적으로 잠그지는 않는다.
+
 파일 변경 API는 대상 경로가 한 변경 문서 폴더에 한정되면 문서 범위를, 그 외에는 해당 실행 공간 범위를 점유한다. 같은 원본의 Alpha 문서 미확인 기록이 Beta 문서 저장을 일괄 차단하지 않는다. Git API는 index/HEAD·공유 관리/ref·통합 범위를 작업 종류에 맞춰 취득하며 새 intent의 첫 저장부터 scope/commonDir/refs/affectedRoots를 보존한다. 같은 실제 ref의 symbolic-ref 별칭도 같은 잠금으로 처리한다. 종료 미확인 프로세스는 사용자 확인만으로 성공 처리하지 않고 실제 종료와 등록·커밋을 확인할 때까지 차단한다.
 
 Git 업무의 계획 버전은 기존 검토 hash를 보존하면서 가져온 .openspec.yaml·source-ideas의 계획 revision도 비교한다. 추가 문서가 변경되면 기존 검토로 AI 구현을 시작할 수 없고 문서 목록에 포함해 명시적 재검토를 받는다. tasks 진행 체크만의 변경은 전체 문서 revision에서 계획 변경으로 계산하지 않는다.

@@ -213,6 +213,17 @@ export class WorkService {
   private assertVerificationUnchanged(work: Work, expectedWork: string, snapshot: ReturnType<ExecutionService['snapshot']>) {
     if (JSON.stringify(this.get(work.id)) !== expectedWork || JSON.stringify(this.execution.snapshot(work)) !== JSON.stringify(snapshot) || this.store.records(work.id, 'question').some(unresolvedQuestion) || work.reviewedVersion !== this.planVersion(this.get(work.id))) throw new ConflictException('검증 확인 중 업무·소스·계획 또는 질문이 변경되었습니다. 다시 확인해 주세요');
   }
+  async integrationReadiness(id: string, reviewedVersion: string) {
+    const work = this.get(id);
+    if (work.workspace?.kind !== 'git-worktree' || work.phase !== 'verification' || work.state !== 'idle' || !work.reviewedVersion || work.reviewedVersion !== reviewedVersion || work.reviewedVersion !== this.planVersion(work)) throw new ConflictException('검증 단계의 업무·최신 계획 검토·실행 종료를 먼저 확인해 주세요.');
+    const expected = JSON.stringify(work), snapshot = this.execution.snapshot(work), sourceRevision = snapshotRevision(snapshot);
+    await this.requireVerifications(work, sourceRevision);
+    this.assertVerificationUnchanged(work, expected, snapshot);
+    const results = this.execution.results(work, sourceRevision);
+    const workVerificationRefs = this.execution.commands(work).map(command => results.filter(row => row.commandId === command.id && row.scope === 'full').at(-1)!.id);
+    if (work.browserScenario) workVerificationRefs.push(this.store.records(id, 'browser-verification').at(-1)!.id);
+    return { work, sourceRevision, workVerificationRefs };
+  }
   private async requireVerifications(work: Work, revision?: string) {
     await this.browser.assertPassed(work);
     new FileResults(this.store).assertSourcePlan(work);

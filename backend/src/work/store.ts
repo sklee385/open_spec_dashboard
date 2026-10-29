@@ -14,6 +14,17 @@ export interface WorkWorkspace {
   sourcePlanRevision?: string; preparationPolicyVersion?: number; error?: string;
   preparationPolicyDigest?: string; localOnlyPaths?: string[];
 }
+/** A candidate is separate from WorkWorkspace: it never borrows a work branch or identity. */
+export interface IntegrationCandidate {
+  candidateId: string; executionPath: string; profileId: string; rootId: string; rootPath: string; managedPath: string; projectId: string;
+  candidateCommit: string | null; conflicts: string[]; verificationRefs: string[];
+}
+export interface IntegrationRequest extends IntegrationCandidate {
+  id: string; version: 1; requestKey: string; fingerprint: string; workId: string; projectPath: string; workspaceId: string; workExecutionPath: string;
+  commonDir: string; targetBranch: string; targetHead: string; workHead: string; reviewedVersion: string; sourceRevision: string; workVerificationRefs: string[];
+  status: 'queued' | 'preparing' | 'conflicted' | 'validating' | 'ready' | 'applying' | 'uncertain' | 'failed' | 'cancelled' | 'applied' | 'removed';
+  createdAt: string; updatedAt: string; appliedCommit?: string; error?: string;
+}
 export interface Work {
   id: string; sourceId: string; projectPath: string; changeName: string; requestKey: string;
   ideaIds: string[]; phase: string; state: string; threadId: string | null;
@@ -59,6 +70,7 @@ export class WorkStore implements OnApplicationShutdown {
   events(id: string, after = 0) { return (this.db.prepare('SELECT * FROM events WHERE work_id=? AND seq>? ORDER BY seq').all(id, after) as any[]).map(x => ({ seq: x.seq, workId: x.work_id, type: x.type, data: JSON.parse(x.data), createdAt: x.created_at })); }
   record(id: string, workId: string, kind: string, data: unknown) { this.db.prepare('INSERT INTO records(id,work_id,kind,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, workId, kind, JSON.stringify(data)); }
   records(workId: string, kind: string) { return (this.db.prepare('SELECT id,data FROM records WHERE work_id=? AND kind=? ORDER BY rowid').all(workId, kind) as any[]).map(x => ({ ...JSON.parse(x.data), id: x.id })); }
+  integrationRequests(): IntegrationRequest[] { return (this.db.prepare("SELECT id,data FROM records WHERE kind='integration-request' ORDER BY rowid").all() as { id: string; data: string }[]).map(row => ({ ...JSON.parse(row.data), id: row.id })); }
   rootReferences(rootId: string, rootPath: string) {
     const contains = (value: unknown): boolean => {
       if (!value || typeof value !== 'object') return false;

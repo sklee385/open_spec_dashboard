@@ -29,13 +29,15 @@ import { RemoteController, RemoteService } from './remote/service';
 import { WorkspaceSettingsService } from './work/workspace-settings.service';
 import { WorkspaceSettingsController } from './work/workspace-settings.controller';
 import { WorkspacesController } from './work/workspaces.controller';
+import { IntegrationController } from './work/integration.controller';
+import { IntegrationService } from './work/integration.service';
 
 @Controller()
 class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService] })
+@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService] })
 class AppModule {}
 
 export async function createApplication() {

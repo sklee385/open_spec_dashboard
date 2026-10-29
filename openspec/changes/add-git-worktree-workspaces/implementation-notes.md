@@ -232,3 +232,18 @@ $env:TMP = $env:TEMP
 
 - 그룹7.3/7.4는 사본 복사 무결성 raw digest와 빌드 산출물/캐시 및 tasks 체크 진행의 의미상 최신성을 구분해야 한다. 현재 보수적 stale 제한을 그대로 활성화·배포하지 않는다.
 - 그룹7.6 및9.2는 브라우저 cleanupStatus:uncertain의 영속 플래그만으로 영구 잠금이 남지 않도록 실제 소유 프로세스/Job의 PID·세대 등 재확인 근거 저장과 종료 관찰·복구 동선을 대조한다. 확인 불가를 무조건 해제하거나 타 프로세스를 종료해서는 안 된다. 실행이 종료됐다는 실제 증거로만 정리하며 기존 전반 상태 재확인/종료 UX와 연결한다.
+
+## 2026-10-29: 5.1 통합 요청·별도 후보 예약 완료
+
+- GET/POST /api/work/:id/integration을 추가했다. 엄격한 명시 요청·로컬 target branch·work/target HEAD·검토 버전과 현재 필수 검증 참조를 기록한다. 후보는 WorkWorkspace와 구분한 UUID/root/profile/path이며 현재 확인된 루트에 고정된다. verificationRefs는 빈 목록으로 시작하여 업무 통과를 후보 통과로 복사하지 않는다.
+- 동일 requestKey의 저장 결과 재조회는 현재 검토·HEAD·루트·용량·잠금·경로 검사보다 앞이다. 다른 내용의 같은 키는 거부한다. DB transaction에서 공통 저장소별 활성 후보를 하나로 제한하며 failed/uncertain도 슬롯을 유지하고 terminal 이력은 보존한다. 독립 SQLite writer 경합은 409로 구분한다.
+- 최신 업무/소스/계획/질문/필수 명령 및 현재 등록 브라우저 근거를 확인한다. 과거 폐기 명령·미등록 브라우저 결과는 요청의 검증 참조에 넣지 않는다. 실제 Git 등록·원본 경계·대상 tip을 재확인하고 새 후보 경로의 하드가드는 DB 예약 전에 검사한다.
+- 명세 리뷰가 발견한 P2(같은 공간 index/공유 관리/대상 ref 점유 또는 uncertain 중 예약 허용)를 실제 API RED로 재현했다. 신규 예약의 management + 업무 공간 + 업무/대상 ref 잠금으로 보강하고 finally 해제한다. 독립 B의 공간/파일은 막지 않으며 busy 상태의 기존 요청 replay도 유지한다.
+- 루트 직접 검증: 짧은 실행별 TEMP/TMP=C:/Windows/Temp에서 integration-request 전체10개 통과(245.73초), backend build, OpenSpec strict, diff 검사 모두 exit0. npm wrapper가 -t 필터를 전달하지 않아 의도한 일부 대신 해당 파일 전체를 수행했으며 성공 개수는 실제 전체10개다. 구현자도 전체10개(248.63초), 기존 coordinator/lock3파일32개 및 기존 관련5파일30개 통과를 보고했다. 명세/품질 재리뷰 추가 P1/P2 없음.
+- queued는 예약 의도일 뿐 실제 디렉터리·브랜치·stage·커밋·merge·반영은 하지 않는다. Git 상태와 DB를 완전히 원자화했다고 주장하지 않으며5.2/5.3은 실제 변경 전에 다시 검사한다. UI 동선/운영 활성화/배포는 여전히 후속이다.
+
+### 다음 단계 전 조회 지연 보강 근거
+
+- 독립 실제 관리 Git fixture(문서4개/코드1개)를2회 측정: path5회/313~314ms, documents5회/305~311ms, planVersion30회/1789~1868ms, WorkController.get79회/4966~4970ms, requireReviewedPlan10회/588~643ms, integrationReadiness88회/5389~6759ms. 예약한 setTimeout(0)도 같은 시간 지연돼 서버 이벤트 루프 차단을 확인했다.
+- 4.6의 최적화는 별도 /workspace 메타데이터 조회에만 적용했다. WorkRoom의 work GET과 일반 FileResults.gitReport는 여전히 중복 동기 수집이다. WorkRoom은 SSE 후 묶음 새로고침이며 모든 화면이5초 정기 poll이라고 단정하지 않는다.
+- 좁은 보강 계획: 한 동기 읽기 안의 문서 root/내용 일괄 수집, 동일 변경 보고서 및 명령 재사용, capturedRevision을 받고도 버리던 snapshot 계산 제거. 전역/요청 간 TTL 캐시는 쓰지 않고 시작/종료 소유 증명, mutation 직전 및 await 뒤 새 검증, native client.ready/resume 이후 두 번째 검토는 유지한다. 실제 개선 후 같은 fixture로 호출 수·타이머 지연을 재측정하며 잔여 동기 차단도 기록한다.
