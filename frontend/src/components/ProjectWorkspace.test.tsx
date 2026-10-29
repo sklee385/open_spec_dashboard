@@ -72,9 +72,40 @@ it('restores a persisted project draft after reload and retains its original CAS
   await waitFor(() => expect(mock.mock.calls.some(([, init]) => init?.method === 'PUT' && JSON.parse(String(init.body)).version === 'v1')).toBe(true));
 });
 const original = '{ "z": 1, "a": 2 }\r\n';
+it('shows verified workspace metadata and partial overlap warnings even without Git', async () => {
+  const mock = mockApi(), originalMock = mock.getMockImplementation()!;
+  mock.mockImplementation(async (url, init) => url.includes('/workspace') ? { ok: true, json: async () => ({ kind: 'copy', workId: 'one', executionPath: 'C:/work/one', baseCommit: null, workspaceBaselineCommit: null, branch: null, partial: true, overlaps: [{ workId: 'two', title: '다른 업무', paths: ['shared.txt'] }] }) } : url.includes('/git/status') ? { ok: true, json: async () => ({ available: false, reason: 'not git' }) } : originalMock(url, init));
+  render(<ProjectWorkspace sourceId="demo" workId="one" />);
+  expect(await screen.findByText('C:/work/one')).toBeInTheDocument();
+  expect(screen.getByText('복사 공간')).toBeInTheDocument();
+  expect(screen.getByText('shared.txt')).toBeInTheDocument();
+  expect(screen.getByText(/일부 공간의 변경을 확인하지 못했습니다/)).toBeInTheDocument();
+  expect(screen.getByText(/병합 성공 여부를 판정하지 않습니다/)).toBeInTheDocument();
+});
+it('explains Git worktree result commits and candidate verification without the copy apply hint', async () => {
+  const mock = mockApi(), originalMock = mock.getMockImplementation()!;
+  mock.mockImplementation(async (url, init) => url.includes('/workspace') ? { ok: true, json: async () => ({ kind: 'git-worktree', workId: 'one', executionPath: 'C:/work/git-one', baseCommit: 'base-commit', workspaceBaselineCommit: 'baseline-commit', branch: 'codex/work-one', overlaps: [], partial: false }) } : originalMock(url, init));
+  render(<ProjectWorkspace sourceId="demo" workId="one" />);
+  expect(await screen.findByText('baseline-commit')).toBeInTheDocument();
+  expect(screen.getByText('base-commit')).toBeInTheDocument();
+  expect(screen.getByText(/결과를 커밋한 뒤 후보 검증과 명시적 확정/)).toBeInTheDocument();
+  expect(screen.queryByText(/원본에 반영한 뒤 프로젝트 원본에서 커밋/)).toBeNull();
+});
+it('does not replace a new scope with metadata arriving from an old scope', async () => {
+  const mock = mockApi(), originalMock = mock.getMockImplementation()!;
+  let finish: (value: unknown) => void = () => {};
+  mock.mockImplementation((url, init) => url.includes('/workspace') && !url.includes('workId=') ? new Promise(resolve => { finish = resolve as typeof finish; }) : originalMock(url, init));
+  const view = render(<ProjectWorkspace sourceId="demo" />);
+  await waitFor(() => expect(mock.mock.calls.some(([url]) => url.endsWith('/workspace'))).toBe(true));
+  view.rerender(<ProjectWorkspace sourceId="demo" workId="new" />);
+  expect(await screen.findByText('C:/fixture')).toBeInTheDocument();
+  await act(async () => finish({ ok: true, json: async () => ({ kind: 'original', executionPath: 'old-metadata', overlaps: [], partial: false }) }));
+  expect(screen.queryByText('old-metadata')).toBeNull();
+});
 function mockApi(failSave = false) {
   const mock = vi.fn(async (url: string, init?: RequestInit): Promise<{ ok: boolean; status?: number; json: () => Promise<unknown> }> => {
     let body: unknown = {};
+    if (url.includes('/workspace')) body = { kind: url.includes('workId=') ? 'copy' : 'original', workId: null, executionPath: 'C:/fixture', baseCommit: null, workspaceBaselineCommit: null, branch: 'main', overlaps: [], partial: false };
     if (url.includes('/tree')) body = { entries: [{ name: 'a.json', path: 'a.json', kind: 'file', version: 'v1' }, { name: 'b.txt', path: 'b.txt', kind: 'file' }], nextCursor: null };
     if (url.includes('/git/status')) body = { available: true, branch: 'main', head: 'abc', token: 't', entries: [], remotes: [], ahead: 0, behind: 0, progress: null };
     if (url.includes('/git/branches')) body = { branches: [] };

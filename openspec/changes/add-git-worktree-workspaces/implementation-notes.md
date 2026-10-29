@@ -208,3 +208,13 @@ $env:TMP = $env:TEMP
 - 구현자 관련 회귀 106개와 실제 Windows 브라우저/CLI/Job 정리 묶음을 확인했다. 최종 품질 수정 후 루트가 직접 수행한 명령: OPENSPEC_BROWSER_DIRECTORY를 기존 D: 브라우저 런타임으로 지정하고 scripts/npm.ps1 run test:run --workspace backend -- verification-snapshot browser-snapshot-service browser-verification-action-race browser-service browser-mailbox. 결과 6파일 50개 통과, 20.23초, exit 0. 이어 backend build, OpenSpec strict, git diff --check 성공.
 - 최초 루트 샌드박스 검사는 esbuild 상위 경로 접근 거부로 시작하지 못했다. 권한/ACL 변경 없이 자동 검토된 정상 실행으로 재검증했으며 이를 제품 실패나 통과로 계산하지 않았다. D: 런타임은 읽기 전용 재사용하고 원본 코드/DB/운영 프로세스는 변경하지 않았다.
 - 현재 제한: 원본 밖 DATA_DIR, 링크 의존성 차단, 파일512MiB/전체4GiB/10만항목/단계120초 예산. 산출물·캐시와 tasks 체크 진행도 현재 원시 변경으로 보수적 stale 처리한다. 그룹7.3/7.4에서 검토된 산출물·빌드 출처 및 의미상 최신성을 연결해야 한다. OS 악성 코드 샌드박스 보장이 아니다. 신규 워크트리 기본값은 여전히 비활성이고 전체 54개 완료·운영 반영·배포를 의미하지 않는다.
+
+## 2026-10-29: 4.6 소스/Git 공간 표시와 겹침 경고 완료
+
+- GET /api/projects/:sourceId/workspace에서 서버가 확인한 original/copy/git-worktree 종류·실행 경로·기준 커밋·브랜치·겹침·부분 확인·측정 시각을 반환한다. 기존 sourceId/workId 관계와 실제 공간 소유 검사를 유지한다.
+- 같은 원본의 다른 활성 업무 baseline 이후 변경(커밋 포함) 및 원본 미커밋 경로의 교집합을 표시한다. 소스 본문은 응답하지 않고, 확인 불가와 비Git 원본 등은 partial로 구분한다. 겹침을 병합 성공 판정으로 쓰지 않는다.
+- 기존 초안/공간 전환 보호를 유지하고 Git 업무에는 결과 커밋→후보 검증→명시적 확정 안내를 제공한다. copy 업무 안내와 구분한다.
+- 리뷰에서 발견한 polling 성능 문제를 보강했다. FileResults.report의 전체 동기 소스 수집을 제거하고 Git은 비동기 name-only/untracked, copy는 SQLite 경로/해시 투영과 비동기 파일 비교를 사용한다. 겹침 수집은 1,000항목·8MiB·3초 공유 예산과 명령 출력 제한을 가지며 큰 파일/링크/변경/한도 초과는 partial로 반환한다. 기존 소유/등록 검사와 Git 상태 조회의 별도 처리 시간은 이 예산과 구분한다.
+- 명세 및 품질 리뷰에서 최종 추가 P1/P2 없음. 루트 직접 재검증: TEMP/TMP=C:/Windows/Temp, scripts/npm.ps1 run test:run --workspace backend -- project-workspace-metadata project-api workspaces-api project-coordinator workspace-service worktree-create → 6파일55개 통과(56.41초). frontend의 ProjectWorkspace SourceManagementApp → 2파일39개 통과(6.02초). 양쪽 build와 diff 검사 통과. frontend build의 기존 큰 번들 경고는 남는다.
+- 기본 임시 경로에서 executionPath223자일 때 신규/기존 Git 생성 모두 '$GIT_DIR too big'로 실패했다. 짧은 실행별 OS 임시 경로에서 기존 worktree-create8개도 통과했다. 전역 설정·ACL·실제 선택 폴더·원본 저장소는 변경하지 않았다. 별도 읽기 전용 조사에서 설치 Git2.54.0.windows.1의 checkout child explicit GIT_DIR 하드가드를 확인했으며, 예약 전에 이 오류를 검출하여 새 업무가 영구 경로에 고정되지 않도록 후속 회귀 보강한다.
+- Codex 내장 브라우저의 실제 화면 검증은 아직 9.5 미완료다. 운영 앱/13003 재시작·원본 반영·활성화·배포는 수행하지 않았다.

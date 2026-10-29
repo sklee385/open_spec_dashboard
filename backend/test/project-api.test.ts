@@ -37,6 +37,14 @@ it('등록 프로젝트의 원문과 파일 트리를 업무 실행 없이 조�
   expect((await request('projects/demo/file?path=../config.json')).status).toBe(400);
 });
 
+it('공간 메타데이터를 원본 기준으로 조회하고 다른 프로젝트 업무를 거부한다', async () => {
+  expect((await request('projects/demo/workspace')).data).toMatchObject({ kind: 'original', workId: null, executionPath: root });
+  const store = app.get(WorkStore), foreign = { ...store.get(work.id), id: 'foreign-metadata', requestKey: 'foreign-metadata', sourceId: 'other' };
+  store.save(foreign);
+  try { expect((await request(`projects/demo/workspace?workId=${foreign.id}`)).status).toBe(404); }
+  finally { store.db.prepare('DELETE FROM work WHERE id=?').run(foreign.id); }
+});
+
 it('지원하는 큰 텍스트도 JSON body 한도에 막히지 않고 버전 기반 저장한다', async () => {
   const doc = (await request('projects/demo/file?path=code.json')).data;
   const content = 'x'.repeat(120000);

@@ -1,4 +1,5 @@
 export type ProjectEntry = { path: string; name: string; kind: 'file' | 'directory' | 'boundary'; version?: string; reason?: string };
+export type ProjectWorkspaceMetadata = { workId: string | null; kind: 'original' | 'copy' | 'git-worktree'; executionPath: string; baseCommit: string | null; workspaceBaselineCommit: string | null; branch: string | null; head?: string | null; overlaps: { workId: string | null; title: string; paths: string[] }[]; partial: boolean; observedAt?: string };
 export type ProjectPage = { entries: ProjectEntry[]; nextCursor: string | null; ignoredUnavailable?: boolean };
 export type ProjectFile = { path: string; content: string | null; version: string; size: number; encoding: string | null; bom: boolean; newline: string; editable: boolean; reason?: string };
 export type GitEntry = { path: string; originalPath?: string; index: string; worktree: string; untracked: boolean; conflicted: boolean };

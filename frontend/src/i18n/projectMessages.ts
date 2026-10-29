@@ -1,6 +1,11 @@
 export const enProjectCopy = {
+  'project.workspaceKind': 'Workspace kind', 'project.kind.original': 'Project original', 'project.kind.copy': 'Copy workspace', 'project.kind.git-worktree': 'Git worktree', 'project.executionPath': 'Actual workspace path',
+  'project.startingCommit': 'Starting commit', 'project.workspaceBaseline': 'Workspace comparison baseline', 'project.snapshotBaseline': 'Saved file snapshot', 'project.unknown': 'Not available',
+  'project.overlaps': 'Overlapping changed files', 'project.overlapAdvisory': 'This snapshot warns about shared changed paths. It does not determine whether merging will succeed.',
+  'project.overlapPartial': 'Changes in some workspaces could not be checked. More overlapping files may exist.', 'project.noOverlaps': 'No overlapping changed paths found in the checked workspaces.', 'project.workspaceUnavailable': 'Workspace details could not be checked. Refresh to try again.',
   'project.scope': 'Source workspace', 'project.originalScope': 'Project original', 'project.workScope': 'Isolated work',
   'project.workScopeHint': 'Edit AI code and run verification in this work space. Apply it to the original project from the work screen, then commit in Project original.',
+  'project.gitWorkScopeHint': 'Commit the work results before candidate verification and explicit confirmation. Candidate integration is not available yet.',
   'project.protectedIndex': 'Excluded index entries make this commit preview incomplete. Resolve them externally and refresh.', 'project.hiddenChanges': 'Some changed paths are excluded from this view.',
   'project.reconcile': 'Inspect actual Git / remote state', 'project.evidence': 'Observed repository state',
   'project.choose': 'Choose a project to browse source and Git.', 'project.title': 'Source · Git', 'project.tree': 'Files', 'project.file': 'Source', 'project.git': 'Git',
@@ -25,8 +30,13 @@ export const enProjectCopy = {
   'project.base': 'Comparison base', 'project.original': 'Original path', 'project.fileUnavailable': 'File content unavailable', 'project.copied': 'Original copied', 'project.noUpstream': 'An existing upstream is required.',
 } as const;
 export const koProjectCopy: Record<keyof typeof enProjectCopy, string> = {
+  'project.workspaceKind': '공간 종류', 'project.kind.original': '프로젝트 원본', 'project.kind.copy': '복사 공간', 'project.kind.git-worktree': 'Git 워크트리', 'project.executionPath': '실제 작업 경로',
+  'project.startingCommit': '시작 커밋', 'project.workspaceBaseline': '업무 변경 비교 기준', 'project.snapshotBaseline': '저장된 파일 스냅샷', 'project.unknown': '확인 불가',
+  'project.overlaps': '겹치는 변경 파일', 'project.overlapAdvisory': '현재 확인한 변경 경로의 겹침 경고이며 병합 성공 여부를 판정하지 않습니다.',
+  'project.overlapPartial': '일부 공간의 변경을 확인하지 못했습니다. 추가로 겹치는 파일이 있을 수 있습니다.', 'project.noOverlaps': '확인한 공간에서 겹치는 변경 경로가 없습니다.', 'project.workspaceUnavailable': '공간 정보를 확인하지 못했습니다. 새로고침해 다시 확인하세요.',
   'project.scope': '소스 작업 위치', 'project.originalScope': '프로젝트 원본', 'project.workScope': '업무 격리 공간',
   'project.workScopeHint': '업무 공간에서 AI 코드 편집·검증을 진행하세요. 업무 화면에서 원본에 반영한 뒤 프로젝트 원본에서 커밋하세요.',
+  'project.gitWorkScopeHint': '업무 결과를 커밋한 뒤 후보 검증과 명시적 확정을 거쳐 원본에 반영합니다. 후보 통합 기능은 아직 제공되지 않습니다.',
   'project.protectedIndex': '제외된 인덱스 항목이 있어 전체 커밋 미리보기가 불완전합니다. 외부에서 정리한 뒤 새로고침하세요.', 'project.hiddenChanges': '이 화면에서 제외된 변경 경로가 있습니다.',
   'project.reconcile': '실제 Git·원격 상태 확인', 'project.evidence': '확인한 저장소 상태',
   'project.choose': '소스·Git을 탐색할 프로젝트를 선택하세요.', 'project.title': '소스·Git', 'project.tree': '파일', 'project.file': '원문', 'project.git': 'Git',

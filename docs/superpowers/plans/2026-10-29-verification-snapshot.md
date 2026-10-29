@@ -34,4 +34,4 @@ Files: `backend/src/browser/browser.service.ts`, `backend/test/browser-snapshot-
 - [x] 명세 준수 검토와 코드 품질 검토를 각각 수행하고 중요한 문제를 수정한다.
 - [x] `./scripts/npm.ps1 run build --workspace backend`, `./scripts/node.ps1 node_modules/@fission-ai/openspec/bin/openspec.js validate add-git-worktree-workspaces --strict`, `git diff --check`를 실행한다.
 - [x] 실제 결과를 implementation-notes.md에 기록한 후에만 4.5를 체크한다. 운영 앱/13003 서버를 재시작하지 않는다.
-- [ ] 관련 변경만 한국어 커밋으로 저장하고 기존 계획의 4.6을 이어간다. 모든 54개 완료나 배포 성공으로 확대 보고하지 않는다.
+- [x] 관련 변경만 한국어 커밋으로 저장하고 기존 계획의 4.6을 이어간다. 모든 54개 완료나 배포 성공으로 확대 보고하지 않는다.

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { projectApi as unscopedProjectApi, ProjectApiError, projectQuery } from '../lib/projectApi';
-import type { GitStatus, GitOperation, GitDetail, GitDiff, OperationKind, ProjectEntry, ProjectFile, ProjectPage, GitCommit, GitReconciliation } from '../types/project';
+import type { GitStatus, GitOperation, GitDetail, GitDiff, OperationKind, ProjectEntry, ProjectFile, ProjectPage, GitCommit, GitReconciliation, ProjectWorkspaceMetadata } from '../types/project';
 import { useI18n } from '../i18n/context';
 import { projectDraftKey, readDocumentDraft, useLocalDraft } from './useLocalDraft';
 import { draftStorage } from '../lib/draftStorage';
@@ -13,6 +13,7 @@ function persistOperation(resourceKey: string, value: GitOperation) {
 export function useProjectWorkspace(sourceId: string | null, active = true, workId?: string | null) {
   const { t } = useI18n();
   const [draftNotice, setDraftNotice] = useState(''), [draftError, setDraftError] = useState('');
+  const [workspace, setWorkspace] = useState<ProjectWorkspaceMetadata | null>(null), [workspaceUnavailable, setWorkspaceUnavailable] = useState(false);
   const resourceKey = workId ? JSON.stringify([sourceId, workId]) : sourceId ?? '';
   const viewKey = `project-view:${JSON.stringify([sourceId, workId ?? null])}`;
   const projectApi = useCallback(<T>(id: string, endpoint: string, body?: unknown, method = 'POST') => unscopedProjectApi<T>(id, endpoint, body, method, workId), [workId]);
@@ -49,7 +50,13 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     statusInFlight.current = resourceKey;
     const gen = generation.current;
     try {
-      const value = await projectApi<GitStatus>(sourceId, '/git/status');
+      const [metadata, git] = await Promise.allSettled([projectApi<ProjectWorkspaceMetadata>(sourceId, '/workspace'), projectApi<GitStatus>(sourceId, '/git/status')]);
+      if (valid(sourceId, gen)) {
+        const available = metadata.status === 'fulfilled' && ['original', 'copy', 'git-worktree'].includes(metadata.value.kind);
+        setWorkspace(available && metadata.status === 'fulfilled' ? metadata.value : null); setWorkspaceUnavailable(metadata.status === 'rejected');
+      }
+      if (git.status === 'rejected') throw git.reason;
+      const value = git.value;
       if (valid(sourceId, gen)) setStatus(value);
       if (value.available) {
         const list = await projectApi<{ branches: { name: string; current: boolean }[] }>(sourceId, '/git/branches');
@@ -79,7 +86,7 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     source.current = sourceId;
     // Reset the remote-resource snapshot when its source identity changes.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    generation.current++; fileRequest.current++; setEntries([]); setTreePages({}); setDirectory(''); setFile(null); setDraft(''); setEditing(false); setLatest(null); setStatus(null); setError(''); setDetail(null); setDiff(null); setHistorical(null); setHistory([]); setBranches([]); setOperation(null); busyRef.current = false; setBusy(false);
+    generation.current++; fileRequest.current++; setWorkspace(null); setWorkspaceUnavailable(false); setEntries([]); setTreePages({}); setDirectory(''); setFile(null); setDraft(''); setEditing(false); setLatest(null); setStatus(null); setError(''); setDetail(null); setDiff(null); setHistorical(null); setHistory([]); setBranches([]); setOperation(null); busyRef.current = false; setBusy(false);
     if (!sourceId) return;
     const gen = generation.current;
     let saved: string | null = null;
@@ -161,5 +168,5 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     } catch (err) { if (valid(sourceId, gen)) report(err); return false; }
   };
   const reconcile = async () => { if (!sourceId || !operation || busyRef.current) return; const gen = generation.current; busyRef.current = true; setBusy(true); try { const response = await projectApi<GitReconciliation>(sourceId, `/git/operations/${encodeURIComponent(operation.id)}/reconcile`, { confirmed: true }); if (valid(sourceId, gen)) { const value = { ...response.operation, evidence: response.evidence }; setOperation(value); setStatus(response.status); persistOperation(resourceKey, value); } } catch (err) { if (valid(sourceId, gen)) report(err); } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } } };
-  return { entries, treePages, directory, cursor, query, setQuery, hidden, setHidden, ignoredUnavailable, loadTree, file, draft, setDraft, editing, setEditing, latest, dirty, error, draftNotice, draftError, setError, busy, status, branches, history, historyCursor, loadHistory, detail, openDetail, diff, historical, showDiff, showHistorical, operation, run, refresh, openFile, save, discard, mutate, clearFile, reconcile, moveEntry };
+  return { workspace, workspaceUnavailable, entries, treePages, directory, cursor, query, setQuery, hidden, setHidden, ignoredUnavailable, loadTree, file, draft, setDraft, editing, setEditing, latest, dirty, error, draftNotice, draftError, setError, busy, status, branches, history, historyCursor, loadHistory, detail, openDetail, diff, historical, showDiff, showHistorical, operation, run, refresh, openFile, save, discard, mutate, clearFile, reconcile, moveEntry };
 }

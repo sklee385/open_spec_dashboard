@@ -12,6 +12,7 @@ import { assertOperationKind } from './git-operations';
 import { projectCoordinator } from './coordinator';
 import { workspaceSourcePolicy } from '../work/workspace-file-policy';
 import { fileOperation, gitOperation } from './operation-scope';
+import { ProjectWorkspaceMetadata } from './workspace-metadata';
 
 function canonical(root: string) { try { root = realpathSync(root); } catch { root = resolve(root); } return process.platform === 'win32' ? root.toLowerCase() : root; }
 
@@ -73,6 +74,7 @@ export class ProjectController implements OnModuleDestroy {
   @Post('entries/move') move(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any) { return this.mutate(source, workId, [body?.path, body?.target], root => this.files.move(root, body)); }
   @Delete('file') remove(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any) { return this.mutate(source, workId, [body?.path], root => this.files.remove(root, body)); }
   @Get('git/status') status(@Param('sourceId') source: string, @Query('workId') workId: string | undefined) { return this.query(() => this.git.status(this.root(source, workId))); }
+  @Get('workspace') workspace(@Param('sourceId') source: string, @Query('workId') workId: string | undefined) { return this.query(() => new ProjectWorkspaceMetadata(this.resolver, this.store, this.git).read(source, workId)); }
   @Get('git/diff') diff(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string, @Query('side') side: 'staged' | 'unstaged' | 'commit', @Query('commit') commit?: string) {
     return this.query(() => this.git.diff(this.root(source, workId), { path, side, commit }));
   }
