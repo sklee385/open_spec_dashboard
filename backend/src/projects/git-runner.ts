@@ -19,8 +19,8 @@ export function gitEnvironment() {
     return env;
 }
 /** Bounded read-only checks for existing synchronous workspace path consumers. */
-export function readGitBufferSync(root: string, args: string[]) {
-    try { return execFileSync('git', ['--no-optional-locks', '--literal-pathspecs', ...args], { cwd: root, windowsHide: true, env: gitEnvironment(), timeout: 10000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
+export function readGitBufferSync(root: string, args: string[], input?: Buffer) {
+    try { return execFileSync('git', ['--no-optional-locks', '--literal-pathspecs', ...args], { cwd: root, windowsHide: true, env: gitEnvironment(), timeout: 10000, maxBuffer: 4 * 1024 * 1024, input, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] }); }
     catch { throw new GitError('Git 공간 등록을 확인할 수 없습니다. 실제 상태 복구가 필요합니다.', 409); }
 }
 export function readGitSync(root: string, args: string[]) { return readGitBufferSync(root, args).toString('utf8'); }

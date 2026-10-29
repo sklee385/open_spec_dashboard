@@ -257,3 +257,11 @@ $env:TMP = $env:TEMP
 - 동일4문서 최소 fixture2회: planVersion30→10Git/551~561ms, GET79→36Git/1993~2003ms, readiness88→34Git/1907~1949ms. timer 지연도 같은 시간으로 잔여 동기 block은 남는다. requireReviewedPlan의 별도 안전 경계10Git/약0.55~0.64초는 유지했다.
 - 변경100파일+full/work 모두 기본 명령 유도 fixture 최종2회: GET146Git/8037·8111ms(cat-file100회), readiness44Git/2511·2584ms(cat-file0회). 큰 diff GET의 파일별 동기 blob 조회는 아직 해결되지 않았다. 출시 전 다음 좁은 보강에서 bounded cat-file batch로 바꾼다. 본 변경만으로 앱의 모든 멈춤이 해소됐다고 보고하지 않는다.
 - 독립 측정 스크립트 .tools/git-read-audit.cjs와 임시 fixture만 사용했고 실제 모델/실사용DB/운영 프로세스는 건드리지 않았다. 원본D 변경·13003 재시작·운영 활성화·배포 없음. 기존4.4의 성능 회귀 보강으로 완료 개수26/54는 유지한다.
+
+## 2026-10-29: 기준 blob 일괄 조회와 메모리 상한 보강
+
+- 기준 파일별 cat-file 실행을 읽기 전용 cat-file --batch로 묶었다. 서버가 관찰한 OID/크기만 입력하며 입력32KiB·출력3MiB 단위로 나눈다. 기존 runner의 시간/출력 제한·환경 격리를 보존한다. 헤더·종류·크기·순서·본문 구분·전체 길이를 검증하고 누락·손상·추가 출력은 실패 처리한다.
+- 전체 batch 검증 뒤 필수 소비 콜백으로 해시·문자열 또는 binary null 상태로 즉시 변환한다. 리뷰에서 발견한 모든 batch의 원시 Buffer 누적을 제거했다. 동일 blob의 경로별 mode/CRLF/tasks 체크 정규화와 기존 소유·소스 재확인은 유지한다. 전역 캐시는 없다.
+- 변경100파일 실제 fixture의 GET은146→47 Git 호출, cat-file100→1회로 감소했다. 독립 두 측정은 약2.75~2.91초였으며 동기 소유 검사 등 잔여 차단은 남는다. 앱의 모든 멈춤 해소를 의미하지 않는다.
+- 구현자 관련8파일87개 통과(68.14초). 루트 최종 직접검증: TEMP/TMP=C:/Windows/Temp에서 project node로 vitest run git-blobs worktree-result-batching work-read-performance →3파일45개 통과(27.52초), 이어 backend tsc exit0. OpenSpec strict 및 diff 검사 성공. 메모리 수정 후 명세·품질 재검토 모두 추가 P1/P2 없음.
+- 완료 개수26/54를 유지한다. 원본D·운영 DB·실행 서버·활성화·배포는 변경하지 않았다.

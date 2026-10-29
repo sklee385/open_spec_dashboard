@@ -7,7 +7,8 @@ import { within } from '../files';
 import { Work, WorkStore } from './store';
 import { WorkspaceService } from './workspace.service';
 import type { WorkspaceSettingsService } from './workspace-settings.service';
-import { readGitSync, readGitBufferSync } from '../projects/git-runner';
+import { readGitSync } from '../projects/git-runner';
+import { readGitBlobsSync } from '../projects/git-blobs';
 import { collectWorkspaceDocuments } from './workspace-documents';
 import { managedPrivatePath, workspaceResourcePath } from './workspace-file-policy';
 export { localSecretPath } from './workspace-file-policy';
@@ -172,6 +173,10 @@ export class FileResults {
     }
     const paths = new Set([...readGitSync(root, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', baseline, '--']).split('\0'), ...readGitSync(root, ['ls-files', '--others', '--exclude-standard', '-z']).split('\0')].filter(path => path && !workspaceExcluded(work, path)));
     if (paths.size > 10000) throw new ConflictException('업무 변경 파일 조회 한도를 초과했습니다.');
+    const blobs = readGitBlobsSync(root, [...paths].flatMap(path => { const old = metadata.get(path); return old && old.size < 200000 ? [old] : []; }), (bytes): FileState => {
+      const binary = bytes.includes(0), hash = digest(bytes);
+      return { hash, rawHash: hash, content: binary ? null : bytes.toString('utf8'), availability: binary ? 'binary' : 'text' };
+    });
     const normalized = (path: string, file: FileState): FileState => {
       if (file.content === null) return file;
       let content = file.content.replaceAll('\r\n', '\n'); if (/(^|\/)tasks\.md$/.test(path)) content = content.replace(/- \[[xX ]\]/g, '- [ ]');
@@ -182,8 +187,7 @@ export class FileResults {
       if (old) {
         if (old.size >= 200000) before[path] = { hash: `git:${old.blob}`, rawHash: `git:${old.blob}`, content: null, availability: 'size-limit', mode: old.mode };
         else {
-          const bytes = readGitBufferSync(root, ['cat-file', 'blob', old.blob]), binary = bytes.includes(0);
-          before[path] = normalized(path, { hash: digest(bytes), rawHash: digest(bytes), content: binary ? null : bytes.toString('utf8'), availability: binary ? 'binary' : 'text', mode: old.mode });
+          before[path] = normalized(path, { ...blobs.get(old.blob)!, mode: old.mode });
         }
       }
       if (files[path]) after[path] = normalized(path, files[path]);
