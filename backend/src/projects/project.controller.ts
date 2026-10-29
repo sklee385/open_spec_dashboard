@@ -10,19 +10,25 @@ import { ProjectFiles } from './files';
 import { ProjectGit, type GitOperation, type OperationBody } from './git';
 import { assertOperationKind } from './git-operations';
 import { projectCoordinator } from './coordinator';
+import { workspaceSourcePolicy } from '../work/workspace-file-policy';
+import { fileOperation, gitOperation } from './operation-scope';
 
 function canonical(root: string) { try { root = realpathSync(root); } catch { root = resolve(root); } return process.platform === 'win32' ? root.toLowerCase() : root; }
 
 @Controller('projects/:sourceId')
 export class ProjectController implements OnModuleDestroy {
-  private readonly files = new ProjectFiles();
-  private readonly git = new ProjectGit({ dataDir: resolve(process.env.DATA_DIR || '../.data') });
+  private readonly files: ProjectFiles;
+  private readonly git: ProjectGit;
   private readonly coordinator;
   private readonly starting = new Map<string, { fingerprint: string; promise: Promise<GitOperation> }>();
   constructor(@Inject(ProjectResolver) private readonly resolver: ProjectResolver,
     @Inject(WorkStore) private readonly store: WorkStore,
     @Inject(LegacyService) private readonly legacy: LegacyService,
-    @Inject(DesktopLifecycle) private readonly lifecycle: DesktopLifecycle) { this.coordinator = projectCoordinator(store); }
+    @Inject(DesktopLifecycle) private readonly lifecycle: DesktopLifecycle) {
+      this.coordinator = projectCoordinator(store);
+      const sourcePolicy = workspaceSourcePolicy(store);
+      this.files = new ProjectFiles(sourcePolicy); this.git = new ProjectGit({ dataDir: resolve(process.env.DATA_DIR || '../.data'), sourcePolicy, checkRecovery: root => this.coordinator.assertRecovery({ kind: 'workspace', root }) });
+    }
 
   private async query<T>(run: () => T | Promise<T>): Promise<T> {
     try { return await run(); }
@@ -48,8 +54,7 @@ export class ProjectController implements OnModuleDestroy {
   private async mutate<T>(sourceId: string, workId: string | undefined, paths: string[], run: (root: string) => T | Promise<T>) {
     return this.query(async () => {
       const root = this.root(sourceId, workId);
-      await this.git.assertReady(root);
-      const release = this.coordinator.acquire(root);
+      const release = this.coordinator.acquireOperation(fileOperation(root, paths));
       try { const result = await run(root); this.changed(root, paths); return result; }
       finally { release(); }
     });
@@ -89,7 +94,7 @@ export class ProjectController implements OnModuleDestroy {
         // A lost HTTP response can also mean the request never reached the server.
         // Observe under the same mutation lock; never replay a client request key.
         await this.git.assertReady(root);
-        const release = this.coordinator.acquire(root);
+        const release = this.coordinator.acquireOperation({ kind: 'workspace', root });
         try {
           const status = await this.git.status(root);
           if (status.progress) throw new ConflictException('진행 중인 Git 작업을 먼저 정리해 주세요');
@@ -118,16 +123,17 @@ export class ProjectController implements OnModuleDestroy {
   private async begin(root: string, body: OperationBody) {
       const existing = await this.git.findExisting(root, body);
       if (existing) return existing;
-      const release = this.coordinator.acquire(root);
+      const request = gitOperation(root, body), resources = this.coordinator.operationPlan(request);
+      const release = this.coordinator.acquireOperation(request);
       let counted = true; this.lifecycle.requests++;
       const settle = async (operation?: GitOperation) => {
         try {
           if (operation && ['pull', 'switch-branch'].includes(operation.kind)) this.changed(root);
-          if (operation?.status === 'uncertain') this.coordinator.block(root);
+          // The durable intent already preserves its exact affected scopes.
         } finally { if (counted) { counted = false; this.lifecycle.requests--; release(); } }
       };
       try {
-        const operation = await this.git.start(root, body, { onSettled: settle });
+        const operation = await this.git.start(root, body, { onSettled: settle, scope: { scope: request.kind, commonDir: resources[0]?.commonDir, refs: resources.filter(resource => resource.kind === 'ref').map(resource => resource.ref!), affectedRoots: [root, ...(request.spaces ?? [])].filter((value, index, all) => all.indexOf(value) === index) } });
         // Idempotent replay returns a recorded result and does not invoke the hook.
         if (operation.status !== 'running') await settle();
         return operation;

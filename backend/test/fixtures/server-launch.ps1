@@ -25,8 +25,9 @@ try {
     if (-not [LaunchJobProbe]::SetInformationJobObject($taskJob, 9, $taskLimits, 144)) { throw '테스트 Job 설정 실패' }
     if (-not [LaunchJobProbe]::AssignProcessToJobObject($taskJob, (Get-Process -Id $PID).Handle)) { throw '테스트 부모 Job 연결 실패' }
     $env:CONFIG_PATH = Join-Path $Directory 'isolated config.json'
+    $env:WORKSPACE_ROOT = Join-Path $Directory '업무 공간'
     $env:DESKTOP_TOKEN = 'launch-test-private-value'
-    $taskProcessId = & $Launcher -FilePath $Runtime -Arguments '-e "console.log(process.pid); console.log(process.env.CONFIG_PATH); console.error(''stderr-ready''); setTimeout(() => {}, 60000)"' -WorkingDirectory $Directory -StandardOutput (Join-Path $Directory 'stdout.log') -StandardError (Join-Path $Directory 'stderr.log')
+    $taskProcessId = & $Launcher -FilePath $Runtime -Arguments '-e "console.log(process.pid); console.log(process.env.CONFIG_PATH); console.log(process.env.WORKSPACE_ROOT); console.error(''stderr-ready''); setTimeout(() => {}, 60000)"' -WorkingDirectory $Directory -StandardOutput (Join-Path $Directory 'stdout.log') -StandardError (Join-Path $Directory 'stderr.log')
     $taskProcess = Get-Process -Id $taskProcessId
     $taskInJob = $false
     if (-not [LaunchJobProbe]::IsProcessInJob($taskProcess.Handle, $taskJob, [ref]$taskInJob)) { throw '프로세스 Job 확인 실패' }
@@ -43,6 +44,7 @@ try {
     if ((Get-Content (Join-Path $Directory 'stdout.log') -Raw) -notmatch "$taskProcessId") { throw 'stdout 로그 전달 실패' }
     if ((Get-Content (Join-Path $Directory 'stderr.log') -Raw) -notmatch 'stderr-ready') { throw 'stderr 로그 전달 실패' }
     if (-not (Get-Content (Join-Path $Directory 'stdout.log') -Raw).Contains($env:CONFIG_PATH)) { throw '사용자 실행 환경이 전달되지 않았습니다.' }
+    if (-not (Get-Content (Join-Path $Directory 'stdout.log') -Raw).Contains($env:WORKSPACE_ROOT)) { throw 'WORKSPACE_ROOT 실행 환경이 전달되지 않았습니다.' }
     if (-not $ExpectAttached -and (Get-Content (Join-Path $Directory 'stdout.log.launch.json') -Raw).Contains($env:DESKTOP_TOKEN)) { throw '인증 정보가 시작 기록에 평문으로 저장되었습니다.' }
     if ($ExpectAttached) { 'old launcher inherits the command job' } else { 'independent process and redirected logs verified' }
 } finally {

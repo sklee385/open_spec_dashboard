@@ -23,6 +23,9 @@ import { backgroundBrowserTool, backgroundToolResponse } from '../browser/browse
 import { localRuntimeDirectory } from '../runtime';
 import { desktopHealth } from '../desktop/health';
 import { addNativeRecoveryHistory, recoveryContext } from './recovery-context';
+import { aiExecutionContext, aiScopeInstructions } from '../work/ai-context';
+import { WorkspaceService } from '../work/workspace.service';
+import { bindReviewedPlan } from '../work/reviewed-plan';
 const browserTools = [askUserTool, edgeBrowserTool, backgroundBrowserTool];
 const childItems = (turns: any[]): any[] => turns.flatMap(turn => Array.isArray(turn.items) ? turn.items.filter((item: any) => ['collabAgentToolCall', 'subAgentActivity'].includes(item.type)) : []);
 function hasUnconfirmedChildren(turns: any[]) {
@@ -163,7 +166,8 @@ export class CodexService implements OnModuleDestroy {
     }
     if (work.state === 'recovery-required' && !work.threadId) throw new ConflictException('대화 생성 결과가 불명확합니다. 새 대화를 자동 생성하지 않습니다');
     new WorkRecovery(this.store).assertWritableFolder(work, this.executionCwd(work, phase));
-    projectCoordinator(this.store).assertWorkCanStart(work);
+    projectCoordinator(this.store).assertActivityCanStart(work, phase || work.phase);
+    if (phase) work.phase = phase;
     const token = Symbol(id);
     this.stopped.delete(id); this.locks.add(id); work.executionUnconfirmed = false; work.state = 'connecting'; this.store.save(work);
     try {
@@ -179,19 +183,16 @@ export class CodexService implements OnModuleDestroy {
         this.loaded.add(work.threadId);
       }
       if (generation !== client.generation) throw new Error('Codex 연결 세대가 변경되어 실행 결과 확인이 필요합니다');
-      if (phase) work.phase = phase;
       if (['implementation', 'verification'].includes(work.phase)) this.requireReviewedPlan(this.store.get(id)!);
       work.documentVersions = this.documentVersions(work);
       work.executionUnconfirmed = true; this.active.set(id, { token, generation, priorTurnId: work.turnId, state: 'active' }); work.state = 'running'; delete work.error; delete work.errorCode; this.store.save(work);
       this.store.event(id, 'user-message', { text, threadId: work.threadId });
-      const cwd = this.executionCwd(work);
-      const changeRoot = join(work.executionPath ? new FileResults(this.store).path(work) : work.projectPath, 'openspec', 'changes', work.changeName);
-      const writableRoots = work.executionPath && cwd !== work.executionPath ? [cwd, work.executionPath] : [cwd];
+      const context = aiExecutionContext(this.store, work), { cwd, changeRoot, writableRoots } = context;
       const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
       const appRuntime = localRuntimeDirectory();
       const runtime = existsSync(join(cwd, '.tools/node-runtime/node.exe')) ? join(cwd, '.tools/node-runtime/node.exe') : appRuntime ? join(appRuntime, 'node.exe') : process.execPath;
-      const browserInstruction = work.browserScenario ? `\n등록한 브라우저 시나리오가 있다. 새 도구가 없는 기존 대화의 PowerShell 실행 명령: ${existsSync(join(cwd, 'scripts/node.ps1')) ? './scripts/node.ps1 .tools/browser-verification/cli.cjs' : `& ${quote(runtime)} ${quote(join(cwd, '.tools/browser-verification/cli.cjs'))}`} run (또는 status, cancel). 등록 시나리오만 실행하며 결과의 imagePath로 화면을 확인한다.\n` : '';
-      const result = await client.rpc('turn/start', { threadId: work.threadId, cwd, sandboxPolicy: { type: 'workspaceWrite', writableRoots, networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }, approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', input: [{ type: 'text', text: `현재 업무: ${work.changeName}\n현재 단계: ${work.phase}\n작업 경로: ${cwd}\nOpenSpec 변경: ${changeRoot}\n\n${reviewInstructions}\n\n${testingInstructions}\n${browserInstruction}\n${text}`, text_elements: [] }] });
+      const browserInstruction = work.browserScenario && !context.planning ? `\n등록한 브라우저 시나리오가 있다. 새 도구가 없는 기존 대화의 PowerShell 실행 명령: ${existsSync(join(cwd, 'scripts/node.ps1')) ? './scripts/node.ps1 .tools/browser-verification/cli.cjs' : `& ${quote(runtime)} ${quote(join(cwd, '.tools/browser-verification/cli.cjs'))}`} run (또는 status, cancel). 등록 시나리오만 실행하며 결과의 imagePath로 화면을 확인한다.\n` : '';
+      const result = await client.rpc('turn/start', { threadId: work.threadId, cwd, sandboxPolicy: { type: 'workspaceWrite', writableRoots, networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }, approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', input: [{ type: 'text', text: `현재 업무: ${work.changeName}\n현재 단계: ${work.phase}\n작업 경로: ${cwd}\nOpenSpec 변경: ${changeRoot}\n${aiScopeInstructions(context)}\n\n${reviewInstructions}\n\n${testingInstructions}\n${browserInstruction}\n${text}`, text_elements: [] }] });
       if (generation !== client.generation) throw new Error('Codex 연결 세대가 변경되어 실행 결과 확인이 필요합니다');
       const run = this.active.get(id);
       if (run?.token === token) { run.turnId = result.turn.id; for (const notification of run.notifications?.splice(0) || []) client.emit('notification', notification); }
@@ -207,14 +208,15 @@ export class CodexService implements OnModuleDestroy {
   }
   private executionCwd(work: Work, phase = work.phase) {
     const recovery = new WorkRecovery(this.store);
-    if (recovery.isRecoveredThread(work)) return recovery.path(work);
-    return ['implementation', 'verification'].includes(phase) ? new FileResults(this.store).path(work) : work.projectPath;
+    if (recovery.isRecoveredThread(work)) recovery.path(work);
+    return aiExecutionContext(this.store, work, phase).cwd;
   }
   private async resume(work: Work) {
     const client = this.clientFor(work.id);
     // Legacy shared-folder work has no isolated workspace. Restoring its thread
     // does not start a turn; implementation still requires a validated workspace.
-    const cwd = new WorkRecovery(this.store).path(work);
+    const recoveryPath = new WorkRecovery(this.store).path(work);
+    const cwd = ['implementation', 'verification'].includes(work.phase) ? recoveryPath : this.executionCwd(work);
     // Installed Codex restores persisted tools but cannot add dynamicTools on
     // resume. Existing conversations use the work-local mailbox CLI instead.
     const params = { threadId: work.threadId, cwd, excludeTurns: true, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review' };
@@ -222,7 +224,7 @@ export class CodexService implements OnModuleDestroy {
     try { result = await client.rpc('thread/resume', params); }
     catch (error: any) {
       if (!/no rollout found for thread id/.test(error.message)) throw error;
-      const path = await findRollout(work.threadId!, cwd) || (cwd !== work.projectPath ? await findRollout(work.threadId!, work.projectPath) : undefined);
+      const path = await findRollout(work.threadId!, cwd) || (cwd !== recoveryPath ? await findRollout(work.threadId!, recoveryPath) : undefined) || (recoveryPath !== work.projectPath ? await findRollout(work.threadId!, work.projectPath) : undefined);
       if (!path) throw error;
       result = await client.rpc('thread/resume', { ...params, path });
       if (result.thread.id !== work.threadId) throw new Error('대화 원본의 ID가 일치하지 않습니다. 기존 업무 연결을 보존했습니다.');
@@ -257,7 +259,7 @@ export class CodexService implements OnModuleDestroy {
     const work = this.store.get(id);
     if (!work) throw new NotFoundException('업무를 찾을 수 없습니다');
     const recovery = new WorkRecovery(this.store).assertReconnect(work);
-    projectCoordinator(this.store).assertWorkCanStart(work);
+    projectCoordinator(this.store).assertActivityCanStart(work);
     if (this.locks.has(id) || !['recovery-required', 'idle', 'interrupted', 'failed'].includes(work.state)) throw new ConflictException('실행을 마친 뒤 다시 연결해 주세요.');
     const uncertain = desktopHealth(this.store).runtime(work) === 'unknown';
     const previousRun = this.active.get(id);
@@ -515,9 +517,13 @@ export class CodexService implements OnModuleDestroy {
   }
   private documentVersions(work: Work) {
     const source = this.legacy.source(work.sourceId).path;
-      let root = work.executionPath && !['completed', 'archived'].includes(work.phase) ? within(new FileResults(this.store).path(work), `openspec/changes/${work.changeName}`) : within(source, `changes/${work.changeName}`);
+      const spaces = new WorkspaceService(this.store);
+      let root = spaces.hasSpace(work) && !['completed', 'archived'].includes(work.phase) ? within(spaces.path(work), `openspec/changes/${work.changeName}`) : within(source, `changes/${work.changeName}`);
     try {
-      if (!existsSync(root)) root = within(source, `changes/archive/${this.legacy.detail(`${work.sourceId}/${work.changeName}`).name}`);
+      if (!existsSync(root)) {
+        if (spaces.hasSpace(work) && !['completed', 'archived'].includes(work.phase)) throw new ConflictException('업무 공간의 변경 문서 복구가 필요합니다.');
+        root = within(source, `changes/archive/${this.legacy.detail(`${work.sourceId}/${work.changeName}`).name}`);
+      }
       const paths = ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`)];
       return Object.fromEntries(paths.map(path => { const content = textFile(within(root, path)); return [path, content === null ? '' : createHash('sha256').update(content).digest('hex')]; }));
     } catch (error: any) {
@@ -526,10 +532,12 @@ export class CodexService implements OnModuleDestroy {
     }
   }
   requireReviewedPlan(work: Work) {
-    if (work.executionPath) new FileResults(this.store).assertSourcePlan(work);
-    const root = work.executionPath ? within(new FileResults(this.store).path(work), `openspec/changes/${work.changeName}`) : within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`);
+    const spaces = new WorkspaceService(this.store);
+    if (spaces.hasSpace(work)) new FileResults(this.store).assertSourcePlan(work);
+    const root = spaces.hasSpace(work) ? within(spaces.path(work), `openspec/changes/${work.changeName}`) : within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`);
     const paths = ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(path => `specs/${path}`)].filter(path => textFile(within(root, path)) !== null);
-    const version = createHash('sha256').update(paths.map(path => `${path}\n${textFile(within(root, path))!.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')).digest('hex');
+    const legacyVersion = createHash('sha256').update(paths.map(path => `${path}\n${textFile(within(root, path))!.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')).digest('hex');
+    const version = bindReviewedPlan(work, spaces.queryPath(work), legacyVersion);
     if (!work.reviewedVersion || work.reviewedVersion !== version || this.store.records(work.id, 'question').some(unresolvedQuestion)) throw new ConflictException('구현 전 최신 문서 검토와 질문 해결이 필요합니다. 문서 수정은 계획 작성·수정에서 진행해 주세요.');
   }
   private async drain(id: string) {

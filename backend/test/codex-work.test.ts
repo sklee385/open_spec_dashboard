@@ -35,7 +35,9 @@ describe('Codex 프로세스와 동일 대화', () => {
     expect(calls.filter(x => x.method === 'turn/start').every(x => x.params.threadId === 'thread-1')).toBe(true);
     for (const call of calls.filter(x => ['thread/start', 'turn/start'].includes(x.method))) {
       expect(call.params).toMatchObject({ approvalsReviewer: 'auto_review', approvalPolicy: 'on-request' });
+      expect(call.params.cwd).toBe(join(work.projectPath, 'openspec', 'changes', work.changeName));
     }
+    for (const call of calls.filter(x => x.method === 'turn/start')) expect(call.params.sandboxPolicy.writableRoots).toEqual([join(work.projectPath, 'openspec', 'changes', work.changeName)]);
   });
   it('질문 답변은 원래 요청으로 전달하고 재전송하지 않는다', async () => {
     expect((await request(`work/${work.id}/message`, { text: '질문 해줘' })).status).toBe(200);

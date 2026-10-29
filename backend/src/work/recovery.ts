@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { FileResults } from './file-results';
+import { WorkspaceService } from './workspace.service';
 import { Work, WorkStore } from './store';
 import { desktopHealth } from '../desktop/health';
 
@@ -10,7 +11,7 @@ export interface RecoveryStatus { required: boolean; canReconnect: boolean; code
 const availableStates = ['recovery-required', 'idle', 'interrupted', 'failed'];
 
 export class WorkRecovery {
-  constructor(private store: WorkStore) {}
+  constructor(private store: WorkStore, private spaces = new WorkspaceService(store)) {}
   isRecoveredThread(work: Work) {
     const matches = (record: any) => record?.status === 'completed' && !!work.threadId && record.newThreadId === work.threadId;
     return matches(work.sessionRecovery) || this.store.records(work.id, 'session-recovery').some(matches);
@@ -28,11 +29,9 @@ export class WorkRecovery {
       if (overlapping(path, target) || overlapping(target, path)) throw new ConflictException('같은 작업 폴더의 다른 업무 실행·종료 상태를 확인한 뒤 다시 시도해 주세요');
     }
   }
-  private isolated(work: Work) { return !!work.executionPath || this.store.records(work.id, 'isolated-baseline').length > 0; }
+  private isolated(work: Work) { return this.spaces.hasSpace(work); }
   path(work: Work) {
-    if (this.isolated(work)) return new FileResults(this.store).path(work);
-    if (!statSync(work.projectPath).isDirectory()) throw new Error('프로젝트 폴더를 확인해 주세요');
-    return work.projectPath;
+    return this.spaces.recoveryPath(work);
   }
   status(work: Work): RecoveryStatus {
     const mode = this.isolated(work) ? 'isolated' : 'shared';

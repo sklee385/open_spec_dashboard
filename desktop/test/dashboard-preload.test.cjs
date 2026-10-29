@@ -7,7 +7,7 @@ test('dashboard exposes only fixed notification and work-recovery bridges', asyn
       on(name, callback) { listeners.set(name, callback); }, removeListener(name, callback) { assert.equal(callback, listeners.get(name)); removed.push(name); }, invoke: async (...args) => calls.push(args), sendSync: (...args) => { draftCalls.push(args); return { ok: args[2] !== 'fail', value: 'saved' }; },
     } };
   } });
-  assert.deepEqual(Object.keys(apis).sort(), ['desktopAttention', 'desktopDrafts', 'desktopRecovery']);
+  assert.deepEqual(Object.keys(apis).sort(), ['desktopAttention', 'desktopDrafts', 'desktopRecovery', 'desktopWorkspace']);
   assert.deepEqual(Object.keys(apis.desktopDrafts).sort(), ['getItem','removeItem','setItem']);
   assert.equal(apis.desktopDrafts.getItem('work-draft:w'), 'saved');
   apis.desktopDrafts.setItem('work-draft:w', 'text'); apis.desktopDrafts.removeItem('work-draft:w');
@@ -26,4 +26,7 @@ test('dashboard exposes only fixed notification and work-recovery bridges', asyn
   assert.deepEqual([...listeners.keys()].sort(), ['desktop:attention', 'desktop:open-work']);
   assert.deepEqual(calls, [['desktop:attention-ready']]);
   unsubscribeRecovery(); assert.deepEqual(removed, ['desktop:attention', 'desktop:open-work']);
+  assert.deepEqual(Object.keys(apis.desktopWorkspace), ['chooseFolder']);
+  await apis.desktopWorkspace.chooseFolder('/ignored');
+  assert.deepEqual(calls, [['desktop:attention-ready'], ['desktop:workspace-folder']]);
 });

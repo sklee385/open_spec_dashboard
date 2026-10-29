@@ -1,17 +1,27 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative, isAbsolute, sep } from 'node:path';
 import { Subject } from 'rxjs';
 import { createHash } from 'node:crypto';
 import type { ToolConfig, ToolCapabilities } from '../ai-tools/config.service';
 
+export interface WorkWorkspace {
+  version: 1; kind: 'copy' | 'git-worktree'; status: 'preparing' | 'ready' | 'failed' | 'recovery-required' | 'removed';
+  profileId: string; rootId: string; rootPath: string; managedPath: string;
+  projectId: string; workspaceId: string; executionPath: string;
+  commonDir?: string; branch?: string; baseCommit?: string; workspaceBaselineCommit?: string;
+  sourcePlanRevision?: string; preparationPolicyVersion?: number; error?: string;
+  preparationPolicyDigest?: string; localOnlyPaths?: string[];
+}
 export interface Work {
   id: string; sourceId: string; projectPath: string; changeName: string; requestKey: string;
   ideaIds: string[]; phase: string; state: string; threadId: string | null;
   reviewedVersion: string | null; createdAt: string; updatedAt: string;
   toolId?: string; toolConfigSnapshot?: ToolConfig; toolCapabilities?: ToolCapabilities; providerSessionId?: string | null;
   executionPath?: string;
+  workspace?: WorkWorkspace;
+  reviewedPlanRevision?: string;
   edgeToolsVersion?: number;
   error?: string; turnId?: string; [key: string]: unknown;
 }
@@ -49,6 +59,24 @@ export class WorkStore implements OnApplicationShutdown {
   events(id: string, after = 0) { return (this.db.prepare('SELECT * FROM events WHERE work_id=? AND seq>? ORDER BY seq').all(id, after) as any[]).map(x => ({ seq: x.seq, workId: x.work_id, type: x.type, data: JSON.parse(x.data), createdAt: x.created_at })); }
   record(id: string, workId: string, kind: string, data: unknown) { this.db.prepare('INSERT INTO records(id,work_id,kind,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(id, workId, kind, JSON.stringify(data)); }
   records(workId: string, kind: string) { return (this.db.prepare('SELECT id,data FROM records WHERE work_id=? AND kind=? ORDER BY rowid').all(workId, kind) as any[]).map(x => ({ ...JSON.parse(x.data), id: x.id })); }
+  rootReferences(rootId: string, rootPath: string) {
+    const contains = (value: unknown): boolean => {
+      if (!value || typeof value !== 'object') return false;
+      if (Array.isArray(value)) return value.some(contains);
+      const record = value as Record<string, unknown>;
+      if (record.rootId === rootId) return true;
+      for (const key of ['executionPath', 'rootPath', 'managedPath']) {
+        const path = record[key];
+        if (typeof path !== 'string' || !isAbsolute(path)) continue;
+        const rel = relative(resolve(rootPath), resolve(path));
+        if (!rel || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`))) return true;
+      }
+      return Object.values(record).some(contains);
+    };
+    const works = (this.db.prepare('SELECT id,data FROM work').all() as { id: string; data: string }[]).filter(row => contains(JSON.parse(row.data))).map(row => ({ workId: row.id, kind: 'work', id: row.id }));
+    const records = (this.db.prepare('SELECT id,work_id,kind,data FROM records').all() as { id: string; work_id: string; kind: string; data: string }[]).filter(row => contains(JSON.parse(row.data))).map(row => ({ workId: row.work_id, kind: row.kind, id: row.id }));
+    return [...works, ...records];
+  }
   attention(): AttentionItem[] {
     return this.db.prepare(`SELECT w.id AS workId, w.source_id AS sourceId, w.change_name AS changeName,
       COALESCE((SELECT json_extract(e.data, '$.title') FROM events e WHERE e.work_id=w.id AND e.type='source-idea' ORDER BY e.seq LIMIT 1), w.change_name) AS title,

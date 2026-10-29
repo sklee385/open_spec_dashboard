@@ -3,6 +3,7 @@ import { closeSync, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, open
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import type { WorkspaceSourcePolicy, WorkspacePathPolicy } from '../work/workspace-file-policy';
 const MAX_TEXT = 1024 * 1024, PAGE = 200, MAX_DIRECTORY = 20000, MAX_SCAN = 3000;
 const FIXED = new Set(['.git', '.data', '.tools', '.logs', '.codex', '.aws']);
 const DEFAULT = new Set(['node_modules', 'vendor', 'dist', 'build', 'coverage', '.next', '.nuxt', 'target', '__pycache__']);
@@ -16,6 +17,8 @@ const inside = (root: string, path: string) => equal(root, path) || (!relative(r
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 /** All public methods validate relative paths again; no watcher or shell command is used. */
 export class ProjectFiles {
+  constructor(private policy?: WorkspaceSourcePolicy) {}
+  private exclusions = new Map<string, WorkspacePathPolicy>();
   private metadata = new Map<string, string[]>();
   private ignoreAvailable = new Map<string, boolean>();
   private gitEnvironment() { return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))); }
@@ -46,6 +49,7 @@ export class ProjectFiles {
       } catch {}
     }
     this.metadata.set(result, metadata);
+    this.exclusions.set(result, this.policy?.(result) ?? (() => false));
     return result;
   }
   private normalized(path: string, allowEmpty = false) {
@@ -55,6 +59,7 @@ export class ProjectFiles {
     return path;
   }
   private fixed(root: string, path: string) {
+    if (this.exclusions.get(root)?.(path)) return true;
     if (path.split('/').some(p => FIXED.has(p.toLowerCase()))) return true;
     const absolute = resolve(root, path);
     if ((this.metadata.get(root) ?? []).some(metadata => inside(metadata, absolute))) return true;
@@ -80,6 +85,7 @@ export class ProjectFiles {
       }
       const canonical = realpathSync(current);
       if (stat.isSymbolicLink() || !inside(root, canonical)) throw new ForbiddenException('Links and junctions are excluded');
+      if (this.exclusions.get(root)?.strictOwnership && stat.isFile() && stat.nlink !== 1) throw new ForbiddenException('공유 링크 파일의 소유를 확인할 수 없습니다.');
       if (this.fixed(root, relative(root, canonical).split(sep).join('/'))) throw new ForbiddenException('Runtime or Git metadata is excluded');
       if (stat.isDirectory() && existsSync(join(current, '.git'))) throw new ForbiddenException('Nested repository boundary');
       if (i < parts.length - 1 && !stat.isDirectory()) throw new BadRequestException('Parent is not a directory');
@@ -168,7 +174,7 @@ export class ProjectFiles {
     const fd = openSync(absolute, 'r');
     try {
       const stat = fstatSync(fd);
-      if (stat.dev !== before.dev || stat.ino !== before.ino || !equal(realpathSync(absolute), absolute)) throw new ConflictException('File identity changed');
+      if (stat.dev !== before.dev || stat.ino !== before.ino || !equal(realpathSync(absolute), absolute) || this.exclusions.get(root)?.strictOwnership && stat.nlink !== 1) throw new ConflictException('파일 소유가 변경되었습니다.');
       if (stat.size > MAX_TEXT) {
         const current = lstatSync(this.checked(root, path));
         if (!this.sameStat(stat, fstatSync(fd)) || !this.sameStat(stat, current)) throw new ConflictException('File changed while reading');
@@ -194,7 +200,7 @@ export class ProjectFiles {
       } catch { return { file: { ...file, reason: 'Unsupported encoding; UTF-8 required' }, stat: current }; }
     } finally { closeSync(fd); }
   }
-  private sameStat(a: Stats, b: Stats) { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs; }
+  private sameStat(a: Stats, b: Stats) { return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs && a.nlink === b.nlink; }
   async read(root: string, path: string) { return this.snapshot(this.root(root), path).file; }
   /** Explicit move confirmation only: browsing does not recursively inspect directories. */
   async entry(root: string, path: string): Promise<ProjectEntry> {

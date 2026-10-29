@@ -115,7 +115,7 @@ async function recoverStartup(error) {
   if (!canRetry) return;
   if (result.response === 1) { allowQuit = true; app.quit(); return; }
   disposeDraftBridge?.(); healthWindow?.dispose(); window?.destroy(); updateWindow?.destroy(); tray?.destroy(); gateway?.closeAllConnections(); gateway?.close();
-  for (const channel of ['status','check','install','attention-ready']) ipcMain.removeHandler(`desktop:${channel}`);
+  for (const channel of ['status','check','install','attention-ready','workspace-folder']) ipcMain.removeHandler(`desktop:${channel}`);
   allowQuit = false; gate.locked = false; gate.pending = 0; smokeServiceDiagnostics = '';
   shutdownGuard.release(recoveryLease);
   await start().catch(recoverStartup);
@@ -284,6 +284,7 @@ async function start() {
     if (!smoke) void confirmPortableReady().catch(() => log('portable readiness report failed; retained update diagnostics'));
     attentionRouter.ready(); return true;
   });
+  require('./workspace-picker.cjs').registerWorkspacePicker({ ipcMain, dialog, window: () => window, origin: () => origin, locked: () => stopping || allowQuit || gate.locked });
   window.webContents.on('did-start-loading', () => { screenState = 'loading'; attentionRouter.reset(); });
   window.webContents.on('render-process-gone', () => { screenState = 'crashed'; recordHealth('screen-error', { code: 'renderer-gone' }); });
   window.on('unresponsive', () => { screenState = 'unresponsive'; recordHealth('screen-error', { code: 'unresponsive' }); });

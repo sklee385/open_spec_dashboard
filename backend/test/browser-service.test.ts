@@ -6,6 +6,8 @@ import { createServer } from 'node:net';
 import { WorkStore } from '../src/work/store';
 import { FileResults } from '../src/work/file-results';
 import { BrowserService } from '../src/browser/browser.service';
+import { projectCoordinator } from '../src/projects/coordinator';
+import { assertActiveCapacity } from '../src/work/workspace-policy';
 
 let store: WorkStore;
 const services: BrowserService[] = [];
@@ -19,6 +21,14 @@ function setup() {
   const scenario = { name: '검증', server: { command: 'node', args: ['server.cjs'], url: 'http://127.0.0.1:14321' }, steps: [{ op: 'goto', path: '/' }, { op: 'expectVisible', target: { role: 'heading', name: '검증' } }] };
   const service = new BrowserService(store); services.push(service); return { service, work, files, scenario };
 }
+it('브라우저 검증도 활성 업무 한도를 검사하고 실행기 시작 전에 대기한다', () => {
+  const f = setup(); f.service.save(f.work.id, f.scenario);
+  store.save({ ...f.work, id: 'other', requestKey: 'other', changeName: 'other', projectPath: join(f.work.projectPath, 'other'), executionPath: undefined, state: 'running' });
+  projectCoordinator(store).setActivityGuard(work => assertActiveCapacity(work, { maxActiveWorks: 1, minimumFreeBytes: 0, retentionDays: 14 }, store));
+  expect(() => f.service.run(f.work.id)).toThrow(/대기/);
+  expect(store.records(f.work.id, 'browser-verification')).toHaveLength(0);
+  expect(store.get(f.work.id)?.state).toBe('idle');
+});
 it('시나리오를 저장해도 대화를 보존하고 AI가 계획을 변경하는 연산은 거부한다', async () => {
   const f = setup(); f.service.save(f.work.id, f.scenario);
   expect(f.service.status(f.work.id).scenario).toMatchObject({ name: '검증' });

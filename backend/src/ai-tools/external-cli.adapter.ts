@@ -11,9 +11,9 @@ import { reviewInstructions } from '../review/instructions';
 import { testingInstructions } from '../work/testing-instructions';
 import { readiness, ToolConfig } from './config.service';
 import { windowsProcessTreeScript } from './windows-process-tree';
-import { FileResults } from '../work/file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { desktopHealth } from '../desktop/health';
+import { aiExecutionContext, aiScopeInstructions } from '../work/ai-context';
 
 type Running = { child: ChildProcess; stopped?: string; kill?: Promise<boolean>; done: Promise<void> };
 const diagnostics: Record<string, string> = {
@@ -36,8 +36,7 @@ export class ExternalCliAdapter implements OnModuleDestroy {
       work.state = 'recovery-required'; work.errorCode = 'external-restarted'; work.error = '외부 실행 결과가 불명확합니다. 기록과 프로세스를 확인한 뒤 새 메시지를 요청해 주세요. 자동 재실행하지 않습니다.'; store.save(work);
     }
   }
-  private documents(work: Work) {
-    const root = work.executionPath ? within(new FileResults(this.store).path(work), `openspec/changes/${work.changeName}`) : within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`);
+  private documents(work: Work, root: string) {
     return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(path => `specs/${path}`)].flatMap(path => {
       const content = textFile(within(root, path)); return content === null ? [] : [{ path: join(root, path), content }];
     });
@@ -46,12 +45,13 @@ export class ExternalCliAdapter implements OnModuleDestroy {
     desktopHealth(this.store).assertExecutionAllowed();
     const work = this.store.get(id)!;
     if (desktopHealth(this.store).runtime(work) === 'unknown') throw new ConflictException('이전 외부 실행의 종료를 확인할 수 없어 재실행을 보류합니다');
-    const cwd = ['implementation', 'verification'].includes(phase || work.phase) ? new FileResults(this.store).path(work) : work.projectPath;
+    if (!['implementation', 'verification'].includes(phase || work.phase)) throw new ConflictException('외부 CLI는 계획 문서만의 쓰기 제한을 보장할 수 없어 계획 실행을 차단합니다. 제한을 지원하는 Codex 계획 도구를 사용해 주세요.');
+    const context = aiExecutionContext(this.store, work, phase || work.phase), { cwd } = context;
     if (this.running.has(id) || ['running', 'connecting', 'waiting-input', 'waiting-approval'].includes(work.state)) throw new ConflictException('이미 실행 중입니다. 종료 확인 후 요청해 주세요.');
-    projectCoordinator(this.store).assertWorkCanStart(work);
-    const docs = this.documents(work);
+    projectCoordinator(this.store).assertActivityCanStart(work, phase || work.phase);
+    const docs = this.documents(work, context.changeRoot);
     const history = this.store.events(id).filter(event => ['user-message', 'item/agentMessage/delta', 'answer', 'approval'].includes(event.type));
-    const prompt = `현재 업무: ${work.changeName}\n업무 ID: ${work.id}\n현재 단계: ${phase || work.phase}\n작업 경로: ${cwd}\n${reviewInstructions}\n${testingInstructions}\n사용자와 한국어로 문답한다. 계획 단계에서는 지정된 OpenSpec 변경 문서만 작성·수정하며 제품 코드를 구현하지 않는다. 문서·구현·검증 결과만으로 사용자 검토나 완료를 대체하지 않는다.\n저장 대화:\n${JSON.stringify(history)}\n최신 문서:\n${JSON.stringify(docs)}\n사용자 요청:\n${text}`;
+    const prompt = `현재 업무: ${work.changeName}\n업무 ID: ${work.id}\n현재 단계: ${phase || work.phase}\n작업 경로: ${cwd}\nOpenSpec 변경: ${context.changeRoot}\n${aiScopeInstructions(context)}\n${reviewInstructions}\n${testingInstructions}\n사용자와 한국어로 문답한다. 계획 단계에서는 지정된 OpenSpec 변경 문서만 작성·수정하며 제품 코드를 구현하지 않는다. 문서·구현·검증 결과만으로 사용자 검토나 완료를 대체하지 않는다.\n저장 대화:\n${JSON.stringify(history)}\n최신 문서:\n${JSON.stringify(docs)}\n사용자 요청:\n${text}`;
     if (Buffer.byteLength(prompt, 'utf8') > 256 * 1024) throw new BadRequestException('입력이 256KiB를 초과했습니다. 문서·대화 축약이 필요합니다. 원본 기록은 유지됩니다.');
     if (phase) work.phase = phase;
     work.turnId = randomUUID(); work.state = 'running'; delete work.error; delete work.errorCode;

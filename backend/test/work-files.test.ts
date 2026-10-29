@@ -85,10 +85,12 @@ it('프로젝트 런타임과 의존성은 원본과 파일을 공유하지 않�
   expect(readFileSync(join(source, 'node_modules', 'example', 'index.js'), 'utf8')).toBe('module');
   expect(execution.changes(work)).toEqual([]);
 });
-it('복사 실패는 기준을 저장하지 않으며 재시도는 새 독립 공간에서 시작한다', () => {
+it('복사 실패는 기준을 저장하지 않으며 잔여 확인 전 새 경로로 재시도하지 않는다', () => {
   vi.mocked(fs.cpSync).mockImplementationOnce(() => { throw new Error('copy failure'); });
   expect(() => execution.prepare(work)).toThrow('copy failure'); expect(store.records(work.id, 'isolated-baseline')).toEqual([]);
-  expect(work.executionPath).toBeUndefined(); execution.prepare(work); expect(execution.changes(work)).toEqual([]);
+  expect(work.executionPath).toBeUndefined();
+  expect(store.records(work.id, 'workspace-preparation').some(record => record.status === 'failed')).toBe(true);
+  expect(() => execution.prepare(work)).toThrow(/복구/);
 });
 it('파일 읽기 실패를 빈 변경으로 확정하지 않는다', async () => {
   await prepare(); const path = join(execution.executionPath(work), 'existing.txt'), read = (await vi.importActual<typeof import('node:fs')>('node:fs')).readFileSync;

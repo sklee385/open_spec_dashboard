@@ -4,7 +4,7 @@ $taskConfigPath = "$StandardOutput.launch.json"
 $taskResultPath = "$StandardOutput.process.json"
 if (Test-Path -LiteralPath $taskResultPath) { throw '프로세스 시작 결과 파일이 이미 있습니다. 새 로그 경로를 사용해 주세요.' }
 $taskEnvironment = @{}
-foreach ($taskName in @('PATH','CONFIG_PATH','OPENSPEC_UI_CONFIG','DATA_DIR','CODEX_BIN','CODEX_HOME','CODEX_ARGS','SESSION_PORT','PORT','NPM_BIN','OPENSPEC_NODE_DIRECTORY','OPENSPEC_DASHBOARD_URL','DESKTOP_TOKEN')) {
+foreach ($taskName in @('PATH','CONFIG_PATH','OPENSPEC_UI_CONFIG','DATA_DIR','WORKSPACE_ROOT','CODEX_BIN','CODEX_HOME','CODEX_ARGS','SESSION_PORT','PORT','NPM_BIN','OPENSPEC_NODE_DIRECTORY','OPENSPEC_DASHBOARD_URL','DESKTOP_TOKEN')) {
     $taskValue = [Environment]::GetEnvironmentVariable($taskName, 'Process')
     if ($null -ne $taskValue) { $taskEnvironment[$taskName] = $taskValue }
 }

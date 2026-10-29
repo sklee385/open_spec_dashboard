@@ -18,6 +18,8 @@ import { FileResults, snapshotRevision } from './file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { BrowserService } from '../browser/browser.service';
 import { reconcileArchive } from './archive-state';
+import { WorkspaceService } from './workspace.service';
+import { bindReviewedPlan, fullReviewedPlan } from './reviewed-plan';
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 @Injectable()
@@ -67,10 +69,13 @@ export class WorkService {
     if (body.ideaId && !idea) throw new BadRequestException('아이디어를 찾을 수 없습니다');
     if (!existsSync(within(source.path, `changes/${body.changeName}`))) {
       if (!idea) throw new NotFoundException('변경이 없습니다');
+      const release = projectCoordinator(this.store).acquireOperation({ kind: 'documents', root: dirname(source.path), changeName: body.changeName });
+      try {
       const context = await this.openspec.run(dirname(source.path), ['context', '--json']);
       if (!context.ok || resolve(context.json?.root?.path || '') !== resolve(dirname(source.path))) throw new ConflictException('OpenSpec 루트가 등록 프로젝트와 일치하지 않습니다');
       const result = await this.openspec.run(dirname(source.path), ['new', 'change', body.changeName]);
       if (!result.ok) throw new ConflictException({ error: '변경 생성에 실패했습니다. 아이디어를 보존했습니다.', result });
+      } finally { release(); }
     }
     this.legacy.detail(`${source.id}/${body.changeName}`);
     const now = new Date().toISOString();
@@ -87,9 +92,12 @@ export class WorkService {
       const from = within(source.path, `ideas/${filename}`), destination = within(source.path, `changes/${work.changeName}/source-ideas/${filename}`);
       if (!existsSync(from) && existsSync(destination)) continue;
       if (!existsSync(from) || existsSync(destination)) throw new ConflictException('원본 아이디어와 보존 경로를 확인해 주세요. 기존 업무는 유지됩니다.');
+      const release = projectCoordinator(this.store).acquireOperation({ kind: 'workspace', root: work.projectPath });
+      try {
       const idea = this.legacy.ideas().find(idea => idea.id === id)!;
       mkdirSync(dirname(destination), { recursive: true }); renameSync(from, destination);
       this.store.event(work.id, 'source-idea', { title: idea.title, description: idea.description, id }); this.legacy.updates.next();
+      } finally { release(); }
     }
   }
   events(id: string, after: number) {
@@ -104,7 +112,7 @@ export class WorkService {
     });
   }
   root(work: Work) {
-    if (work.executionPath && !['completed', 'archived'].includes(work.phase)) return within(this.execution.executionPath(work), `openspec/changes/${work.changeName}`);
+    if (new WorkspaceService(this.store).hasSpace(work) && !['completed', 'archived'].includes(work.phase)) return within(this.execution.executionPath(work), `openspec/changes/${work.changeName}`);
     const source = this.legacy.source(work.sourceId), active = within(source.path, `changes/${work.changeName}`);
     if (existsSync(active)) return active;
     const detail = this.legacy.detail(`${source.id}/${work.changeName}`);
@@ -112,12 +120,12 @@ export class WorkService {
   }
   documents(work: Work) {
     if (['completed', 'archived'].includes(work.phase) && work.completedDocuments) return Object.keys(work.completedDocuments as object);
-    try { const root = this.root(work); return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`), 'verification.md'].filter(x => textFile(within(root, x)) !== null); }
+    try { const root = this.root(work); return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`), ...(work.workspace?.kind === 'git-worktree' ? ['.openspec.yaml', ...markdownFiles(join(root, 'source-ideas')).map(x => `source-ideas/${x}`)] : []), 'verification.md'].filter(x => textFile(within(root, x)) !== null); }
     catch (error) { if (['completed', 'archived'].includes(work.phase)) return []; throw error; }
   }
   document(id: string, path: string) {
     const work = this.get(id);
-    if (typeof path !== 'string' || !(/^(proposal|design|tasks|verification)\.md$/.test(path) || /^specs\/.+\.md$/.test(path))) throw new BadRequestException('문서 경로가 허용되지 않습니다');
+    if (typeof path !== 'string' || !(/^(proposal|design|tasks|verification)\.md$/.test(path) || /^specs\/.+\.md$/.test(path) || work.workspace?.kind === 'git-worktree' && (path === '.openspec.yaml' || /^source-ideas\/.+\.md$/.test(path)))) throw new BadRequestException('문서 경로가 허용되지 않습니다');
     if (['completed', 'archived'].includes(work.phase) && work.completedDocuments) {
       const saved = (work.completedDocuments as Record<string, { path: string; content: string; version: string }>)[path];
       if (!saved) throw new NotFoundException('저장된 문서가 없습니다'); return saved;
@@ -130,7 +138,7 @@ export class WorkService {
     if (!body || typeof body.content !== 'string' || body.content.length > 2000000 || typeof body.version !== 'string') throw new BadRequestException('Invalid document');
     const doc = this.document(id, body.path), work = this.get(id);
     if (['completed', 'archived'].includes(work.phase)) throw new ConflictException('완료·보관 문서는 바로 수정할 수 없습니다. 수정 업무를 다시 열어 주세요.');
-    const release = projectCoordinator(this.store).acquire(work.executionPath ? this.execution.executionPath(work) : work.projectPath);
+    const release = projectCoordinator(this.store).acquireOperation({ kind: 'documents', root: this.execution.queryPath(work), changeName: work.changeName });
     try {
     if (doc.version !== body.version) throw new ConflictException({ error: '문서가 변경되었습니다. 최신 내용과 초안을 비교해 주세요.', latest: doc });
     this.store.record(randomUUID(), id, 'document-history', { path: body.path, before: doc.content, version: doc.version, actor: 'user', createdAt: new Date().toISOString() });
@@ -140,7 +148,7 @@ export class WorkService {
     return this.document(id, body.path);
     } finally { release(); }
   }
-  planVersion(work: Work) { return hash(this.documents(work).filter(path => path !== 'verification.md').map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')); }
+  planVersion(work: Work) { const legacy = hash(this.documents(work).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')); return bindReviewedPlan(work, this.execution.queryPath(work), legacy); }
   async action(id: string, body: any) {
     const work = this.get(id);
     if (body?.action === 'archive' && work.phase === 'archived') return work;
@@ -151,10 +159,10 @@ export class WorkService {
       if (!['idle', 'interrupted', 'failed'].includes(work.state)) throw new ConflictException('연결 또는 실행 중에는 검토를 확정할 수 없습니다');
       const docs = this.documents(work);
       if (!['proposal.md', 'design.md', 'tasks.md'].every(x => docs.includes(x)) || !docs.some(x => x.startsWith('specs/'))) throw new ConflictException('계획 문서가 준비되지 않았습니다');
-      work.reviewedVersion = this.planVersion(work); if (['planning', 'reviewed'].includes(work.phase)) work.phase = 'reviewed'; this.store.save(work); this.store.event(id, 'reviewed', { version: work.reviewedVersion }); return work;
+      work.reviewedPlanRevision = fullReviewedPlan(work, this.execution.queryPath(work)); work.reviewedVersion = this.planVersion(work); if (['planning', 'reviewed'].includes(work.phase)) work.phase = 'reviewed'; this.store.save(work); this.store.event(id, 'reviewed', { version: work.reviewedVersion }); return work;
     }
     if (body?.action === 'implement') {
-      projectCoordinator(this.store).assertWorkCanStart(work);
+      projectCoordinator(this.store).assertActivityCanStart(work, 'implementation');
       if (!['idle', 'interrupted', 'failed'].includes(work.state)) throw new ConflictException('실행·연결 중에는 구현을 중복 시작할 수 없습니다');
       if (!work.reviewedVersion || work.reviewedVersion !== this.planVersion(work)) throw new ConflictException('최신 문서를 먼저 검토해 주세요');
       if (this.store.records(id, 'question').some(unresolvedQuestion)) throw new ConflictException('미해결 질문이 있습니다');
@@ -184,12 +192,15 @@ export class WorkService {
     }
     if (body?.action === 'archive') {
       if (work.phase !== 'completed') throw new ConflictException('완료 확인 후 보관할 수 있습니다');
+      const release = projectCoordinator(this.store).acquireOperation({ kind: 'integration', root: work.projectPath });
+      try {
       const result = await this.openspec.run(work.projectPath, ['archive', work.changeName, '--yes']);
       this.store.event(id, 'archive-result', result);
       if (!result.ok) throw new ConflictException({ error: '보관에 실패했습니다. 결과를 확인하고 재시도해 주세요', result });
       if (existsSync(within(this.legacy.source(work.sourceId).path, `changes/${work.changeName}`)) || this.legacy.detail(`${work.sourceId}/${work.changeName}`).status !== 'archived') throw new ConflictException('보관 명령 이후 파일 이동을 확인하지 못했습니다. 결과를 확인하고 재시도해 주세요');
       work.archiveName = this.legacy.detail(`${work.sourceId}/${work.changeName}`).name;
       work.phase = 'archived'; this.store.save(work); this.legacy.updates.next(); return work;
+      } finally { release(); }
     }
     throw new BadRequestException('알 수 없는 동작입니다');
   }

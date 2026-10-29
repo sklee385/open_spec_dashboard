@@ -61,7 +61,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (this.active || this.closing) throw new ConflictException('다른 브라우저 검증이 진행 중이거나 종료 중입니다');
     if (!['implementation', 'verification'].includes(work.phase) || !(owner === 'tool' ? work.state === 'running' : ['idle', 'failed', 'interrupted'].includes(work.state))) throw new ConflictException('현재 업무 상태에서는 검증을 실행할 수 없습니다');
     if (this.store.records(id, 'question').some(unresolvedQuestion)) throw new ConflictException('남아 있는 질문·승인을 먼저 처리해 주세요');
-    projectCoordinator(this.store).assertWorkCanStart(work);
+    projectCoordinator(this.store).assertActivityCanStart(work);
     const files = new FileResults(this.store); files.assertSourcePlan(work); const root = files.path(work);
     let scenario: Scenario; try { scenario = parseScenario(work.browserScenario); } catch { throw new BadRequestException('사용자가 브라우저 시나리오를 먼저 등록해야 합니다'); }
     const row: any = { id: randomUUID(), ...this.identity(work), owner, status: 'running', steps: [], createdAt: new Date().toISOString() };

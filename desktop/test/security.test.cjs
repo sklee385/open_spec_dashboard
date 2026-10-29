@@ -97,7 +97,8 @@ test('업데이트 IPC는 소유 창의 정확한 메인 프레임만 허용한�
     { sender: update.webContents, senderFrame: null },
     { sender: update.webContents, senderFrame: { url: update.url } },
   ]) assert.throws(() => handler(event), /허용/);
-  assert.deepEqual([...handlers.keys()].sort(), ['desktop:attention-ready', 'desktop:check', 'desktop:health-force', 'desktop:health-inspect', 'desktop:health-interrupt', 'desktop:health-open-work', 'desktop:health-recover', 'desktop:health-safe-mode', 'desktop:install', 'desktop:status']);
+  assert.deepEqual([...handlers.keys()].sort(), ['desktop:attention-ready', 'desktop:check', 'desktop:health-force', 'desktop:health-inspect', 'desktop:health-interrupt', 'desktop:health-open-work', 'desktop:health-recover', 'desktop:health-safe-mode', 'desktop:install', 'desktop:status', 'desktop:workspace-folder']);
+  await assert.rejects(() => handlers.get('desktop:workspace-folder')({ sender: update.webContents, senderFrame: update.webContents.mainFrame }));
 });
 test('프로그램 알림은 소유 대시보드 준비 후 기존 창으로 전달하고 다른 프레임을 거부한다', async t => {
   const { windows, handlers, app } = await launch(t), dashboard = windows[0], update = windows[1], received = [];

@@ -43,6 +43,10 @@ export interface GitOperation {
     reviewedAt?: string;
     processId?: number;
     commonDir?: string;
+    scope?: import('./operation-locks').OperationScope;
+    refs?: string[];
+    affectedRoots?: string[];
+    changeName?: string;
     pushDestinationCount?: number;
     remoteTarget?: string;
     remoteRef?: string;
@@ -93,10 +97,10 @@ export class OperationStore {
             throw new GitError('같은 요청 키에 다른 작업을 사용할 수 없습니다.', 409);
         return found ? { ...found } : undefined;
     }
-    async create(root: string, b: OperationBody) {
+    async create(root: string, b: OperationBody, scope?: Pick<GitOperation, 'scope' | 'commonDir' | 'refs' | 'affectedRoots'>) {
         await this.ready;
         const now = new Date().toISOString(), id = randomUUID();
-        const record: GitOperation = { id, operationId: id, root, kind: b.kind, state: 'running', status: 'running', requestKey: b.requestKey, token: b.token, fingerprint: digest(JSON.stringify(b)), createdAt: now, updatedAt: now };
+        const record: GitOperation = { id, operationId: id, root, kind: b.kind, state: 'running', status: 'running', requestKey: b.requestKey, token: b.token, fingerprint: digest(JSON.stringify(b)), createdAt: now, updatedAt: now, ...scope };
         await this.save(record);
         return record;
     }

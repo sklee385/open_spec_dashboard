@@ -6,6 +6,16 @@
 
 pull은 `git pull --ff-only --no-rebase`로 실행하며 저장소 설정·upstream을 변경하지 않는다. 이력 분기는 실패와 외부 정리 안내로 반환하며 자동 merge/rebase/stash/reset이나 정책 완화 재시도를 하지 않는다. fetch에 따른 원격 추적 참조 갱신은 가능하다. 기존 merge/rebase 또는 미병합 인덱스가 있으면 이전 앱에서 시작한 작업을 포함해 모든 Git 변경을 409로 거부한다. 상태·파일·과거 작업 조회와 일반 소스 편집·파일 관리는 유지하며 외부 정리 후 새로고침으로 재판정한다.
 
+## 작업 공간 위치 설정 (도입 중)
+
+- `GET /api/workspace-settings`: `schemaVersion`, `profileId`, `version`, `roots`, `selectedRootId`, 기본 용량 정책과 현재 `path`, `managedPath`, `source`(environment/saved/unset), `editable`, `confirmed`, `available`, `freeBytes`, `error`를 조회한다. 잔여 미확인은 null이다. 최초 조회는 기존 config에 프로필을 저장할 수 있지만 작업 전용 폴더를 만들지 않는다.
+- `POST /api/workspace-settings/check`: `{path, version}`으로 경계를 검사하고 probe 읽기/쓰기/삭제를 확인한다. 응답은 `{token, version, path, managedPath, expiresAt, createsPath}`이며 아직 없는 경로는 생성하지 않는다. 환경 고정 경로 변경이나 오래된 버전은 409다.
+- `PUT /api/workspace-settings`: `{token, version, confirmed:true}`만 받는다. 유효한 5분 검사 토큰·최신 설정 버전·실부모 식별·소유 정보를 재검사한 뒤 경로와 관리 하위 공간을 등록한다. 기존 파일은 보존한다. 확인 누락은 400, 토큰 만료·재사용·경로 교체·소유 불명·버전 충돌은 409다. 실패 시 클라이언트는 초안을 보존하고 최신 버전 조회와 재검사를 제공한다.
+
+데스크톱의 `window.desktopWorkspace.chooseFolder()`는 신뢰된 대시보드 메인 프레임에만 `desktop:workspace-folder` IPC를 제공한다. 취소 결과는 `{cancelled:true}`, 선택은 `{cancelled:false,path}`이며 경로 선택 자체는 저장·확인이 아니다. 비데스크톱에서는 호스트 절대 경로를 입력한다.
+
+저장 설정은 서버 재시작 없이 재조회하며 기존 업무 경로는 이동하지 않는다. 독립 실행 스크립트는 `WORKSPACE_ROOT`를 암호화된 환경 전달 목록에 포함하고 데스크톱 자식은 기존 환경을 상속한다. 현재는 초기 설정 API까지 구현됐으며 실제 신규 공간 생성 연결·정책 강제·후보/정리 API는 아직 제공하지 않는다. 코드 빌드와 실제 운영 서버 반영은 별도다.
+
 ## 업무별 변경 결과
 
 `GET /work/:id`의 `changes`는 업무별 독립 실행 공간의 변경 목록이다. 각 파일은 `path`, `status`(added/modified/removed), `before`, `after`, `beforeAvailability`, `afterAvailability`, 전후 해시를 가진다. 가용성은 text/absent/binary/size-limit/unknown이며 null만으로 파일 부재를 판정하지 않는다.
@@ -102,3 +112,33 @@ GET `/api/work/:id`는 `recovery: {required,canReconnect,code,mode}`를 추가�
 - `POST /api/work/:id/recover-session`, body `{ "requestId": "고유 ID" }`: 인계 자료를 보존하고 이전 실행 종료가 입증된 경우에만 새 대화를 준비한다. 응답의 `sessionRecovery.status`를 확인한다. 기존 지시는 자동 실행하지 않는다. 응답 유실 시 같은 ID를 재사용한다.
 - `POST /api/work/:id/recover-session/cancel`, body `{ "requestId": "취소할 복구 ID" }`: 생성 결과 미확인 복구의 해당 Board 연결만 정리하고 원래 실행 종료를 재확인한다. 확인된 경우 `abandoned`로 보존한다. 실제 실행 또는 종료 미확인 상태는 강제로 해제하지 않는다.
 - `GET /api/remote`: 인증 비밀 없이 로컬 CLI·Node·연결 파일 경로와 사용 가능 여부를 반환한다. 별도의 원격 HTTP 서버는 loopback에만 바인딩하며 별도 Bearer 인증을 요구한다. 사용법과 접수·실행 완료 구분은 [REMOTE.md](REMOTE.md)를 참고한다.
+
+
+작업 공간 루트 이력은 `GET /api/workspace-settings/roots`로 조회한다. `DELETE /api/workspace-settings/roots/:rootId`에 `{ version }`을 보내면 참조 없는 과거 루트의 등록만 해제한다. 현재 선택·WORKSPACE_ROOT 고정·업무/후보 참조·설정 버전 충돌은 거부하며 실제 폴더나 파일은 삭제하지 않는다.
+
+`PUT /api/workspace-settings/policy`는 `{ version, policy: { maxActiveWorks, minimumFreeBytes, retentionDays } }`로 정책을 저장한다. 기본값은 3개·5 GiB·14일이며 오래된 버전은 409, 잘못된 정수는 400이다. 한도 초과 새 실행은 `workspace-active-limit`로 대기하며 기존 실행을 종료하지 않는다. 자료 보존 기간은 수동 정리 제안 기준으로 자동 삭제하지 않는다.
+
+## 업무 공간 준비 API (단계적 구현)
+
+신규 생성 API는 결합 검증 전 기본 비활성이다. 격리된 개발 검증 서버에서만 `OPENSPEC_WORKTREE_EXPERIMENTAL=1`로 명시적으로 허용한다. 이 값은 운영 설정 저장·원본 반영·AI 시작을 수행하지 않는다. 기존 복사 업무는 실험 플래그·현재 선택 루트와 무관하게 원래 공간을 재사용한다.
+
+| 요청 | 결과/확인 |
+| --- | --- |
+| `GET /api/work/:id/workspace` | 공간 종류·legacy·고정 경로/ID·상태·실제 가용성·branch/baseCommit/workspaceBaselineCommit·준비 단계 결과 |
+| `GET /api/work/:id/workspace/preview?selectedBranch=...` | 실제 Git 경계/로컬 브랜치/HEAD, copy 가능 사유, 문서 manifest/planRevision·제외 경로·5분 확인 토큰. detached HEAD는 로컬 브랜치를 명시한다. |
+| `POST /api/work/:id/workspace/prepare` | 동일 요청 키로 생성/문서 기준/로컬 준비. 최신 문서 검토와 대기 해소를 요구한다. 완료 후에도 AI는 별도 구현 시작 요청으로 실행한다. |
+| `POST /api/work/:id/workspace/recover` | 같은 요청의 고정 공간·실제 등록/기준을 재확인한다. 새 경로/대화 생성·무단 copy 전환·실패 명령 자동 재실행을 하지 않는다. |
+
+Git 요청은 `{requestKey, selectedBranch?, previewToken, excludedConfirmed:true, policy}`다. `previewToken`은 preview의 `documents.confirmationToken`이다. policy는 `{version,projectId,planRevision,confirmed:true,runtime:'node'|'none',dependencies:'copy'|'install'|'none',paths:[],generatedPaths:[],commands:[{id,stage:'install'|'build',command,args:[]}]}`이며 경로는 프로젝트 내부 상대 경로다. 환경 파일 본문·실행 출력은 응답에 포함하지 않는다. 운영 DB/로그/인증 폴더와 미커밋 제품 코드의 우회 수입, writable junction/hardlink를 거부한다.
+
+비Git/초기 커밋 없음은 preview에 사유를 표시하고 `{requestKey,confirmed:true}`로 copy를 명시 확인한다. Git 설치/권한/경계/생성 오류는 copy 가능 사유가 아니다. 신규 copy는 보호 자료와 로컬 비밀 파일을 복사·baseline에서 제외하며 기존 copy의 완료/원본 반영 동작은 유지한다.
+
+생성 응답 유실 후 문서 import 전 토큰이 만료되면 같은 공간의 preview로 최신 제외 목록을 다시 확인한 뒤 새 토큰으로 recover한다. 토큰만 갱신할 수 있으며 요청 키·정책·문서/제외 목록·검토·Git 기준은 기존 의도와 같아야 한다. 변경·소유 불일치·실패 잔여는 409이며 자동 재생성/삭제하지 않는다. 업무 ID는 등록 프로젝트 소유 확인을 통과해야 하며 임의 실행 경로 입력은 받지 않는다.
+
+업무 OpenSpec 조회는 `GET /api/work/:id/openspec`의 기존 operation 계약을 유지하면서 검증된 업무 공간을 cwd로 사용한다. 저장된 실행 경로가 유실된 상태에서 원본을 대신 조회하지 않는다. 계획 전용 AI는 cwd와 쓰기 루트를 해당 변경 폴더로 제한하며, 범위 제한이 없는 외부 CLI의 계획 실행은 명령 시작 전 409로 차단한다.
+
+Git 업무의 `changeReport`는 `workspaceBaselineCommit` 대비 해당 공간의 변경만 반환한다. 파일 내용 외 mode 변경은 `beforeMode`/`afterMode`로 표시하고 검증 revision에도 포함한다. 수집 중 내용·mode·Git 상태가 바뀌면 `source:unavailable`과 오류를 반환한다. 신규 관리 공간의 로컬 비밀/준비 경로는 소스·Git 및 업무 결과 응답에서 제외한다. 공유 hardlink/링크 또는 미지원 Git 경계는 확인 불가로 차단한다. 기존 원본·과거 copy의 정책은 별도로 유지한다.
+
+파일 변경 API는 대상 경로가 한 변경 문서 폴더에 한정되면 문서 범위를, 그 외에는 해당 실행 공간 범위를 점유한다. 같은 원본의 Alpha 문서 미확인 기록이 Beta 문서 저장을 일괄 차단하지 않는다. Git API는 index/HEAD·공유 관리/ref·통합 범위를 작업 종류에 맞춰 취득하며 새 intent의 첫 저장부터 scope/commonDir/refs/affectedRoots를 보존한다. 같은 실제 ref의 symbolic-ref 별칭도 같은 잠금으로 처리한다. 종료 미확인 프로세스는 사용자 확인만으로 성공 처리하지 않고 실제 종료와 등록·커밋을 확인할 때까지 차단한다.
+
+Git 업무의 계획 버전은 기존 검토 hash를 보존하면서 가져온 .openspec.yaml·source-ideas의 계획 revision도 비교한다. 추가 문서가 변경되면 기존 검토로 AI 구현을 시작할 수 없고 문서 목록에 포함해 명시적 재검토를 받는다. tasks 진행 체크만의 변경은 전체 문서 revision에서 계획 변경으로 계산하지 않는다.

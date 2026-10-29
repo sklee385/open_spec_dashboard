@@ -9,6 +9,7 @@ import { desktopHealth } from '../src/desktop/health';
 import { DesktopLifecycle } from '../src/desktop/lifecycle';
 import { WorkRecovery } from '../src/work/recovery';
 import { FileResults } from '../src/work/file-results';
+import { WorkspaceService } from '../src/work/workspace.service';
 
 let store: WorkStore, service: CodexService, root: string;
 beforeEach(() => {
@@ -242,10 +243,11 @@ it('keeps the recovered execution folder for subsequent planning messages', asyn
   const path = join(root, 'isolated'); mkdirSync(join(path, 'openspec/changes/test'), { recursive: true });
   const work = store.get('w')!; work.executionPath = path; store.save(work);
   vi.spyOn(WorkRecovery.prototype, 'path').mockReturnValue(path); vi.spyOn(FileResults.prototype, 'path').mockReturnValue(path);
+  vi.spyOn(WorkspaceService.prototype, 'path').mockReturnValue(path);
   const rpc = vi.spyOn(service.client, 'rpc').mockImplementation(async method => method === 'thread/read' ? { thread: { id: 'old', turns: [{ id: 'known-turn', status: 'completed' }] } } : method === 'thread/start' ? { thread: { id: 'new' } } : { turn: { id: 'next' } });
   await service.recoverSession('w', { requestId: 'folder' });
   await service.send('w', 'review current recovered files');
-  expect(rpc.mock.calls.find(call => call[0] === 'turn/start')?.[1]).toMatchObject({ cwd: path });
+  expect(rpc.mock.calls.find(call => call[0] === 'turn/start')?.[1]).toMatchObject({ cwd: join(path, 'openspec/changes/test'), sandboxPolicy: { writableRoots: [join(path, 'openspec/changes/test')] } });
 });
 
 it('separate recovered planning folders do not block each other through their common project', () => {
@@ -261,7 +263,9 @@ it('a later blocked recovery cannot change the existing recovered thread folder'
   const work = store.get('w')!; work.executionPath = isolated; work.sessionRecovery = { requestId: 'later', status: 'blocked', previousThreadId: 'old' }; store.save(work);
   store.record('original-recovery', 'w', 'session-recovery', { requestId: 'original', status: 'completed', newThreadId: 'old' });
   vi.spyOn(WorkRecovery.prototype, 'path').mockReturnValue(isolated);
-  expect((service as any).executionCwd(store.get('w'))).toBe(isolated);
+  vi.spyOn(WorkspaceService.prototype, 'path').mockReturnValue(isolated);
+  mkdirSync(join(isolated, 'openspec/changes/test'), { recursive: true });
+  expect((service as any).executionCwd(store.get('w'))).toBe(join(isolated, 'openspec/changes/test'));
   const target = { ...work, id: 'other', requestKey: 'other', changeName: 'other' }; store.save(target);
   work.state = 'running'; work.executionUnconfirmed = true; store.save(work);
   expect(() => new WorkRecovery(store).assertWritableFolder(target, separate)).not.toThrow();

@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('desktopRecovery', {
     return () => ipcRenderer.removeListener('desktop:open-work', listener);
   },
 });
+contextBridge.exposeInMainWorld('desktopWorkspace', {
+  chooseFolder: () => ipcRenderer.invoke('desktop:workspace-folder'),
+});
 contextBridge.exposeInMainWorld('desktopAttention', {
   onRequest(callback) {
     const listener = (_event, value) => {

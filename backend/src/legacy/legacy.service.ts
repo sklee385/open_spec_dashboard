@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { existsSync, mkdirSync, readdirSync, renameSync, statSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stringify } from 'yaml';
@@ -7,8 +8,10 @@ import { Subject, debounceTime, map, merge, interval, Observable } from 'rxjs';
 import { watch, FSWatcher } from 'chokidar';
 import { atomicWrite, textFile, within } from '../files';
 import { changeAt, changeDetail, directories, markdownFiles, parseIdea } from './parser';
+import type { WorkspaceSettings } from '../work/workspace-settings.service';
 
 export interface SourceConfig { name: string; path: string; }
+export interface ApplicationConfig { sources: SourceConfig[]; port: number; workspaces?: WorkspaceSettings; [key: string]: unknown; }
 @Injectable()
 export class LegacyService implements OnModuleDestroy, OnModuleInit {
   readonly updates = new Subject<void>();
@@ -24,7 +27,19 @@ export class LegacyService implements OnModuleDestroy, OnModuleInit {
     this.readiness = this.restartWatcher();
   }
   async onModuleInit() { await this.readiness; }
-  config(): { sources: SourceConfig[]; port: number } { return JSON.parse(textFile(this.configPath)!); }
+  config(): ApplicationConfig { return JSON.parse(textFile(this.configPath)!); }
+  /** Shared by every writer of configPath; read inside the cross-process lock. */
+  updateConfig<T>(change: (config: ApplicationConfig) => T): T {
+    // The database stores no settings. SQLite's OS lock is released on process exit.
+    const lock = new DatabaseSync(`${this.configPath}.lock.sqlite`);
+    try { lock.exec('BEGIN IMMEDIATE'); }
+    catch (error: any) { lock.close(); if ([5, 6].includes(error.errcode)) throw new ConflictException('다른 프로세스가 설정을 저장 중입니다. 상태를 확인해 주세요.'); throw error; }
+    try {
+      const config = this.config(), result = change(config);
+      atomicWrite(this.configPath, JSON.stringify(config, null, 2));
+      return result;
+    } finally { try { lock.exec('ROLLBACK'); } finally { lock.close(); } }
+  }
   sources() {
     return this.config().sources.map(source => {
       const path = resolve(dirname(this.configPath), source.path);
@@ -44,9 +59,10 @@ export class LegacyService implements OnModuleDestroy, OnModuleInit {
   async updateSources(body: any) {
     if (!Array.isArray(body?.sources) || body.sources.some((s: any) => typeof s?.name !== 'string' || !s.name.trim() || /[/\\]/.test(s.name) || typeof s.path !== 'string')) throw new BadRequestException('Invalid sources');
     if (new Set(body.sources.map((s: any) => s.name)).size !== body.sources.length) throw new BadRequestException('Duplicate sources');
-    const config = this.config();
-    config.sources = body.sources.filter((s: SourceConfig) => { const path = resolve(dirname(this.configPath), s.path); return existsSync(path) && statSync(path).isDirectory(); });
-    atomicWrite(this.configPath, JSON.stringify(config, null, 2));
+    const config = this.updateConfig(config => {
+      config.sources = body.sources.filter((s: SourceConfig) => { const path = resolve(dirname(this.configPath), s.path); return existsSync(path) && statSync(path).isDirectory(); });
+      return config;
+    });
     await this.restartWatcher(); this.updates.next(); return config;
   }
   private async restartWatcher() {

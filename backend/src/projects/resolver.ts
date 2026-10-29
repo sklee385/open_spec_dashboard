@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { LegacyService } from '../legacy/legacy.service';
 import { ConflictException, Optional } from '@nestjs/common';
 import { WorkStore } from '../work/store';
-import { FileResults } from '../work/file-results';
+import { WorkspaceService } from '../work/workspace.service';
 export interface ResolvedProject { sourceId: string; root: string; gitRoot: string | null; commonDir: string | null; gitAvailable: boolean; boundary: boolean; }
 @Injectable()
 export class ProjectResolver {
@@ -23,7 +23,7 @@ export class ProjectResolver {
       if (!work || work.sourceId !== sourceId) throw new NotFoundException('이 프로젝트에 연결된 업무 공간이 없습니다');
       if (['completed', 'archived'].includes(work.phase)) throw new ConflictException('진행 중인 업무 공간을 선택해 주세요');
       if (!samePath(realpathSync(work.projectPath), root)) throw new ConflictException('업무의 원본 프로젝트 경로가 변경되었습니다');
-      root = new FileResults(this.store).path(work);
+      root = new WorkspaceService(this.store).path(work);
     }
     const git = (args: string[]) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))), windowsHide: true, shell: false, timeout: 5000, maxBuffer: 65536 });
     const available = git(['--version']);

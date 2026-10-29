@@ -3,6 +3,7 @@ import { Settings } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AiToolSettings } from './AiToolSettings';
 import { EdgeConnection } from './EdgeConnection';
+import { WorkspaceSettings } from './WorkspaceSettings';
 
 interface SettingsModalProps {
   open: boolean;
@@ -17,7 +18,7 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5 text-primary" />{t('common.settings')}</DialogTitle>
         </DialogHeader>
-        <div className="py-4"><AiToolSettings /><EdgeConnection /></div>
+        <div className="space-y-4 py-4"><AiToolSettings /><WorkspaceSettings /><EdgeConnection /></div>
       </DialogContent>
     </Dialog>
   );

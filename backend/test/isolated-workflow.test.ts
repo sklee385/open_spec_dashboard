@@ -69,11 +69,12 @@ it('동일 대화의 실행 위치를 전환하고 별도 반영 후에만 완�
   await request(`work/${work.id}/action`, { action: 'plan' });
   await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
   const planning = readFileSync(log, 'utf8').trim().split('\n').map(x => JSON.parse(x)).filter(x => x.method === 'turn/start').at(-1);
-  expect(planning.params.cwd).toBe(join(root, 'source'));
+  const planningRoot = join(work.executionPath, 'openspec', 'changes', 'feature');
+  expect(planning.params.cwd).toBe(planningRoot);
   const planningContext = planning.params.input[0].text.split('\n');
-  expect(planningContext).toContain(`작업 경로: ${join(root, 'source')}`);
+  expect(planningContext).toContain(`작업 경로: ${planningRoot}`);
   expect(planningContext).toContain(`OpenSpec 변경: ${join(work.executionPath, 'openspec', 'changes', 'feature')}`);
-  expect(planning.params.sandboxPolicy.writableRoots).toEqual([join(root, 'source'), work.executionPath]);
+  expect(planning.params.sandboxPolicy.writableRoots).toEqual([planningRoot]);
   await request(`work/${work.id}/action`, { action: 'review' });
   await request(`work/${work.id}/action`, { action: 'implement' });
   await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');

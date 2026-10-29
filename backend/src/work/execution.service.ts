@@ -10,6 +10,7 @@ import { collectFiles, FileResults, Snapshot, snapshotRevision } from './file-re
 import { projectCoordinator } from '../projects/coordinator';
 import { relatedTestCommands, type TestScope } from './test-commands';
 import { desktopHealth } from '../desktop/health';
+import { WorkspaceService } from './workspace.service';
 
 export interface VerificationCommand { id: string; command: string; args: string[]; }
 @Injectable()
@@ -17,9 +18,10 @@ export class ExecutionService implements OnModuleDestroy {
   private get files() { return new FileResults(this.store); }
   prepare(work: Work, transition = false) { return this.files.prepare(work, transition); }
   executionPath(work: Work) { return this.files.path(work); }
+  queryPath(work: Work) { return new WorkspaceService(this.store).queryPath(work); }
   changeReport(work: Work) { return this.files.report(work); }
   apply(work: Work) {
-    const release = projectCoordinator(this.store).acquire(work.projectPath);
+    const release = projectCoordinator(this.store).acquireOperation({ kind: 'integration', root: work.projectPath, spaces: [this.executionPath(work)] });
     try { return this.files.apply(work); } finally { release(); }
   }
   freeze(work: Work, files?: Snapshot) { work.completedCommands = this.commands(work); return this.files.freeze(work, files); }
@@ -31,15 +33,15 @@ export class ExecutionService implements OnModuleDestroy {
     desktopHealth(store).register('verification', work => this.children.has(work.id) || this.batches.has(work.id) ? 'active' : undefined);
     for (const work of store.list().filter(work => !['completed', 'archived'].includes(work.phase))) for (const record of store.records(work.id, 'verification').filter(x => x.status === 'running')) store.record(record.id, work.id, 'verification', { ...record, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
   }
-  snapshot(work: Work): Snapshot { return collectFiles(this.executionPath(work)); }
+  snapshot(work: Work): Snapshot { return this.files.snapshot(work); }
   revision(work: Work) { return snapshotRevision(this.snapshot(work)); }
   baseline(work: Work) { this.prepare(work); }
   changes(work: Work) { return this.changeReport(work).files; }
   commands(work: Work, scope: TestScope = 'full'): VerificationCommand[] {
-    if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : relatedTestCommands(work.executionPath || work.projectPath, this.changes(work).map((file: { path: string }) => file.path));
+    if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : ['completed', 'archived'].includes(work.phase) ? [] : relatedTestCommands(this.queryPath(work), this.changes(work).map((file: { path: string }) => file.path));
     if (['completed', 'archived'].includes(work.phase) && Array.isArray(work.completedCommands)) return work.completedCommands as VerificationCommand[];
     if (Array.isArray(work.verificationCommands)) return work.verificationCommands as VerificationCommand[];
-    const pkg = join(work.executionPath && !['completed', 'archived'].includes(work.phase) ? this.executionPath(work) : work.projectPath, 'package.json');
+    const pkg = join(this.queryPath(work), 'package.json');
     if (!existsSync(pkg)) return [];
     const scripts = JSON.parse(readFileSync(pkg, 'utf8')).scripts || {};
     return [scripts['test:run'] ? 'test:run' : 'test', 'typecheck', 'build', 'lint'].filter(id => scripts[id]).map(id => ({ id, command: process.env.NPM_BIN || 'npm', args: ['run', id] }));
@@ -70,7 +72,7 @@ export class ExecutionService implements OnModuleDestroy {
   run(work: Work, commandId: string, scope: TestScope = 'full') {
     desktopHealth(this.store).assertExecutionAllowed();
     if (!['work', 'full'].includes(scope)) throw new BadRequestException('잘못된 테스트 범위입니다');
-    projectCoordinator(this.store).assertWorkCanStart(work);
+    projectCoordinator(this.store).assertActivityCanStart(work, 'verification');
     if (this.children.has(work.id) || !['idle', 'interrupted', 'failed'].includes(work.state) || ['completed', 'archived'].includes(work.phase)) throw new ConflictException('업무의 다른 실행이 진행 중이거나 완료되었습니다');
     const cwd = this.executionPath(work);
     this.files.assertSourcePlan(work);

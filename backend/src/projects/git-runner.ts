@@ -1,4 +1,4 @@
-import { spawn, execFile } from 'node:child_process';
+import { spawn, execFile, execFileSync } from 'node:child_process';
 export class GitError extends Error {
     constructor(message: string, public status = 400, public uncertain = false, public terminationUnconfirmed = false, public confirmedRejection = false) {
         super(message);
@@ -12,14 +12,22 @@ export interface RunnerOptions {
     maxOutputBytes?: number;
     onSpawn?: (pid: number) => void | Promise<void>;
 }
+export function gitEnvironment() {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (/^(GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_PARAMETERS|CONFIG_KEY_.*|CONFIG_VALUE_.*))$/.test(key)) delete env[key];
+    Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_PAGER: 'cat', PAGER: 'cat', SSH_ASKPASS_REQUIRE: 'never' });
+    return env;
+}
+/** Bounded read-only checks for existing synchronous workspace path consumers. */
+export function readGitBufferSync(root: string, args: string[]) {
+    try { return execFileSync('git', ['--no-optional-locks', '--literal-pathspecs', ...args], { cwd: root, windowsHide: true, env: gitEnvironment(), timeout: 10000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch { throw new GitError('Git 공간 등록을 확인할 수 없습니다. 실제 상태 복구가 필요합니다.', 409); }
+}
+export function readGitSync(root: string, args: string[]) { return readGitBufferSync(root, args).toString('utf8'); }
 /** Arguments are produced by the service; user paths always follow -- with literal pathspecs. */
 export function runGit(root: string, args: string[], options: RunnerOptions = {}, optional = false): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-        const env = { ...process.env };
-        for (const key of Object.keys(env))
-            if (/^(GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_PARAMETERS|CONFIG_KEY_.*|CONFIG_VALUE_.*))$/.test(key))
-                delete env[key];
-        Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_PAGER: 'cat', PAGER: 'cat', SSH_ASKPASS_REQUIRE: 'never' });
+        const env = gitEnvironment();
         const child = spawn('git', ['--no-optional-locks', '--literal-pathspecs', ...args], { cwd: root, shell: false, windowsHide: true, detached: process.platform !== 'win32', env });
         const spawned = child.pid ? Promise.resolve().then(() => options.onSpawn?.(child.pid!)) : Promise.resolve();
         void spawned.catch(() => {

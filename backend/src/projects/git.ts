@@ -5,6 +5,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { runGit, GitError, RunnerOptions, scrub } from './git-runner';
 import { digest, OperationStore, OperationBody, GitOperation, assertOperationKind } from './git-operations';
+import type { WorkspaceSourcePolicy } from '../work/workspace-file-policy';
 export type { GitOperation, OperationBody } from './git-operations';
 export interface GitEntry {
     path: string;
@@ -43,18 +44,21 @@ export interface GitStatus {
 }
 interface Options extends RunnerOptions {
     dataDir?: string;
+    sourcePolicy?: WorkspaceSourcePolicy;
+    checkRecovery?: (root: string) => void;
 }
 type GitBytes = Buffer & {
     actualSize?: number;
     sourceVersion?: string;
 };
 export class ProjectGit {
-    private files = new ProjectFiles();
+    private files: ProjectFiles;
     private store: OperationStore;
     private active = new Set<string>();
     private pending = new Set<Promise<void>>();
     private closing = false;
     constructor(private options: Options = {}) {
+        this.files = new ProjectFiles(options.sourcePolicy);
         this.store = new OperationStore(path.join(options.dataDir ?? process.env.DATA_DIR ?? path.resolve('../.data'), 'project-git-operations'));
     }
     private run(root: string, args: string[], optional = false) {
@@ -91,6 +95,7 @@ export class ProjectGit {
     }
     async assertReady(root: string) {
         root = await this.canonical(root);
+        if (this.options.checkRecovery) { this.options.checkRecovery(root); return; }
         const commonDir = await this.commonDirectory(root);
         const uncertain = (await this.store.all()).find(record => !record.reviewedAt && record.state === 'uncertain' && (record.root === root || record.commonDir === commonDir));
         if (uncertain)
@@ -112,17 +117,18 @@ export class ProjectGit {
         return this.run(root, ['cat-file', 'blob', oid]);
     }
     private async worktreeBytes(root: string, name: string): Promise<GitBytes> {
+        const strictOwnership = this.options.sourcePolicy?.(root).strictOwnership === true;
         const absolute = path.join(root, name);
         const physical = await realpath(absolute);
         if ((process.platform === 'win32' ? physical.toLowerCase() !== absolute.toLowerCase() : physical !== absolute))
             throw new GitError('파일 경로가 링크로 교체되었습니다.', 409);
         const initial = await lstat(absolute);
-        if (!initial.isFile() || initial.isSymbolicLink())
+        if (!initial.isFile() || initial.isSymbolicLink() || strictOwnership && initial.nlink !== 1)
             throw new GitError('일반 파일만 읽을 수 있습니다.');
         const handle = await open(absolute, 'r');
         try {
             const stat = await handle.stat();
-            if (stat.ino !== initial.ino || stat.dev !== initial.dev)
+            if (stat.ino !== initial.ino || stat.dev !== initial.dev || strictOwnership && stat.nlink !== 1)
                 throw new GitError('파일이 교체되었습니다.', 409);
             const bytes = Buffer.alloc(Math.min(stat.size, 1024 * 1024 + 1));
             let offset = 0;
@@ -137,7 +143,7 @@ export class ProjectGit {
             const finalPhysical = await realpath(absolute);
             if (physical !== finalPhysical)
                 throw new GitError('읽는 동안 파일 경로가 변경되었습니다.', 409);
-            if (offset !== bytes.length || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs || current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs || current.isSymbolicLink())
+            if (offset !== bytes.length || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs || current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs || current.isSymbolicLink() || strictOwnership && (after.nlink !== 1 || current.nlink !== 1))
                 throw new GitError('읽는 동안 파일이 변경되었습니다.', 409);
             if (stat.size > 1024 * 1024)
                 return this.oversized(stat.size, digest(Buffer.concat([bytes, Buffer.from(JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, stat.ino]))])));
@@ -490,6 +496,7 @@ export class ProjectGit {
     async start(root: string, body: OperationBody, hooks: {
         onSettled?: (op: GitOperation) => void | Promise<void>;
         assertAllowed?: () => void | Promise<void>;
+        scope?: Pick<GitOperation, 'scope' | 'commonDir' | 'refs' | 'affectedRoots'>;
     } = {}) {
         assertOperationKind(body?.kind);
         root = await this.canonical(root);
@@ -508,7 +515,7 @@ export class ProjectGit {
             await hooks.assertAllowed?.();
             const status = await this.status(root);
             await this.validate(root, body, status);
-            op = await this.store.create(root, body);
+            op = await this.store.create(root, body, hooks.scope);
             op.startHead = status.head;
             op.commonDir = await this.commonDirectory(root);
             if (body.kind === 'push' && status.branch && status.remote) {

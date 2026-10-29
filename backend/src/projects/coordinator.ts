@@ -4,6 +4,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { Work, WorkStore } from '../work/store';
 import { gitCommonDirectory } from './git-metadata';
+import { ScopedOperationLocks, type OperationRequest } from './operation-locks';
+import { pathsOverlap } from '../work/workspace-paths';
 
 const coordinators = new WeakMap<WorkStore, ProjectOperationCoordinator>();
 const activeStates = new Set(['connecting', 'creating-thread', 'running', 'waiting-input', 'waiting-approval', 'recovery-required']);
@@ -22,10 +24,28 @@ export function projectCoordinator(store: WorkStore) {
 }
 
 export class ProjectOperationCoordinator {
+  private activityGuard?: (work: Work) => void;
+  setActivityGuard(guard: (work: Work) => void) { this.activityGuard = guard; }
+  assertActivityCanStart(work: Work, phase = work.phase) { this.assertWorkCanStart({ ...work, phase }); this.activityGuard?.({ ...work, phase }); }
   private readonly locks = new Map<string, symbol>();
   private readonly blocked = new Set<string>();
   private readonly recordsDirectory = join(resolve(process.env.DATA_DIR || '../.data'), 'project-git-operations');
-  constructor(private readonly store: WorkStore) {}
+  private readonly scoped: ScopedOperationLocks;
+  constructor(private readonly store: WorkStore) {
+    this.scoped = new ScopedOperationLocks(store, this.recordsDirectory, resources => [...this.locks.keys(), ...this.blocked].some(key => resources.some(resource => key.startsWith('git:') ? key === `git:${resource.commonDir}` : pathsOverlap(key, resource.root))));
+  }
+  operationPlan(request: OperationRequest) { return this.scoped.plan(request); }
+  acquireOperation(request: OperationRequest, owner?: string) { return this.scoped.acquire(request, owner); }
+  acquirePreparation(work: Work, request: OperationRequest) {
+    if (this.store.get(work.id)?.workspace?.status !== 'preparing') throw new ConflictException('준비 중인 고정 공간만 관리할 수 있습니다.');
+    return this.scoped.acquire(request, undefined, work.id);
+  }
+  assertOperationCanStart(request: OperationRequest) { this.scoped.assert(request); }
+  assertRecovery(request: OperationRequest) { this.scoped.assertRecovery(request); }
+  workOperation(work: Work, phase = work.phase): OperationRequest {
+    const root = work.executionPath ?? work.workspace?.executionPath ?? work.projectPath;
+    return ['implementation', 'verification'].includes(phase) ? { kind: 'workspace', root, commonDir: work.workspace?.commonDir } : { kind: 'documents', root, changeName: work.changeName };
+  }
 
   private keys(root: string): string[] {
     const path = canonical(root);
@@ -60,10 +80,13 @@ export class ProjectOperationCoordinator {
     }
   }
 
-  assertWorkCanStart(work: Work) { this.assertKeysFree(this.workKeys(work)); }
+  assertWorkCanStart(work: Work) {
+    this.scoped.assert(this.workOperation(work), undefined, true, work.id);
+  }
 
   acquire(root: string) {
     const keys = this.keys(root);
+    if (this.scoped.conflictsWithLegacy(root, keys.find(key => key.startsWith('git:'))?.slice(4))) throw new ConflictException('해당 저장소의 범위별 작업이 진행 중입니다.');
     this.assertKeysFree(keys);
     for (const work of this.store.list()) {
       if (['completed', 'archived'].includes(work.phase)) continue;
