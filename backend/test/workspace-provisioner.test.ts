@@ -163,3 +163,14 @@ it('생성 Git 프로세스 종료 미확인은 실패 뒤에도 관리·대상 
   const independent = join(dir, 'independent'); mkdirSync(independent);
   expect(() => projectCoordinator(store).acquireOperation({ kind: 'workspace', root: independent })()).not.toThrow();
 });
+it('unrelated 준비 흔적이 뒤늦게 생겨도 terminal rejected key의 fence를 우회하지 않는다', async () => {
+  repository(); const preview = await provisioner.preview(work, 'main');
+  const body = { requestKey: 'fenced-path', selectedBranch: 'main', previewToken: preview.documents!.confirmationToken, excludedConfirmed: true, policy: { version: 1, projectId: preview.projectId, planRevision: preview.documents!.planRevision, confirmed: true, runtime: 'none', dependencies: 'none', paths: [], generatedPaths: [], commands: [] } };
+  const spaces = (provisioner as any).spaces as WorkspaceService;
+  const fail = vi.spyOn(spaces, 'preflightReservation').mockImplementationOnce(() => { throw new ConflictException({ errorCode: 'workspace-git-path-unsupported' }); });
+  await expect(provisioner.prepare(work, body)).rejects.toHaveProperty('response.mutationOutcome', 'rejected-before-intent'); fail.mockRestore();
+  store.record('unrelated', work.id, 'workspace-preparation', { stage: 'copy', status: 'passed' });
+  let rejected: any; try { await provisioner.prepare(work, body); } catch (error) { rejected = error; }
+  expect(rejected).toBeInstanceOf(ConflictException); expect(rejected.getResponse()).not.toHaveProperty('mutationOutcome');
+  expect(store.get(work.id)?.workspace).toBeUndefined(); expect(store.records(work.id, 'workspace-request')).toEqual([]); expect(store.records(work.id, 'workspace-creation')).toEqual([]);
+});

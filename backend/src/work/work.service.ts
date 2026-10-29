@@ -155,15 +155,15 @@ export class WorkService {
     return this.document(id, body.path);
     } finally { release(); }
   }
-  planVersion(work: Work) {
+  planVersion(work: Work, validatedRoot?: string) {
     if (work.workspace?.kind === 'git-worktree' && !['completed', 'archived'].includes(work.phase)) {
       const expected = JSON.stringify(this.get(work.id));
-      const project = this.execution.queryPath(work), root = within(project, `openspec/changes/${work.changeName}`);
+      const project = validatedRoot ?? this.execution.queryPath(work), root = within(project, `openspec/changes/${work.changeName}`);
       const legacy = hash(this.documentsAtRoot(work, root).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.documentContent(root, path).replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
       const version = bindReviewedPlan(work, project, legacy);
       // This proof belongs only to this synchronous read; every later action revalidates.
       const latest = this.get(work.id);
-      if (JSON.stringify(latest) !== expected || this.execution.queryPath(latest) !== project) throw new ConflictException('문서를 읽는 중 업무 공간이 변경되었습니다');
+      if (JSON.stringify(latest) !== expected || !validatedRoot && this.execution.queryPath(latest) !== project) throw new ConflictException('문서를 읽는 중 업무 공간이 변경되었습니다');
       return version;
     }
     const legacy = hash(this.documents(work).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
@@ -230,25 +230,25 @@ export class WorkService {
     }
     throw new BadRequestException('알 수 없는 동작입니다');
   }
-  private assertVerificationUnchanged(work: Work, expectedWork: string, snapshot: ReturnType<ExecutionService['snapshot']>) {
-    if (JSON.stringify(this.get(work.id)) !== expectedWork || JSON.stringify(this.execution.snapshot(work)) !== JSON.stringify(snapshot) || this.store.records(work.id, 'question').some(unresolvedQuestion) || work.reviewedVersion !== this.planVersion(this.get(work.id))) throw new ConflictException('검증 확인 중 업무·소스·계획 또는 질문이 변경되었습니다. 다시 확인해 주세요');
+  private assertVerificationUnchanged(work: Work, expectedWork: string, snapshot: ReturnType<ExecutionService['snapshot']>, validatedRoot?: string) {
+    if (JSON.stringify(this.get(work.id)) !== expectedWork || JSON.stringify(this.execution.snapshot(work, validatedRoot)) !== JSON.stringify(snapshot) || this.store.records(work.id, 'question').some(unresolvedQuestion) || work.reviewedVersion !== this.planVersion(this.get(work.id), validatedRoot)) throw new ConflictException('검증 확인 중 업무·소스·계획 또는 질문이 변경되었습니다. 다시 확인해 주세요');
   }
-  async integrationReadiness(id: string, reviewedVersion: string) {
+  async integrationReadiness(id: string, reviewedVersion: string, validatedRoot?: string) {
     const work = this.get(id);
-    if (work.workspace?.kind !== 'git-worktree' || work.phase !== 'verification' || work.state !== 'idle' || !work.reviewedVersion || work.reviewedVersion !== reviewedVersion || work.reviewedVersion !== this.planVersion(work)) throw new ConflictException('검증 단계의 업무·최신 계획 검토·실행 종료를 먼저 확인해 주세요.');
-    const expected = JSON.stringify(work), snapshot = this.execution.snapshot(work), sourceRevision = snapshotRevision(snapshot);
-    await this.requireVerifications(work, sourceRevision);
-    this.assertVerificationUnchanged(work, expected, snapshot);
-    const commands = this.execution.commands(work), results = this.execution.results(work, sourceRevision, { full: commands, work: [] });
+    if (work.workspace?.kind !== 'git-worktree' || work.phase !== 'verification' || work.state !== 'idle' || !work.reviewedVersion || work.reviewedVersion !== reviewedVersion || work.reviewedVersion !== this.planVersion(work, validatedRoot)) throw new ConflictException('검증 단계의 업무·최신 계획 검토·실행 종료를 먼저 확인해 주세요.');
+    const expected = JSON.stringify(work), snapshot = this.execution.snapshot(work, validatedRoot), sourceRevision = snapshotRevision(snapshot);
+    await this.requireVerifications(work, sourceRevision, validatedRoot);
+    this.assertVerificationUnchanged(work, expected, snapshot, validatedRoot);
+    const commands = this.execution.commands(work, 'full', undefined, validatedRoot), results = this.execution.results(work, sourceRevision, { full: commands, work: [] });
     const workVerificationRefs = commands.map(command => results.filter(row => row.commandId === command.id && row.scope === 'full').at(-1)!.id);
     if (work.browserScenario) workVerificationRefs.push(this.store.records(id, 'browser-verification').at(-1)!.id);
     return { work, sourceRevision, workVerificationRefs };
   }
-  private async requireVerifications(work: Work, revision?: string) {
+  private async requireVerifications(work: Work, revision?: string, validatedRoot?: string) {
     await this.browser.assertPassed(work);
     new FileResults(this.store).assertSourcePlan(work);
     if (this.store.records(work.id, 'question').some(unresolvedQuestion)) throw new ConflictException('미해결 질문이 있습니다');
-    const commands = this.execution.commands(work), results = this.execution.results(work, revision, { full: commands, work: [] });
+    const commands = this.execution.commands(work, 'full', undefined, validatedRoot), results = this.execution.results(work, revision, { full: commands, work: [] });
     if (!commands.length || commands.some(command => { const result = results.filter(r => r.commandId === command.id && r.scope === 'full').at(-1); return !result || result.status !== 'passed' || !result.fresh; })) throw new ConflictException('모든 필수 검증이 최신 버전에서 통과해야 합니다');
   }
   private async startGuidedReview(id: string) {

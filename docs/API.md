@@ -151,12 +151,40 @@ Git 업무의 `changeReport`는 `workspaceBaselineCommit` 대비 해당 공간�
 
 `GET /api/work/:id/integration/commit-preview`는 대기 중인 통합 요청의 업무 공간을 확인하여 `integrationId`, `version`, `head`, staged/unstaged/untracked `entries`와 `selectionMode:whole-file`을 반환한다. 최신 계획·필수 업무 검증이 필요하다. 버전에는 실제 소스·전체 index·Git 상태·대상 HEAD·검증 및 변환 설정을 결합한다.
 
+5.6 화면 연결 계약: `GET /api/work/:id/integration/reservation-preview`는 경로·명령 입력 없이 `{workHead, sourceBranch, sourceHead, branches:[{name,commit}], reviewedVersion}`를 제공한다. `sourceBranch`는 detached HEAD일 때 `null`이며, `branches`는 업무 자체 브랜치를 제외한 로컬 `refs/heads`이다. 조회는 원본·업무 소유 관계를 확인하며, 예약 POST의 최신 계획·업무 검증 게이트를 대신하지 않는다.
+
+준비·예약·결과 커밋·후보 준비·후보 stage/commit/reconcile 화면은 전송 전에 정확한 endpoint/body/requestKey를 영속 저장한다. 응답 유실이나 일반 HTTP 오류는 동일 요청만 재확인한다. 서버가 의도 저장 전에 확정 거부한 경우에만 `{mutationOutcome:"rejected-before-intent", requestKey}`를 반환하며, 화면은 저장한 키와 응답 키가 일치할 때 알려진 실패로 분류하여 새 기준 확인 후 명시적으로 새 요청을 허용한다. 이 표시는 변경 가능성이 있는 실패에 붙이지 않는다.
+
+클라이언트 기록은 기존 프로필 초안 저장소를 사용하며, 재시도를 포함한 전송 시도마다 별도 `attemptId`를 저장한다. 응답 저장 직전 현재 `attemptId`·endpoint·body가 모두 일치해야 하므로 이전 창의 늦은 성공·실패가 더 최신 복구 기록을 덮지 않는다. Web Locks 지원 브라우저는 같은 origin의 기록 읽기·쓰기 구간만 잠그며 네트워크를 기다리는 동안 잠금을 보유하지 않는다. 미지원 환경의 보장은 동일 JavaScript 실행 환경의 재진입·재마운트에 한정되고, 현재 프로필 IPC에 전역 CAS가 없으므로 서로 다른 origin의 여러 창에 대한 원자성은 보장하지 않는다.
+
+준비 확인 토큰이 만료됐으면 화면의 명시적 복구는 `POST /api/work/:id/workspace/recover`에 기존 요청 키·브랜치·정책을 고정하고 새 미리보기의 `previewToken`만 갱신하여 전송한다. 서버는 원래 문서·제외 목록·소스 기준을 다시 확인하며 기준 변경을 새 의도로 대체하지 않는다. AI 시작은 준비 완료 뒤 별도 클릭이고, 후보 `validating`은 검증 필요 상태로 표시한다. 자동 반영·완료 처리는 하지 않는다.
+
 `POST /api/work/:id/integration/result-commit`은 `{integrationId, requestKey, confirmed:true, previewVersion, paths, message}`를 받는다. 파일 전체를 선택하며 검증 소스 변경을 남겨둘 수 없다. 부분 stage는 앱 소스/Git의 파일 전체 스테이징 후 다시 조회한다. 선택 밖 staged 파일·비밀 파일·미확인 제외 정책은 차단한다. 검토된 고정 로컬 자료와 생성물은 선택 대상에서 제외한다. Git ignore에 가려진 검증 소스나 제품 파일의 assume-unchanged/skip-worktree는 직접 정리하고 재검증해야 한다. 파일당 8MiB 초과와 clean 필터·working-tree-encoding·ident 변환은 명시적으로 거부한다.
 
 서버 소유 NUL 경로 파일로 선택한 경로만 stage한다. 부모 tree와 선택 파일의 내용·mode를 대조한 고정 tree로 커밋 객체를 만들고, 명시한 업무 ref가 기존 HEAD일 때만 CAS로 갱신한다. 전체 add·자동 stash/reset·원본 커밋·원격 push는 하지 않는다. 초기 요청의 `workHead`와 fingerprint는 유지하고 확인된 `resultCommit`/`resultTree`를 별도로 저장한다. 결과는 `committed`, 변경 없는 `noop`, 확인된 실패 `failed`, 실제 결과 확인이 필요한 `uncertain`으로 구분한다.
 
 같은 키의 재요청은 기존 기록과 실제 소유 공간·OID·부모·tree를 대조하며 Git 쓰기를 자동 반복하지 않는다. 확인된 실패의 index는 보존하여 새 미리보기와 명시 요청으로 다시 시도할 수 있다. 종료 불명 프로세스는 해당 공간의 점유와 종료·업데이트 보호를 유지한다. 결과 커밋은 후보 병합·후보 검증·원본 반영·업무 완료를 대신하지 않는다. 이 기능은 결합 검증 전 개발 상태다.
 
+### 통합 후보 준비와 편집 (개발 중)
+
+아래 API는 결합 검증 전 구현·회귀 검증 중이며 기본 활성화·배포 완료를 뜻하지 않는다.
+
+`GET /api/work/:id/integration/:candidateId/preview`는 고정한 대상/결과 커밋과 후보 경로·브랜치 및 `candidateVersion`을 반환한다. `POST .../:candidateId/prepare`는 `{requestKey, confirmed:true, expectedVersion}`을 받아 별도 소유 worktree에서 병합한다. 결과는 검증이 필요한 `validating`, 충돌 해결이 필요한 `conflicted`, 실패 또는 불확실 상태로 구분한다. 업무 결과의 검증을 후보 검증으로 재사용하지 않는다. 원본과 업무 ref/index를 보존하며 자동 stash·원본 반영·완료 처리를 하지 않는다.
+
+프로젝트 조회는 `workId`와 `candidateId`를 함께 받는다. 고정 경로·프로젝트/업무 관계·실제 Git 등록·HEAD·병합 소유를 확인하고, 누락·손상된 후보를 원본이나 업무 공간으로 대체하지 않는다. `workspace`는 `kind:integration-candidate`, `readOnly:false`, `gitReadOnly:true`, `editContract:candidate-cas`를 제공하며 실제 파일의 `editable`과 거부 사유를 확인해야 한다. 비교 기준은 고정한 대상 HEAD다.
+
+후보의 `file`/`entry` 조회는 파일 버전과 후보 버전을 결합한 `version` 및 `candidateVersion`을 반환한다. 후보 파일 PUT, entries 생성·이동, 파일 DELETE는 이 버전을 사용한다. 비밀·고정 로컬 자료·링크·다른 소유 경로는 변경할 수 없다. `.gitattributes`의 미지원 변환도 raw 파일 편집으로 복구할 수 있지만, 변환이 적용되는 동안 Git status/diff·stage/commit은 차단한다. 이때 workspace는 `partial:true`와 `partialReason`을 제공하고 raw 파일 조회·복구 경로를 유지한다.
+
+`GET .../:candidateId/edit/preview`는 `candidateVersion`, `mode:conflict|revision`, 현재 `head`, 파일별 index/worktree 상태·선택 가능 여부와 과거 충돌 목록을 반환한다. `POST .../edit/stage`는 `{requestKey, confirmed:true, candidateVersion, paths}`, `POST .../edit/commit`은 여기에 `message`를 받는다. 전체 파일 단위로 명시 선택하며, 충돌 해결은 고정한 대상/결과의 두 부모 커밋, 후속 수정은 현재 후보의 한 부모 커밋을 만든다. 대상 내용으로 해결해 diff가 없어도 미병합 index를 명시 해결한 뒤 두 부모 커밋을 만들 수 있다. 후보 변경은 후보 검증만 무효화한다. 일반 프로젝트 Git 변경 API로 후보의 merge/rebase/abort를 실행할 수 없다.
+
+응답 유실 시 같은 키·같은 내용을 재조회하며 새로운 키로 자동 반복하지 않는다. `POST .../edit/reconcile`은 `{requestKey, confirmed:true}`로 기존 요청의 실제 OID·부모·tree·소유 상태를 확인한다. 확인된 소유 병합의 종료 메타데이터만 정리할 수 있으며 stage/commit/ref 갱신을 자동 재실행하지 않는다. 다른 창의 버전·소스·계획·검증·Git 상태가 바뀌면 새 미리보기가 필요하다. 과거 stage 영수증의 `fresh:false, superseded:true`는 이후 변경으로 최신 상태가 아님을 뜻한다.
+
 파일 변경 API는 대상 경로가 한 변경 문서 폴더에 한정되면 문서 범위를, 그 외에는 해당 실행 공간 범위를 점유한다. 같은 원본의 Alpha 문서 미확인 기록이 Beta 문서 저장을 일괄 차단하지 않는다. Git API는 index/HEAD·공유 관리/ref·통합 범위를 작업 종류에 맞춰 취득하며 새 intent의 첫 저장부터 scope/commonDir/refs/affectedRoots를 보존한다. 같은 실제 ref의 symbolic-ref 별칭도 같은 잠금으로 처리한다. 종료 미확인 프로세스는 사용자 확인만으로 성공 처리하지 않고 실제 종료와 등록·커밋을 확인할 때까지 차단한다.
 
 Git 업무의 계획 버전은 기존 검토 hash를 보존하면서 가져온 .openspec.yaml·source-ideas의 계획 revision도 비교한다. 추가 문서가 변경되면 기존 검토로 AI 구현을 시작할 수 없고 문서 목록에 포함해 명시적 재검토를 받는다. tasks 진행 체크만의 변경은 전체 문서 revision에서 계획 변경으로 계산하지 않는다.
+
+### 화면 조회와 저장된 요청의 대기 상태
+
+보드의 프로젝트·명세·아이디어 조회와 업무의 상태·열린 문서 조회는 느린 응답 중 같은 조회를 계속 추가하지 않는다. 현재 조회 한 번과 최신 후속 조회 한 번으로 합친다. 알림 진입도 업무 상태의 같은 조회 경로를 사용한다. 해당 읽기 GET은 30초 또는 화면 종료 시 클라이언트 대기를 취소할 수 있으며, 이는 서버의 업무 실행을 중단하거나 실패로 판정하는 동작이 아니다.
+
+변경 요청은 POST 전에 요청 키와 입력을 저장하고 화면에 `요청 저장됨·응답 확인 중`과 실제 키를 표시한다. 응답 유실·대기는 새 키로 재실행할 근거가 아니며 저장된 동일 키로 실제 결과를 확인한다. 읽기 제한 시간을 POST/PUT, 질문 답변·승인, 실행 중단 요청에 적용하거나 자동 재전송하지 않는다.

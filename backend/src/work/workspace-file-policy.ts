@@ -12,6 +12,8 @@ export type WorkspaceSourcePolicy = (root: string) => WorkspacePathPolicy;
 export function workspaceSourcePolicy(store: WorkStore): WorkspaceSourcePolicy {
   return root => {
     const works = store.list().filter(work => work.workspace && key(resolve(work.workspace.executionPath)) === key(resolve(root)));
-    return Object.assign((path: string) => works.some(work => workspaceResourcePath(work, path)), { strictOwnership: works.length > 0 });
+    const candidates = store.integrationRequests().filter(candidate => key(resolve(candidate.executionPath)) === key(resolve(root)));
+    const owners = [...works, ...candidates.flatMap(candidate => { const work = store.get(candidate.workId); return work ? [work] : []; })];
+    return Object.assign((path: string) => candidates.length > 0 && managedPrivatePath(path) || owners.some(work => workspaceResourcePath(work, path)), { strictOwnership: owners.length > 0 || candidates.length > 0 });
   };
 }

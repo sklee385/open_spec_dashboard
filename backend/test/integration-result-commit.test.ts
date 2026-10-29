@@ -191,3 +191,9 @@ it('JSON 키와 paths 순서만 달라진 같은 요청은 동일한 결과를 �
   writeFileSync(join(a.executionPath!, 'code.txt'), 'changed'); writeFileSync(join(a.executionPath!, 'other.txt'), 'new'); const inputBody = await preview(), response = await api('result-commit', inputBody); expect(response.data.status).toBe('committed');
   const reordered = Object.fromEntries(Object.entries({ ...inputBody, paths: [...inputBody.paths].reverse() }).reverse()); const replay = await api('result-commit', reordered); expect(replay).toEqual(response); expect(store.records('a', 'integration-result-commit')).toHaveLength(1);
 });
+it('결과 commit stale 거부 marker는 business intent 전만 반환한다', async () => {
+  writeFileSync(join(a.executionPath!, 'code.txt'), 'changed'); const input = { ...await preview(), requestKey: 'result-stale', previewVersion: '0'.repeat(64) };
+  const rejected = await api('result-commit', input); expect(rejected).toMatchObject({ status: 409, data: { mutationOutcome: 'rejected-before-intent', requestKey: input.requestKey } });
+  expect(store.records('a', 'integration-result-commit')).toEqual([]); expect(git(a.executionPath!, 'rev-parse', 'HEAD')).toBe(body.expectedWorkHead);
+  const changed = await api('result-commit', { ...input, message: 'different body' }); expect(changed.status).toBe(409); expect(changed.data).not.toHaveProperty('mutationOutcome');
+});

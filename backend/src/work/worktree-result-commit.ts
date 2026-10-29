@@ -11,6 +11,7 @@ import { managedPrivatePath, workspaceResourcePath, workspaceSourcePolicy } from
 import { DesktopLifecycle } from '../desktop/lifecycle';
 import { excludedNames } from './file-results';
 import { inspectWorkspacePath } from './workspace-paths';
+import { MutationAdmission } from './mutation-admission';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function ownedRead(root: string, path: string) {
@@ -125,7 +126,13 @@ export class WorktreeResultCommit {
     // A concurrent observer must never overwrite a live writer's newer process/tree evidence.
     return { ...row, status: 'uncertain', error: '실제 커밋 결과를 확인할 수 없습니다. 자동 재실행하지 않습니다.' };
   }
-  async commit(id: string, body: unknown) {
+  commit(id: string, body: unknown) {
+    const input = this.parse(body), recordId = `result-commit:${hash([id, input.requestKey])}`;
+    const exists = () => this.store.records(id, 'integration-result-commit').some(row => row.id === recordId) || this.store.records(id, 'workspace-git-intent').some(row => row.id === `${recordId}:git`);
+    if (exists()) return this.commitOnce(id, body);
+    return new MutationAdmission(this.store, id, 'integration-result-commit', input.requestKey, hash(input), exists).run(admission => this.commitOnce(id, body, admission));
+  }
+  private async commitOnce(id: string, body: unknown, admission?: MutationAdmission) {
     const input = this.parse(body), fingerprint = hash(input), recordId = `result-commit:${hash([id, input.requestKey])}`;
     const existing = this.store.records(id, 'integration-result-commit').find(row => row.id === recordId);
     if (existing) { if (existing.fingerprint !== fingerprint) throw new ConflictException('같은 요청 키에 다른 내용을 사용할 수 없습니다.'); return this.replay(id, existing); }
@@ -172,7 +179,7 @@ export class WorktreeResultCommit {
       const intent = { scope: 'index', root: view.root, commonDir: request.commonDir, refs: [`refs/heads/${work.workspace!.branch}`], affectedRoots: [view.root], status: 'running', processId: undefined as number | undefined };
       const intentId = `${recordId}:git`;
       row = { id: recordId, intentId, workId: id, integrationId: request.id, fingerprint, root: view.root, ref: `refs/heads/${work.workspace!.branch}`, startHead: view.head, sourceRevision: ready.sourceRevision, verificationRefs: ready.workVerificationRefs, message: input.message, paths, status: 'running', intent, createdAt: new Date().toISOString() };
-      this.store.transaction(() => { if (this.store.records(id, 'integration-result-commit').some(x => x.id === recordId)) throw new ConflictException('같은 요청이 진행 중입니다. 같은 키로 다시 조회해 주세요.'); projectCoordinator(this.store).assertRecovery({ kind: 'index', root: view.root, commonDir: request.commonDir }); this.save(recordId, id, row); this.store.record(intentId, id, 'workspace-git-intent', intent); });
+      this.store.transaction(() => { if (this.store.records(id, 'integration-result-commit').some(x => x.id === recordId)) throw new ConflictException('같은 요청이 진행 중입니다. 같은 키로 다시 조회해 주세요.'); projectCoordinator(this.store).assertRecovery({ kind: 'index', root: view.root, commonDir: request.commonDir }); admission?.admit(); this.save(recordId, id, row); this.store.record(intentId, id, 'workspace-git-intent', intent); });
       reserved = true;
       const mutate = async (args: string[]) => {
         const currentDir = lstatSync(directory!), currentFile = lstatSync(pathspec);

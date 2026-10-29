@@ -43,7 +43,7 @@ it.skipIf(process.platform !== 'win32').each(['same', 'new'])('실제 HTTP 긴 G
   const selected = selectRoot(join(root, 'long-' + 'x'.repeat(50))), before = app.get(WorkStore).get(work.id);
   const head = git('rev-parse', 'HEAD'), listing = git('worktree', 'list', '--porcelain');
   const rejected = await request(`${endpoint}/prepare`, body);
-  expect(rejected).toMatchObject({ status: 409, data: { errorCode: 'workspace-git-path-unsupported' } });
+  expect(rejected).toMatchObject({ status: 409, data: { errorCode: 'workspace-git-path-unsupported', mutationOutcome: 'rejected-before-intent', requestKey: body.requestKey } });
   const store = app.get(WorkStore), failed = store.get(work.id);
   expect(failed.workspace).toBeUndefined(); expect(failed.executionPath).toBeUndefined();
   expect(failed.state).toBe(before.state); expect(failed.errorCode).toBeUndefined();

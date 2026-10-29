@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, HttpException, Inject, OnModuleDestroy, Param, Post, Put, Query } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, HttpException, Inject, OnModuleDestroy, Optional, Param, Post, Put, Query } from '@nestjs/common';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +13,7 @@ import { projectCoordinator } from './coordinator';
 import { workspaceSourcePolicy } from '../work/workspace-file-policy';
 import { fileOperation, gitOperation } from './operation-scope';
 import { ProjectWorkspaceMetadata } from './workspace-metadata';
+import { CandidateGitReadBlocked, IntegrationEditing } from '../work/integration-editing';
 
 function canonical(root: string) { try { root = realpathSync(root); } catch { root = resolve(root); } return process.platform === 'win32' ? root.toLowerCase() : root; }
 
@@ -25,7 +26,8 @@ export class ProjectController implements OnModuleDestroy {
   constructor(@Inject(ProjectResolver) private readonly resolver: ProjectResolver,
     @Inject(WorkStore) private readonly store: WorkStore,
     @Inject(LegacyService) private readonly legacy: LegacyService,
-    @Inject(DesktopLifecycle) private readonly lifecycle: DesktopLifecycle) {
+    @Inject(DesktopLifecycle) private readonly lifecycle: DesktopLifecycle,
+    @Optional() @Inject(IntegrationEditing) private readonly candidateEditing?: IntegrationEditing) {
       this.coordinator = projectCoordinator(store);
       const sourcePolicy = workspaceSourcePolicy(store);
       this.files = new ProjectFiles(sourcePolicy); this.git = new ProjectGit({ dataDir: resolve(process.env.DATA_DIR || '../.data'), sourcePolicy, checkRecovery: root => this.coordinator.assertRecovery({ kind: 'workspace', root }) });
@@ -39,7 +41,12 @@ export class ProjectController implements OnModuleDestroy {
       throw error;
     }
   }
-  private root(sourceId: string, workId?: string) { return this.resolver.resolve(sourceId, workId).root; }
+  private root(sourceId: string, workId?: string, candidateId?: string) { return this.resolver.resolve(sourceId, workId, candidateId).root; }
+  private writableRoot(sourceId: string, workId?: string, candidateId?: string) {
+    const root = this.root(sourceId, workId, candidateId);
+    if (candidateId !== undefined) throw new ConflictException('후보는 현재 읽기 전용입니다. 후보 충돌 해결 절차를 사용해 주세요');
+    return root;
+  }
   private changed(root: string, paths?: string[]) {
     for (const work of this.store.list()) {
       if (['completed', 'archived'].includes(work.phase) || (canonical(work.projectPath) !== canonical(root) && (!work.executionPath || canonical(work.executionPath) !== canonical(root)))) continue;
@@ -52,40 +59,64 @@ export class ProjectController implements OnModuleDestroy {
     }
     this.legacy.updates.next();
   }
-  private async mutate<T>(sourceId: string, workId: string | undefined, paths: string[], run: (root: string) => T | Promise<T>) {
+  private async mutate<T>(sourceId: string, workId: string | undefined, paths: string[], run: (root: string) => T | Promise<T>, candidateId?: string) {
     return this.query(async () => {
-      const root = this.root(sourceId, workId);
+      const root = this.writableRoot(sourceId, workId, candidateId);
       const release = this.coordinator.acquireOperation(fileOperation(root, paths));
       try { const result = await run(root); this.changed(root, paths); return result; }
       finally { release(); }
     });
   }
 
-  @Get('tree') tree(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path = '', @Query('showHidden') hidden?: string, @Query('cursor') cursor?: string) {
-    return this.query(() => this.files.tree(this.root(source, workId), path, { showHidden: hidden === 'true', cursor }));
+  @Get('tree') tree(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path = '', @Query('showHidden') hidden?: string, @Query('cursor') cursor?: string, @Query('candidateId') candidateId?: string) {
+    return this.query(() => this.files.tree(this.root(source, workId, candidateId), path, { showHidden: hidden === 'true', cursor }));
   }
-  @Get('search') search(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('q') q = '', @Query('showHidden') hidden?: string, @Query('cursor') cursor?: string) {
-    return this.query(() => this.files.search(this.root(source, workId), q, { showHidden: hidden === 'true', cursor }));
+  @Get('search') search(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('q') q = '', @Query('showHidden') hidden?: string, @Query('cursor') cursor?: string, @Query('candidateId') candidateId?: string) {
+    return this.query(() => this.files.search(this.root(source, workId, candidateId), q, { showHidden: hidden === 'true', cursor }));
   }
-  @Get('file') file(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string) { return this.query(() => this.files.read(this.root(source, workId), path)); }
-  @Get('entry') entry(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string) { return this.query(() => this.files.entry(this.root(source, workId), path)); }
-  @Put('file') save(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any) { return this.mutate(source, workId, [body?.path], root => this.files.save(root, body)); }
-  @Post('entries') create(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any) { return this.mutate(source, workId, [body?.path], root => this.files.create(root, body)); }
-  @Post('entries/move') move(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any) { return this.mutate(source, workId, [body?.path, body?.target], root => this.files.move(root, body)); }
-  @Delete('file') remove(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any) { return this.mutate(source, workId, [body?.path], root => this.files.remove(root, body)); }
-  @Get('git/status') status(@Param('sourceId') source: string, @Query('workId') workId: string | undefined) { return this.query(() => this.git.status(this.root(source, workId))); }
-  @Get('workspace') workspace(@Param('sourceId') source: string, @Query('workId') workId: string | undefined) { return this.query(() => new ProjectWorkspaceMetadata(this.resolver, this.store, this.git).read(source, workId)); }
-  @Get('git/diff') diff(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string, @Query('side') side: 'staged' | 'unstaged' | 'commit', @Query('commit') commit?: string) {
-    return this.query(() => this.git.diff(this.root(source, workId), { path, side, commit }));
+  @Get('file') file(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string, @Query('candidateId') candidateId?: string) { return this.query(async () => {
+    const root = this.root(source, workId, candidateId);
+    if (candidateId !== undefined && this.candidateEditing) return this.candidateEditing.file(source, workId!, candidateId, path);
+    const file = await this.files.read(root, path); return candidateId === undefined ? file : { ...file, editable: false, reason: '후보는 현재 읽기 전용입니다' };
+  }); }
+  @Get('entry') entry(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string, @Query('candidateId') candidateId?: string) { return this.query(() => {
+    const root = this.root(source, workId, candidateId); return candidateId !== undefined && this.candidateEditing ? this.candidateEditing.entry(source, workId!, candidateId, path) : this.files.entry(root, path);
+  }); }
+  @Put('file') save(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any, @Query('candidateId') candidateId?: string) {
+    if (candidateId !== undefined && this.candidateEditing) return this.query(() => this.candidateEditing!.saveFile(source, workId!, candidateId, body));
+    return this.mutate(source, workId, [body?.path], root => this.files.save(root, body), candidateId);
   }
-  @Get('git/branches') branches(@Param('sourceId') source: string, @Query('workId') workId: string | undefined) { return this.query(() => this.git.branches(this.root(source, workId))); }
-  @Get('git/log') log(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('cursor') cursor?: string) { return this.query(() => this.git.log(this.root(source, workId), cursor)); }
-  @Get('git/commits/:hash') commit(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('hash') hash: string) { return this.query(() => this.git.commit(this.root(source, workId), hash)); }
-  @Get('git/commits/:hash/file') commitFile(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('hash') hash: string, @Query('path') path: string) { return this.query(() => this.git.commitFile(this.root(source, workId), hash, path)); }
-  @Get('git/operations/:id') operation(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('id') id: string) { return this.query(() => this.git.get(this.root(source, workId), id)); }
-  @Post('git/operations/:id/reconcile') @HttpCode(200) reconcile(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('id') id: string, @Body() body: { confirmed: boolean }) {
+  @Post('entries') create(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any, @Query('candidateId') candidateId?: string) {
+    if (candidateId !== undefined && this.candidateEditing) return this.query(() => this.candidateEditing!.mutateEntry(source, workId!, candidateId, 'create', body));
+    return this.mutate(source, workId, [body?.path], root => this.files.create(root, body), candidateId);
+  }
+  @Post('entries/move') move(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any, @Query('candidateId') candidateId?: string) {
+    if (candidateId !== undefined && this.candidateEditing) return this.query(() => this.candidateEditing!.mutateEntry(source, workId!, candidateId, 'move', body));
+    return this.mutate(source, workId, [body?.path, body?.target], root => this.files.move(root, body), candidateId);
+  }
+  @Delete('file') remove(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: any, @Query('candidateId') candidateId?: string) {
+    if (candidateId !== undefined && this.candidateEditing) return this.query(() => this.candidateEditing!.mutateEntry(source, workId!, candidateId, 'delete', body));
+    return this.mutate(source, workId, [body?.path], root => this.files.remove(root, body), candidateId);
+  }
+  @Get('git/status') status(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('candidateId') candidateId?: string) { return this.query(async () => {
+    const root = this.root(source, workId, candidateId); if (candidateId !== undefined && this.candidateEditing) await this.candidateEditing.assertGitRead(source, workId!, candidateId); return this.git.status(root);
+  }); }
+  @Get('workspace') workspace(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('candidateId') candidateId?: string) { return this.query(async () => {
+    let blocked: string | undefined;
+    if (candidateId !== undefined && this.candidateEditing) try { await this.candidateEditing.assertGitRead(source, workId!, candidateId); } catch (error) { if (error instanceof CandidateGitReadBlocked) blocked = error.message; else throw error; }
+    return new ProjectWorkspaceMetadata(this.resolver, this.store, this.git).read(source, workId, candidateId, blocked);
+  }); }
+  @Get('git/diff') diff(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('path') path: string, @Query('side') side: 'staged' | 'unstaged' | 'commit', @Query('commit') commit?: string, @Query('candidateId') candidateId?: string) {
+    return this.query(async () => { const root = this.root(source, workId, candidateId); if (candidateId !== undefined && this.candidateEditing) await this.candidateEditing.assertGitRead(source, workId!, candidateId); return this.git.diff(root, { path, side, commit }); });
+  }
+  @Get('git/branches') branches(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('candidateId') candidateId?: string) { return this.query(() => this.git.branches(this.root(source, workId, candidateId))); }
+  @Get('git/log') log(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Query('cursor') cursor?: string, @Query('candidateId') candidateId?: string) { return this.query(() => this.git.log(this.root(source, workId, candidateId), cursor)); }
+  @Get('git/commits/:hash') commit(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('hash') hash: string, @Query('candidateId') candidateId?: string) { return this.query(() => this.git.commit(this.root(source, workId, candidateId), hash)); }
+  @Get('git/commits/:hash/file') commitFile(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('hash') hash: string, @Query('path') path: string, @Query('candidateId') candidateId?: string) { return this.query(() => this.git.commitFile(this.root(source, workId, candidateId), hash, path)); }
+  @Get('git/operations/:id') operation(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('id') id: string, @Query('candidateId') candidateId?: string) { return this.query(() => this.git.get(this.root(source, workId, candidateId), id)); }
+  @Post('git/operations/:id/reconcile') @HttpCode(200) reconcile(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Param('id') id: string, @Body() body: { confirmed: boolean }, @Query('candidateId') candidateId?: string) {
     return this.query(async () => {
-      const root = this.root(source, workId);
+      const root = this.writableRoot(source, workId, candidateId);
       try {
         const result = await this.git.reconcile(root, id, body);
         await this.git.assertReady(root);
@@ -106,10 +137,10 @@ export class ProjectController implements OnModuleDestroy {
       }
     });
   }
-  @Post('git/operations') @HttpCode(202) start(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: OperationBody) {
+  @Post('git/operations') @HttpCode(202) start(@Param('sourceId') source: string, @Query('workId') workId: string | undefined, @Body() body: OperationBody, @Query('candidateId') candidateId?: string) {
     return this.query(() => {
+      const root = this.writableRoot(source, workId, candidateId);
       assertOperationKind(body?.kind);
-      const root = this.root(source, workId);
       if (!body || typeof body.requestKey !== 'string' || !body.requestKey || typeof body.token !== 'string') throw new BadRequestException('요청 키와 상태 토큰이 필요합니다');
       const key = JSON.stringify([canonical(root), body.requestKey]), fingerprint = JSON.stringify(body);
       const pending = this.starting.get(key);

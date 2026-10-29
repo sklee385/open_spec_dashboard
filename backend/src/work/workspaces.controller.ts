@@ -12,8 +12,7 @@ export class WorkspacesController implements OnModuleDestroy {
   @Get('preview') preview(@Param('id') id: string, @Query('selectedBranch') selectedBranch?: string) { return this.provisioner.preview(this.works.get(id), selectedBranch); }
   @Post('prepare') @HttpCode(200) prepare(@Param('id') id: string, @Body() body: unknown) {
     const work = this.works.get(id);
-    if (!new WorkspaceService(this.works.store).hasSpace(work) && (!work.reviewedVersion || work.reviewedVersion !== this.works.planVersion(work))) throw new ConflictException('최신 문서 검토를 먼저 완료해 주세요.');
-    return this.provisioner.prepare(work, body);
+    return this.provisioner.prepare(work, body, () => { if (!new WorkspaceService(this.works.store).hasSpace(work) && (!work.reviewedVersion || work.reviewedVersion !== this.works.planVersion(work))) throw new ConflictException('최신 문서 검토를 먼저 완료해 주세요.'); });
   }
   // An explicit retry uses the same durable request and actual ownership checks.
   // It cannot choose a new path or silently rerun failed local commands.

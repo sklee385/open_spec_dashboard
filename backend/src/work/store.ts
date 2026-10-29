@@ -18,6 +18,7 @@ export interface WorkWorkspace {
 export interface IntegrationCandidate {
   candidateId: string; executionPath: string; profileId: string; rootId: string; rootPath: string; managedPath: string; projectId: string;
   candidateCommit: string | null; conflicts: string[]; verificationRefs: string[];
+  candidateMutationVersion?: string;
 }
 export interface IntegrationRequest extends IntegrationCandidate {
   id: string; version: 1; requestKey: string; fingerprint: string; workId: string; projectPath: string; workspaceId: string; workExecutionPath: string;

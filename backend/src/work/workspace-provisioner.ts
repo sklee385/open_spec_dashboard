@@ -8,6 +8,7 @@ import { WorktreeManager } from './worktree-manager';
 import { FileResults } from './file-results';
 import { unresolvedQuestion } from '../codex/questions';
 import { projectCoordinator } from '../projects/coordinator';
+import { MutationAdmission } from './mutation-admission';
 interface Options { enabled?: () => boolean; manager?: WorktreeManager; }
 const pathErrorCodes = new Set(['workspace-git-path-unsupported', 'workspace-git-path-check-failed']);
 const reservationEvidence = ['baseline', 'isolated-baseline', 'workspace-creation', 'workspace-documents', 'workspace-preparation', 'workspace-git-intent', 'workspace-local-preparation', 'workspace-local-process', 'workspace-baseline'];
@@ -51,16 +52,25 @@ export class WorkspaceProvisioner {
     const documents = git.state === 'ready' && work.reviewedVersion ? await this.manager.previewDocuments(work, git.selectedBranch!) : null;
     return { ...this.status(work), git, documents, projectId: createHash('sha256').update(realpathSync(work.projectPath)).digest('hex') };
   }
-  prepare(work: Work, body: any) {
+  prepare(work: Work, body: any, before?: () => void) {
     // A renewed confirmation token may refer to the same immutable request.
     // Its document/exclusion basis is checked separately below.
     const fingerprint = createHash('sha256').update(JSON.stringify(body ? { ...body, previewToken: undefined } : null)).digest('hex'), active = this.pending.get(work.id);
     if (active) { if (active.fingerprint !== fingerprint) throw new ConflictException('다른 공간 준비 요청이 진행 중입니다.'); return active.promise; }
-    const release = projectCoordinator(this.store).acquireOperation({ kind: 'documents', root: work.projectPath, changeName: work.changeName });
-    const promise = this.perform(work, body, fingerprint).finally(() => { this.pending.delete(work.id); release(); });
+    let release: (() => void) | undefined;
+    const exists = () => this.spaces.hasSpace(this.store.get(work.id) ?? work) || reservationEvidence.some(kind => this.store.records(work.id, kind).length > 0) || this.store.records(work.id, 'workspace-request').some(row => row.requestKey === body?.requestKey);
+    const perform = async (admission?: MutationAdmission) => { before?.(); release = projectCoordinator(this.store).acquireOperation({ kind: 'documents', root: work.projectPath, changeName: work.changeName }); return this.perform(work, body, fingerprint, admission); };
+    const preview = this.store.records(work.id, 'workspace-document-preview')[0], selected = this.settings.read();
+    const basis = createHash('sha256').update(JSON.stringify([work.reviewedVersion, preview && [preview.documentRevision, preview.excludedRevision, preview.reviewedVersion, preview.sourceHead, preview.baseCommit, preview.selectedBranch]])).digest('hex');
+    const context = createHash('sha256').update(JSON.stringify([selected.version, selected.selectedRootId, selected.roots])).digest('hex');
+    const validKey = typeof body?.requestKey === 'string' && /^[a-zA-Z0-9:_-]{1,160}$/.test(body.requestKey);
+    const admission = validKey ? new MutationAdmission(this.store, work.id, 'workspace-prepare', body.requestKey, fingerprint, exists, { retry: { context, basis, canRetry: () => !exists(), pathFailure: error => !!pathErrorCode(error) } }) : undefined;
+    const terminal = admission && this.store.records(work.id, 'mutation-admission').find(row => row.id === admission.id);
+    const admittedRecovery = this.store.records(work.id, 'workspace-request').some(row => row.requestKey === body?.requestKey) && (!terminal || terminal.status === 'admitted');
+    const promise = (admission && !admittedRecovery ? admission.run(perform) : perform()).finally(() => { this.pending.delete(work.id); release?.(); });
     this.pending.set(work.id, { fingerprint, promise }); return promise;
   }
-  private async perform(work: Work, body: any, fingerprint: string) {
+  private async perform(work: Work, body: any, fingerprint: string, admission?: MutationAdmission) {
     const latest = this.store.get(work.id); if (!latest) throw new ConflictException('업무가 없습니다.'); Object.assign(work, latest);
     // Existing copy paths never depend on a newly selected root or the feature gate.
     if (this.spaces.hasSpace(work) && !work.workspace) { this.spaces.path(work); return this.status(work); }
@@ -85,6 +95,7 @@ export class WorkspaceProvisioner {
     if (previous?.documentBasis && documentBasis !== previous.documentBasis) throw new ConflictException('고정 공간의 검토 문서·제외 목록 기준이 변경되었습니다. 별도 복구가 필요합니다.');
     if (!git.copyEligible && !this.spaces.hasSpace(work)) this.spaces.preflightReservation(work, this.settings, 'git-worktree');
     this.store.transaction(() => {
+      admission?.admit();
       if (retryable) {
         const current = this.store.get(work.id), request = this.store.records(work.id, 'workspace-request')[0];
         if (!current || !this.retryablePathFailure(current, request) || JSON.stringify(request) !== JSON.stringify(savedPrevious)) throw new ConflictException('재시도 확인 중 공간 준비 상태가 변경되었습니다.');

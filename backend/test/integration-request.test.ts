@@ -56,7 +56,7 @@ it('다른 등록 프로젝트·업무의 같은 공통 저장소 요청과 동�
   const again = await Promise.all([request(owner, ownerBody), request(owner, ownerBody)]); expect(again[0]).toEqual(again[1]);
 });
 it('최신 업무 검증·계획과 실제 HEAD·소유 경계 및 명시적 요청을 요구한다', async () => {
-  for (const changed of [{ expectedWorkHead: '0'.repeat(40) }, { expectedTargetHead: '0'.repeat(40) }, { reviewedVersion: 'old' }, { confirmed: false }, { targetBranch: '--upload-pack=bad' }, { path: source }]) expect((await request('a', { ...body, ...changed })).status).toBeGreaterThanOrEqual(400);
+  for (const changed of [{ expectedWorkHead: '0'.repeat(40) }, { expectedTargetHead: '0'.repeat(40) }, { reviewedVersion: 'old' }, { confirmed: false }, { targetBranch: '--upload-pack=bad' }, { path: source }]) expect((await request('a', { ...body, ...changed, requestKey: 'check-' + Object.keys(changed)[0] })).status).toBeGreaterThanOrEqual(400);
   store.record('verified-a', 'a', 'verification', { status: 'failed' }); expect((await request('a', body)).status).toBe(409); expect(store.records('a', 'integration-request')).toHaveLength(0);
   expect((await request('missing')).status).toBe(404);
 });
@@ -87,7 +87,7 @@ it('변조된 업무 소유권·copy 공간·현재 소스 변경을 통합하�
 it('후보 용량이 미확인이면 예약하지 않고 기존 멱등 응답은 그대로 조회한다', async () => {
   const view = settings.view.bind(settings), actual = view(); const spy = vi.spyOn(settings, 'view').mockReturnValue({ ...actual, freeBytes: null });
   expect((await request('a', body)).status).toBe(409); expect(store.records('a', 'integration-request')).toHaveLength(0); spy.mockRestore();
-  const initial = await request('a', body); expect(initial.status).toBe(200); vi.spyOn(settings, 'view').mockReturnValue({ ...view(), freeBytes: null }); expect(await request('a', body)).toEqual(initial);
+  const fresh = { ...body, requestKey: 'capacity-retry' }, initial = await request('a', fresh); expect(initial.status).toBe(200); vi.spyOn(settings, 'view').mockReturnValue({ ...view(), freeBytes: null }); expect(await request('a', fresh)).toEqual(initial);
 });
 it.skipIf(process.platform !== 'win32')('설치 Git이 지원하지 않는 긴 후보 경로는 DB 예약 전에 차단한다', async () => {
   const path = join(root, ...Array.from({ length: 5 }, (_, index) => `${index}-${'x'.repeat(70)}`)); select(path);
@@ -101,7 +101,7 @@ it('업무 index·공유 관리·대상 ref 점유와 영속 uncertain는 예약
     { kind: 'index' as const, root: source },
   ]) {
     const release = coordinator.acquireOperation(operation);
-    try { expect((await request('a', body)).status).toBe(409); expect(store.records('a', 'integration-request')).toHaveLength(0); }
+    try { expect((await request('a', { ...body, requestKey: 'locked-' + operation.kind + '-' + (operation.root === source ? 'source' : 'work') })).status).toBe(409); expect(store.records('a', 'integration-request')).toHaveLength(0); }
     finally { release(); }
   }
   store.record('uncertain-a', 'a', 'workspace-git-intent', { scope: 'index', root: a.executionPath, commonDir: a.workspace!.commonDir, affectedRoots: [a.executionPath], refs: [`refs/heads/${a.workspace!.branch}`], status: 'uncertain' });
@@ -109,4 +109,20 @@ it('업무 index·공유 관리·대상 ref 점유와 영속 uncertain는 예약
   const bBody = input(b, 'independent-b'), accepted = await request('b', bBody); expect(accepted.status).toBe(200);
   const release = coordinator.acquireOperation({ kind: 'management', root: source });
   try { expect(await request('b', bBody)).toEqual(accepted); } finally { release(); }
+});
+it('예약 pre-intent 거부만 exact key marker를 주고 같은 rejected key/different body를 구분한다', async () => {
+  const stale = { ...body, requestKey: 'admission-stale', expectedWorkHead: '0'.repeat(40) }, before = store.get('a');
+  const rejected = await request('a', stale); expect(rejected).toMatchObject({ status: 409, data: { mutationOutcome: 'rejected-before-intent', requestKey: stale.requestKey } });
+  expect(await request('a', stale)).toMatchObject({ status: 409, data: { mutationOutcome: 'rejected-before-intent', requestKey: stale.requestKey } });
+  const changed = await request('a', { ...stale, expectedWorkHead: body.expectedWorkHead }); expect(changed.status).toBe(409); expect(changed.data).not.toHaveProperty('mutationOutcome'); expect(store.get('a')).toEqual(before); expect(store.integrationRequests()).toEqual([]);
+  const accepted = await request('a', { ...body, requestKey: 'fresh-admission' }); expect(accepted.status).toBe(200); expect(await request('a', { ...body, requestKey: 'fresh-admission' })).toEqual(accepted);
+  const different = await request('a', { ...body, requestKey: 'fresh-admission', targetBranch: 'different' }); expect(different.status).toBe(409); expect(different.data).not.toHaveProperty('mutationOutcome');
+});
+it('동일 key HTTP preflight가 다른 handler에서 살아 있으면 marker를 내지 않는다', async () => {
+  const actual = works.integrationReadiness.bind(works); let reached!: () => void, release!: () => void; const arrived = new Promise<void>(resolve => { reached = resolve; }); let calls = 0;
+  vi.spyOn(works, 'integrationReadiness').mockImplementation(async (...args) => { if (++calls === 1) { reached(); await new Promise<void>(resolve => { release = resolve; }); } return actual(...args); });
+  const stale = { ...body, requestKey: 'concurrent-preflight', expectedTargetHead: '0'.repeat(40) }, first = request('a', stale); await arrived;
+  try { const second = await request('a', stale); expect(second.status).toBe(409); expect(second.data).not.toHaveProperty('mutationOutcome'); expect(store.integrationRequests()).toEqual([]); }
+  finally { release(); }
+  expect(await first).toMatchObject({ status: 409, data: { mutationOutcome: 'rejected-before-intent', requestKey: stale.requestKey } }); expect(store.integrationRequests()).toEqual([]);
 });

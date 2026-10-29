@@ -34,15 +34,15 @@ export class ExecutionService implements OnModuleDestroy {
     desktopHealth(store).register('verification', work => this.children.has(work.id) || this.batches.has(work.id) ? 'active' : undefined);
     for (const work of store.list().filter(work => !['completed', 'archived'].includes(work.phase))) for (const record of store.records(work.id, 'verification').filter(x => x.status === 'running')) store.record(record.id, work.id, 'verification', { ...record, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
   }
-  snapshot(work: Work): Snapshot { return this.files.snapshot(work); }
+  snapshot(work: Work, validatedRoot?: string): Snapshot { return this.files.snapshot(work, validatedRoot); }
   revision(work: Work) { return snapshotRevision(this.snapshot(work)); }
   baseline(work: Work) { this.prepare(work); }
   changes(work: Work) { return this.changeReport(work).files; }
-  commands(work: Work, scope: TestScope = 'full', changedFiles?: { path: string }[]): VerificationCommand[] {
+  commands(work: Work, scope: TestScope = 'full', changedFiles?: { path: string }[], validatedRoot?: string): VerificationCommand[] {
     if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : ['completed', 'archived'].includes(work.phase) ? [] : relatedTestCommands(this.queryPath(work), (changedFiles ?? this.changes(work)).map((file: { path: string }) => file.path));
     if (['completed', 'archived'].includes(work.phase) && Array.isArray(work.completedCommands)) return work.completedCommands as VerificationCommand[];
     if (Array.isArray(work.verificationCommands)) return work.verificationCommands as VerificationCommand[];
-    const pkg = join(this.queryPath(work), 'package.json');
+    const pkg = join(validatedRoot ?? this.queryPath(work), 'package.json');
     if (!existsSync(pkg)) return [];
     const scripts = JSON.parse(readFileSync(pkg, 'utf8')).scripts || {};
     return [scripts['test:run'] ? 'test:run' : 'test', 'typecheck', 'build', 'lint'].filter(id => scripts[id]).map(id => ({ id, command: process.env.NPM_BIN || 'npm', args: ['run', id] }));
