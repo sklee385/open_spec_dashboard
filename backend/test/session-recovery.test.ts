@@ -27,12 +27,37 @@ it('creates one durable replacement without replaying instructions and ignores o
   const result = await (service as any).recoverSession('w', { requestId: 'request-1' });
   expect(result).toMatchObject({ threadId: 'new', phase: 'planning', sessionRecovery: { status: 'completed', previousThreadId: 'old', newThreadId: 'new' } });
   await (service as any).recoverSession('w', { requestId: 'request-1' });
-  expect(rpc.mock.calls.map(call => call[0])).toEqual(['thread/read', 'thread/start']);
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(['thread/read', 'thread/start', 'thread/name/set']);
+  expect(rpc).toHaveBeenCalledWith('thread/name/set', { threadId: 'new', name: '복구 · test' });
   const context = store.records('w', 'session-recovery-context')[0];
   expect(JSON.stringify(context)).toContain('preserved goal'); expect(JSON.stringify(context)).toContain('pending');
   service.client.emit('notification', { method: 'turn/completed', params: { threadId: 'old', turn: { id: 'late', status: 'failed' } } });
   expect(store.get('w')?.state).toBe('idle');
   expect(store.events('w').some(event => event.type === 'previous-session-notification' && event.data.threadId === 'old')).toBe(true);
+});
+it.each(['rejected', 'timeout'])('retains the created thread as uncertain when durable name persistence is %s and allows explicit cancellation', async mode => {
+  let workBeforeName: any, recoveryBeforeName: any;
+  const rpc = vi.spyOn(service.client, 'rpc').mockImplementation(async method => {
+    if (method === 'thread/read') return { thread: { id: 'old', turns: [{ id: 'known-turn', status: 'completed' }] } };
+    if (method === 'thread/start') return { thread: { id: 'created-before-name' } };
+    if (method === 'thread/name/set') {
+      workBeforeName = store.get('w'); recoveryBeforeName = store.records('w', 'session-recovery')[0];
+      throw mode === 'rejected' ? new CodexRpcRejectedError('name rejected', method) : new Error('name timeout');
+    }
+    throw new Error(`unexpected RPC ${method}`);
+  });
+  await expect(service.recoverSession('w', { requestId: 'name-failure' })).rejects.toThrow();
+  expect(workBeforeName).toMatchObject({ threadId: 'old', sessionRecovery: { status: 'creating', newThreadId: 'created-before-name' } });
+  expect(recoveryBeforeName).toMatchObject({ status: 'creating', newThreadId: 'created-before-name' });
+  expect(store.get('w')).toMatchObject({ threadId: 'old', sessionRecovery: { status: 'uncertain', newThreadId: 'created-before-name' } });
+  expect((await service.recoverSession('w', { requestId: 'name-failure' })).sessionRecovery).toMatchObject({ status: 'uncertain', newThreadId: 'created-before-name' });
+  await expect(service.recoverSession('w', { requestId: 'different-request' })).rejects.toThrow();
+  expect(rpc.mock.calls.map(call => call[0])).toEqual(['thread/read', 'thread/start', 'thread/name/set']);
+  vi.spyOn(CodexClient.prototype, 'ready').mockResolvedValue();
+  const cancellationRpc = vi.spyOn(CodexClient.prototype, 'rpc').mockResolvedValue({ thread: { id: 'old', turns: [{ id: 'known-turn', status: 'completed' }] } });
+  expect((await service.cancelSessionRecovery('w', { requestId: 'name-failure' })).sessionRecovery).toMatchObject({ status: 'abandoned', newThreadId: 'created-before-name' });
+  expect(cancellationRpc.mock.calls.map(call => call[0])).toEqual(['thread/read']);
+  expect(store.records('w', 'session-recovery-context')).toHaveLength(1);
 });
 it('prepares bounded read-only context and never creates a writable session for unknown execution', async () => {
   const work = store.get('w')!; work.state = 'recovery-required'; work.turnId = 'possibly-active'; store.save(work);
