@@ -13,6 +13,7 @@ import { desktopHealth } from '../desktop/health';
 import { WorkspaceService } from './workspace.service';
 
 export interface VerificationCommand { id: string; command: string; args: string[]; }
+interface VerificationReadCommands { full: VerificationCommand[]; work: VerificationCommand[]; }
 @Injectable()
 export class ExecutionService implements OnModuleDestroy {
   private get files() { return new FileResults(this.store); }
@@ -37,8 +38,8 @@ export class ExecutionService implements OnModuleDestroy {
   revision(work: Work) { return snapshotRevision(this.snapshot(work)); }
   baseline(work: Work) { this.prepare(work); }
   changes(work: Work) { return this.changeReport(work).files; }
-  commands(work: Work, scope: TestScope = 'full'): VerificationCommand[] {
-    if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : ['completed', 'archived'].includes(work.phase) ? [] : relatedTestCommands(this.queryPath(work), this.changes(work).map((file: { path: string }) => file.path));
+  commands(work: Work, scope: TestScope = 'full', changedFiles?: { path: string }[]): VerificationCommand[] {
+    if (scope === 'work') return Array.isArray(work.workVerificationCommands) ? work.workVerificationCommands as VerificationCommand[] : ['completed', 'archived'].includes(work.phase) ? [] : relatedTestCommands(this.queryPath(work), (changedFiles ?? this.changes(work)).map((file: { path: string }) => file.path));
     if (['completed', 'archived'].includes(work.phase) && Array.isArray(work.completedCommands)) return work.completedCommands as VerificationCommand[];
     if (Array.isArray(work.verificationCommands)) return work.verificationCommands as VerificationCommand[];
     const pkg = join(this.queryPath(work), 'package.json');
@@ -53,11 +54,13 @@ export class ExecutionService implements OnModuleDestroy {
     if (body.scope !== undefined && !['work', 'full'].includes(body.scope)) throw new BadRequestException('잘못된 테스트 범위입니다');
     work[body.scope === 'work' ? 'workVerificationCommands' : 'verificationCommands'] = body.commands; this.store.save(work); return this.commands(work, body.scope || 'full');
   }
-  results(work: Work, capturedRevision?: string) {
-    let revision: string | null = null;
-    try { revision = ['completed', 'archived'].includes(work.phase) ? this.store.records(work.id, 'completed-changes')[0]?.report?.revision ?? null : this.revision(work); } catch { /* Missing historical isolation is not a current result. */ }
-    if (capturedRevision) revision = capturedRevision;
-    const commands = { full: this.commands(work), work: this.commands(work, 'work') };
+  results(work: Work, capturedRevision?: string, readCommands?: VerificationReadCommands) {
+    // Internal callers may reuse their own source read, never a revision cached across requests.
+    let revision: string | null = capturedRevision || null;
+    if (!capturedRevision) {
+      try { revision = ['completed', 'archived'].includes(work.phase) ? this.store.records(work.id, 'completed-changes')[0]?.report?.revision ?? null : this.revision(work); } catch { /* Missing historical isolation is not a current result. */ }
+    }
+    const commands = readCommands ?? { full: this.commands(work), work: this.commands(work, 'work') };
     return this.store.records(work.id, 'verification').map(record => ({ ...record, scope: record.scope || 'full', fresh: record.sourceMutationVersion === work.sourceMutationVersion && record.revision === revision && record.commandVersion === JSON.stringify(commands[record.scope === 'work' ? 'work' : 'full'].find(x => x.id === record.commandId)) }));
   }
   runAll(work: Work, scope: TestScope) {

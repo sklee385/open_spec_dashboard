@@ -247,3 +247,13 @@ $env:TMP = $env:TEMP
 - 독립 실제 관리 Git fixture(문서4개/코드1개)를2회 측정: path5회/313~314ms, documents5회/305~311ms, planVersion30회/1789~1868ms, WorkController.get79회/4966~4970ms, requireReviewedPlan10회/588~643ms, integrationReadiness88회/5389~6759ms. 예약한 setTimeout(0)도 같은 시간 지연돼 서버 이벤트 루프 차단을 확인했다.
 - 4.6의 최적화는 별도 /workspace 메타데이터 조회에만 적용했다. WorkRoom의 work GET과 일반 FileResults.gitReport는 여전히 중복 동기 수집이다. WorkRoom은 SSE 후 묶음 새로고침이며 모든 화면이5초 정기 poll이라고 단정하지 않는다.
 - 좁은 보강 계획: 한 동기 읽기 안의 문서 root/내용 일괄 수집, 동일 변경 보고서 및 명령 재사용, capturedRevision을 받고도 버리던 snapshot 계산 제거. 전역/요청 간 TTL 캐시는 쓰지 않고 시작/종료 소유 증명, mutation 직전 및 await 뒤 새 검증, native client.ready/resume 이후 두 번째 검토는 유지한다. 실제 개선 후 같은 fixture로 호출 수·타이머 지연을 재측정하며 잔여 동기 차단도 기록한다.
+
+## 2026-10-29: 업무 조회·검토 중복 동기 Git 검사 보강
+
+- 활성 Git 업무의 planVersion은 한 동기 읽기 안에서 검증한 문서 root·내용을 묶어 읽고 시작·종료의 저장 업무/실제 Git 경로를 새로 확인한다. 문서 해시 순서·체크박스 정규화·full plan 바인딩을 보존하고 공개 document/CAS·완료 이력은 바꾸지 않았다. 전역/요청 간 TTL 캐시와 WorkspaceService.path 변경은 없다.
+- WorkController.get은 changes와 changeReport를 동일 보고서에서 만들고 같은 revision/명령을 결과 판정에 재사용한다. ExecutionService.results는 capturedRevision을 받은 경우 나중에 버리던 snapshot을 먼저 계산하지 않는다. full 전용 requireVerifications/readiness는 기본 work 명령 유도를 생략하여 불필요 gitReport 호출2회도 제거했다. 사용자 UI는 두 검증 scope를 유지한다.
+- mutation 직전 검사, requireVerifications await 이후 원시 snapshot/계획/업무/질문 재확인, native client.ready/resume 이후 두 번째 gate는 유지했다. 읽기 중 소유/등록/링크/저장 업무가 달라지면 거부한다.
+- TDD RED: 문서4→8개에서 경로 검증6→10회 선형 증가, GET 보고서2회, capturedRevision에서도 버리는 snapshot1회, 기본 work 명령 readiness에서 report2회. 수정 후 회귀 GREEN. 구현자 최종10파일73개 통과 및 backend build/diff 성공. 루트 직접검사: cwd backend, project node로 vitest run work-read-performance browser-verification-action-race →2파일21개 통과(22.16초), 이어 같은 project node로 tsc -p tsconfig.json exit0. 명세/품질 재리뷰 추가 P1/P2 없음.
+- 동일4문서 최소 fixture2회: planVersion30→10Git/551~561ms, GET79→36Git/1993~2003ms, readiness88→34Git/1907~1949ms. timer 지연도 같은 시간으로 잔여 동기 block은 남는다. requireReviewedPlan의 별도 안전 경계10Git/약0.55~0.64초는 유지했다.
+- 변경100파일+full/work 모두 기본 명령 유도 fixture 최종2회: GET146Git/8037·8111ms(cat-file100회), readiness44Git/2511·2584ms(cat-file0회). 큰 diff GET의 파일별 동기 blob 조회는 아직 해결되지 않았다. 출시 전 다음 좁은 보강에서 bounded cat-file batch로 바꾼다. 본 변경만으로 앱의 모든 멈춤이 해소됐다고 보고하지 않는다.
+- 독립 측정 스크립트 .tools/git-read-audit.cjs와 임시 fixture만 사용했고 실제 모델/실사용DB/운영 프로세스는 건드리지 않았다. 원본D 변경·13003 재시작·운영 활성화·배포 없음. 기존4.4의 성능 회귀 보강으로 완료 개수26/54는 유지한다.

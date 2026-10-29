@@ -120,8 +120,16 @@ export class WorkService {
   }
   documents(work: Work) {
     if (['completed', 'archived'].includes(work.phase) && work.completedDocuments) return Object.keys(work.completedDocuments as object);
-    try { const root = this.root(work); return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`), ...(work.workspace?.kind === 'git-worktree' ? ['.openspec.yaml', ...markdownFiles(join(root, 'source-ideas')).map(x => `source-ideas/${x}`)] : []), 'verification.md'].filter(x => textFile(within(root, x)) !== null); }
+    try { return this.documentsAtRoot(work, this.root(work)); }
     catch (error) { if (['completed', 'archived'].includes(work.phase)) return []; throw error; }
+  }
+  private documentsAtRoot(work: Work, root: string) {
+    return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`), ...(work.workspace?.kind === 'git-worktree' ? ['.openspec.yaml', ...markdownFiles(join(root, 'source-ideas')).map(x => `source-ideas/${x}`)] : []), 'verification.md'].filter(x => textFile(within(root, x)) !== null);
+  }
+  private documentContent(root: string, path: string) {
+    const content = textFile(within(root, path));
+    if (content === null) throw new NotFoundException('문서가 없습니다');
+    return content;
   }
   document(id: string, path: string) {
     const work = this.get(id);
@@ -130,8 +138,7 @@ export class WorkService {
       const saved = (work.completedDocuments as Record<string, { path: string; content: string; version: string }>)[path];
       if (!saved) throw new NotFoundException('저장된 문서가 없습니다'); return saved;
     }
-    const content = textFile(within(this.root(work), path));
-    if (content === null) throw new NotFoundException('문서가 없습니다');
+    const content = this.documentContent(this.root(work), path);
     return { path, content, version: hash(content) };
   }
   saveDocument(id: string, body: any) {
@@ -148,7 +155,20 @@ export class WorkService {
     return this.document(id, body.path);
     } finally { release(); }
   }
-  planVersion(work: Work) { const legacy = hash(this.documents(work).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n')); return bindReviewedPlan(work, this.execution.queryPath(work), legacy); }
+  planVersion(work: Work) {
+    if (work.workspace?.kind === 'git-worktree' && !['completed', 'archived'].includes(work.phase)) {
+      const expected = JSON.stringify(this.get(work.id));
+      const project = this.execution.queryPath(work), root = within(project, `openspec/changes/${work.changeName}`);
+      const legacy = hash(this.documentsAtRoot(work, root).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.documentContent(root, path).replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
+      const version = bindReviewedPlan(work, project, legacy);
+      // This proof belongs only to this synchronous read; every later action revalidates.
+      const latest = this.get(work.id);
+      if (JSON.stringify(latest) !== expected || this.execution.queryPath(latest) !== project) throw new ConflictException('문서를 읽는 중 업무 공간이 변경되었습니다');
+      return version;
+    }
+    const legacy = hash(this.documents(work).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
+    return bindReviewedPlan(work, this.execution.queryPath(work), legacy);
+  }
   async action(id: string, body: any) {
     const work = this.get(id);
     if (body?.action === 'archive' && work.phase === 'archived') return work;
@@ -219,8 +239,8 @@ export class WorkService {
     const expected = JSON.stringify(work), snapshot = this.execution.snapshot(work), sourceRevision = snapshotRevision(snapshot);
     await this.requireVerifications(work, sourceRevision);
     this.assertVerificationUnchanged(work, expected, snapshot);
-    const results = this.execution.results(work, sourceRevision);
-    const workVerificationRefs = this.execution.commands(work).map(command => results.filter(row => row.commandId === command.id && row.scope === 'full').at(-1)!.id);
+    const commands = this.execution.commands(work), results = this.execution.results(work, sourceRevision, { full: commands, work: [] });
+    const workVerificationRefs = commands.map(command => results.filter(row => row.commandId === command.id && row.scope === 'full').at(-1)!.id);
     if (work.browserScenario) workVerificationRefs.push(this.store.records(id, 'browser-verification').at(-1)!.id);
     return { work, sourceRevision, workVerificationRefs };
   }
@@ -228,7 +248,7 @@ export class WorkService {
     await this.browser.assertPassed(work);
     new FileResults(this.store).assertSourcePlan(work);
     if (this.store.records(work.id, 'question').some(unresolvedQuestion)) throw new ConflictException('미해결 질문이 있습니다');
-    const commands = this.execution.commands(work), results = this.execution.results(work, revision);
+    const commands = this.execution.commands(work), results = this.execution.results(work, revision, { full: commands, work: [] });
     if (!commands.length || commands.some(command => { const result = results.filter(r => r.commandId === command.id && r.scope === 'full').at(-1); return !result || result.status !== 'passed' || !result.fresh; })) throw new ConflictException('모든 필수 검증이 최신 버전에서 통과해야 합니다');
   }
   private async startGuidedReview(id: string) {

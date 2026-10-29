@@ -17,10 +17,12 @@ export class WorkController {
     const work = this.service.get(id), recovery = new WorkRecovery(this.service.store).status(work);
     const unavailable = ['workspace-unavailable', 'project-unavailable'].includes(recovery.code);
     const reviewRequired = !unavailable && !['completed', 'archived'].includes(work.phase) && !!work.reviewedVersion && work.reviewedVersion !== this.service.planVersion(work);
+    const changeReport = this.service.execution.changeReport(work);
+    const commands = unavailable ? { full: [], work: [] } : { full: this.service.execution.commands(work), work: this.service.execution.commands(work, 'work', changeReport.files) };
     return { ...this.toolInfo(work), recovery, reviewRequired, reviewedVersion: unavailable || reviewRequired ? null : work.reviewedVersion,
       documents: unavailable ? [] : this.service.documents(work), events: this.service.store.events(id), questions: this.service.store.records(id, 'question'),
-      queuedMessages: this.service.store.records(id, 'queued-message'), verifications: unavailable ? this.service.store.records(id, 'verification').map(record => ({ ...record, fresh: false })) : this.service.execution.results(work),
-      verificationCommands: unavailable ? [] : this.service.execution.commands(work), workVerificationCommands: unavailable ? [] : this.service.execution.commands(work, 'work'), changes: this.service.execution.changes(work), changeReport: this.service.execution.changeReport(work) };
+      queuedMessages: this.service.store.records(id, 'queued-message'), verifications: unavailable ? this.service.store.records(id, 'verification').map(record => ({ ...record, fresh: false })) : this.service.execution.results(work, 'revision' in changeReport && typeof changeReport.revision === 'string' ? changeReport.revision : undefined, commands),
+      verificationCommands: commands.full, workVerificationCommands: commands.work, changes: changeReport.files, changeReport };
   }
   @Get(':id/document') document(@Param('id') id: string, @Query('path') path: string) { return this.service.document(id, path); }
   @Put(':id/document') save(@Param('id') id: string, @Body() body: unknown) { return this.service.saveDocument(id, body); }
