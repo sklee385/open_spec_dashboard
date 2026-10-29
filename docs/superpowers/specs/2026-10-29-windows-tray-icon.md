@@ -11,3 +11,11 @@
 새 버전은 v0.1.12로 배포한다. 기존 다른 OpenSpec 기획 파일과 운영 세션 서버를 유지한다. 실제 패키지 검증·독립 리뷰·원격 전체 검사·공개 파일 검증 결과를 이어 기록한다.
 
 로컬 새 Windows 패키지에서 `desktop-smoke.cjs --copy-to-temp --security --lifecycle --personal-update`를 통과했다. 실제 Electron의 아이콘 디코딩·크기·Tray 생존, 창 닫기 후 서비스 유지·트레이 재열기 콜백·정상 종료와 백업을 확인했다. 독립 리뷰에서도 로더·리소스·Windows 패키징 경로의 중요 결함은 발견되지 않았다.
+
+## 정식 배포 결과
+
+- 소스 `d87dbdc73ce96b5d93d417e07a4fd9e7368c60de`, [배포 실행 40809479810](https://github.com/sklee385/open_spec_dashboard/actions/runs/40809479810)의 build·release가 모두 성공했다.
+- 원격 데스크톱 201개·프런트엔드 272개·백엔드 331개, 총 804개 통과 및 기존 2개 건너뜀. 실제 트레이 이미지 디코딩·생성·유지, 화면 복구·강제 종료 및 ASAR 폴더 교체·후보 v0.1.12 재시작·정상 종료 검사도 통과했다.
+- [v0.1.12 정식 릴리스](https://github.com/sklee385/open_spec_dashboard/releases/tag/v0.1.12)가 최신이다. 공개 EXE 380,456,912바이트·ZIP 478,023,478바이트·blockmap 394,656바이트를 실제 다운로드하여 SHA-256을 확인했고 EXE·ZIP SHA-512와 메타데이터 자체 해시도 일치했다.
+- 사용자 실행 앱은 0.1.11·AI 대기 상태였다. 실제 교체 후보를 설치 폴더 옆에 준비했으나 정상 종료 전 Computer Use가 물리적 Escape 입력으로 중단됐다. 기존 앱과 서비스는 종료하거나 교체하지 않았다. 현재 실행 앱에 대한 반영은 아직 남아 있다.
+- 준비 작업은 `a707a9558b8fc7ff4755fc6130b519ad`, 후보는 `.OpenSpecBoard-0.1.2-win-x64-portable-update-oad0fs`다. 교체 helper는 실행하지 않았다. 후속 진행 시 실제 설치 버전과 프로세스 상태를 다시 확인해야 한다. 사용자 프로필과 기존 OpenSpec 기획 변경은 보존했다.
