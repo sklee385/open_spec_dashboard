@@ -50,6 +50,8 @@ jobs:
         run: ./scripts/node.ps1 scripts/desktop-force-smoke.cjs
       - name: Build portable ZIP and metadata
         run: ./scripts/node.ps1 scripts/desktop-portable-build.cjs
+      - name: Verify actual Electron ASAR portable update and candidate restart
+        run: ./scripts/node.ps1 scripts/desktop-portable-update-smoke.cjs
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-win32-x64

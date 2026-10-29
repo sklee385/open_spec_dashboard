@@ -51,6 +51,25 @@ test('preparation validates payload and leaves the live app and user data intact
   assert.equal(typeof prepared.launch, 'function');
 });
 
+test('Electron 압축 해제는 ASAR 가상 파일 시스템을 우회해 보관 파일의 원본 바이트를 쓴다', async t => {
+  const f = await fixture(t), nodeFs = require('node:fs');
+  const { createRequire } = require('node:module'), localRequire = createRequire(require.resolve('../portable-install.cjs'));
+  const module = { exports: {} }; let rawRequested = false;
+  require('node:vm').runInNewContext(nodeFs.readFileSync(require.resolve('../portable-install.cjs'), 'utf8'), {
+    module, exports: module.exports, __dirname: path.resolve(__dirname, '..'), Buffer, setTimeout, clearTimeout,
+    process: { ...process, versions: { ...process.versions, electron: '45.0.0' } },
+    require(name) {
+      if (name === 'original-fs') { rawRequested = true; return nodeFs; }
+      if (name === 'node:fs') return { ...nodeFs, createWriteStream(file, options) { if (file.endsWith('.asar')) throw Error('ASAR virtual archive interception'); return nodeFs.createWriteStream(file, options); } };
+      if (name === 'node:fs/promises') return { ...fs, stat: async file => file.endsWith('.asar') ? { isFile: () => false } : fs.stat(file) };
+      return localRequire(name);
+    },
+  });
+  const prepared = await module.exports.preparePortableInstall(f.options);
+  assert.equal(rawRequested, true);
+  assert.equal(await fs.readFile(path.join(prepared.stageDirectory, 'resources/app.asar'), 'utf8'), 'asar');
+});
+
 test('oversized build-info metadata is rejected before JSON materialization', async t => {
   const f=await fixture(t);const info=JSON.parse(f.files['resources/service/build-info.json']);
   f.files['resources/service/build-info.json']=JSON.stringify({...info,padding:'x'.repeat(65536)});

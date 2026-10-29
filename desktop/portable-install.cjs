@@ -1,6 +1,9 @@
 'use strict';
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+// Electron treats .asar paths as virtual archives, including incomplete output.
+// Only payload bytes/stat use raw filesystem access; bundled helper reads keep ASAR support.
+const payloadFs = process.versions.electron ? require('original-fs') : fs;
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { Transform } = require('node:stream');
@@ -137,7 +140,7 @@ async function preparePortableInstall({ archivePath, expectedSha512, version, ap
       if (directory) { await fsp.mkdir(target, { recursive: true }); continue; }
       await fsp.mkdir(path.dirname(target), { recursive: true });
       let bytes = 0;
-      await pipeline(entry.stream(), new Transform({ transform(chunk, encoding, callback) { bytes += chunk.length; actualTotal += chunk.length; if (bytes > entry.uncompressedSize || actualTotal > MAX_BYTES) callback(new Error('ZIP decompressed size exceeded')); else callback(null, chunk); } }), fs.createWriteStream(target, { flags: 'wx' }));
+      await pipeline(entry.stream(), new Transform({ transform(chunk, encoding, callback) { bytes += chunk.length; actualTotal += chunk.length; if (bytes > entry.uncompressedSize || actualTotal > MAX_BYTES) callback(new Error('ZIP decompressed size exceeded')); else callback(null, chunk); } }), payloadFs.createWriteStream(target, { flags: 'wx' }));
       if (bytes !== entry.uncompressedSize) throw new Error('ZIP decompressed size mismatch');
     }
     const executable = await fsp.open(path.join(stageDirectory, executableName));
@@ -154,7 +157,7 @@ async function preparePortableInstall({ archivePath, expectedSha512, version, ap
       info = JSON.parse(buffer.subarray(0,length).toString('utf8'));
     } finally { await infoHandle.close(); }
     if (info.version !== version || info.platform !== 'win32' || info.arch !== 'x64' || info.updateMode !== 'portable-github') throw new Error('Payload version or build metadata mismatch');
-    for (const name of ['resources/service/runtime/node.exe', 'resources/service/backend/dist/desktop-main.js', 'resources/app.asar']) if (!(await fsp.stat(path.join(stageDirectory, name))).isFile()) throw new Error('Invalid required payload file');
+    for (const name of ['resources/service/runtime/node.exe', 'resources/service/backend/dist/desktop-main.js', 'resources/app.asar']) if (!(await payloadFs.promises.stat(path.join(stageDirectory, name))).isFile()) throw new Error('Invalid required payload file');
     const updatesDirectory = path.join(userDirectory, 'portable-updates');
     await safeDirectory(updatesDirectory);
     const jobsDirectory = path.join(updatesDirectory, 'jobs');
