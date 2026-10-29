@@ -50,7 +50,7 @@ export function createGateway(targetPort = 13003, trashDirectory?: string, optio
       const done = () => { if (!finished) { finished = true; pendingCommands--; } };
       res.once('finish', done); res.once('close', done);
     }
-    const upstream = request({ hostname: '127.0.0.1', port: targetPort, path: req.url, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${targetPort}` } }, response => {
+    const upstream = request({ hostname: '127.0.0.1', port: targetPort, agent: false, path: req.url, method: req.method, headers: { ...req.headers, host: `127.0.0.1:${targetPort}` } }, response => {
       res.writeHead(response.statusCode || 502, response.headers);
       response.on('error', () => res.destroy());
       response.pipe(res);
