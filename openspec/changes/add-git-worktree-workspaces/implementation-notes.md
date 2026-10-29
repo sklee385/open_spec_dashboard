@@ -289,3 +289,10 @@ $env:TMP = $env:TEMP
 - 최초 긴 경로 거부는 업무 상태·요청·공간·Git 생성 기록·실제 원본 refs/index를 오염시키지 않는다. 짧은 루트로 변경한 뒤 같은 업무·대화에서 동일/새 요청 키로 준비된다. 늦은 typed 오류의 재시도는 공간 및9종 생성 근거가 없는 경우로 한정하고 실패 이력을 보존한다. 기존 공간·copy·legacy 불명·uncertain은 추정 해제하지 않는다.
 - 별도 명세·품질 리뷰에서 추가 확정 P1/P2 없음. 커밋 직전 루트가 합쳐진 backend tsc를 기본 sandbox에서 직접 exit0(3.07초), OpenSpec strict와 diff 검사 exit0으로 확인했다. 테스트는 신규 서비스가 포함된 현재 트리에서 실행했으며 운영D/13003/실사용DB를 건드리지 않았다.
 - 이 수정은 이미 완료한3.1/3.6의 회귀 보완이므로 완료 개수26/54는 유지한다. 선택 커밋과 후보 편집 실회귀는 별도 실행 중이며 이50개 통과로 대체하지 않는다. 활성화·배포는 아직 수행하지 않았다.
+
+## 2026-10-30: 5.2 선택 결과 커밋 최종 회귀 완료
+
+- 루트 직접 실행: TEMP/TMP=C:/Windows/Temp, project node의 vitest run integration-result-commit →최신29개 실제 Git/API 회귀 전부 통과(785.12초), exit0. 중간25개에서 실패했던 skip-worktree, CAS 뒤 조회 실패·확인된 CAS 거절, JSON key/paths 순서 멱등성을 포함한다.
+- 선택 밖/부분 stage·숨은 소스·private/localOnly·필터 경계, 한글·선행 공백·rename/삭제·일반 CRLF, 250파일 NUL 선택, immutable tree 경쟁, 정확한 OID·부모·tree·응답 유실 재조회, 독립 WorkStore 점유와 lifecycle 해제를 검증했다. 후보 준비·후보 편집 통과로 대체한 결과가 아니다.
+- 명세·품질 리뷰의 확정 문제를 보완했고, 공개 API와 제한은 docs/API.md에 기록했다. 5.2 범위 controller/store만 index에 분리하여 후속5.3~5.5 미검증 코드를 함께 커밋하지 않는다. 루트가 같은 index의 backend 소스를 .tools의 독립 사본으로 내보내 project tsc를 exit0으로 확인했고, cached diff의 범위와 공백 검사도 확인했다. 현재 작업 파일은 되돌리지 않았다.
+- 진행률27/54이며 워크트리 기본 활성화·운영 반영·배포는 아직 수행하지 않았다.

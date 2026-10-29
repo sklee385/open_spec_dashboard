@@ -143,9 +143,19 @@ Git 업무의 `changeReport`는 `workspaceBaselineCommit` 대비 해당 공간�
 
 `GET /api/work/:id/integration`은 해당 업무의 보존된 `requests`와 활성 `active` 후보(없으면 null)를 반환한다. `POST /api/work/:id/integration`은 `{requestKey, confirmed:true, targetBranch, expectedWorkHead, expectedTargetHead, reviewedVersion}`을 받는다. 대상은 명시한 로컬 브랜치이며 임의 경로·명령·추가 필드는 허용하지 않는다.
 
-신규 요청은 검증 단계의 idle Git 업무, 최신 계획 검토, 필수 업무 검증 통과, 실제 업무 공간 등록·브랜치·공통 저장소와 두 HEAD를 확인한다. 업무 공간·공유 관리·대상/업무 ref의 점유와 영향 범위의 영속 미확인 Git 작업을 검사하는 짧은 잠금 아래 예약하며 다른 업무 공간과 별도 ref의 실행은 유지한다. 현재 선택한 확인 루트의 ID·고정 후보 경로와 용량을 확인하고 설치 Git의 예정 경로 사전 점검을 통과한 뒤 `queued` 의도를 저장한다. 후보는 별도 식별자로 `projects/<projectId>/integrations/<candidateId>/project`에 예약되며 기존 업무 경로와 대화는 유지된다. 이 API는 아직 후보 폴더·브랜치 생성, 결과 커밋·병합·반영을 실행하지 않는다.
+신규 요청은 검증 단계의 idle Git 업무, 최신 계획 검토, 필수 업무 검증 통과, 실제 업무 공간 등록·브랜치·공통 저장소와 두 HEAD를 확인한다. 업무 공간·공유 관리·대상/업무 ref의 점유와 영향 범위의 영속 미확인 Git 작업을 검사하는 짧은 잠금 아래 예약하며 다른 업무 공간과 별도 ref의 실행은 유지한다. 현재 선택한 확인 루트의 ID·고정 후보 경로와 용량을 확인하고 설치 Git의 예정 경로 사전 점검을 통과한 뒤 `queued` 의도를 저장한다. 후보는 별도 식별자로 `projects/<projectId>/integrations/<candidateId>/project`에 예약되며 기존 업무 경로와 대화는 유지된다. 이 API는 후보 폴더·브랜치 생성, 결과 커밋·병합·반영을 실행하지 않는다.
 
 같은 업무의 같은 요청 키·내용은 현재 검토·HEAD·루트·용량 검사보다 먼저 저장된 요청을 재조회한다. 같은 키에 다른 내용은 409다. 공통 Git 저장소당 활성 후보 하나를 DB transaction으로 제한하며 failed·uncertain도 복구·명시적 취소 전에는 슬롯을 유지한다. applied·cancelled·removed 기록은 보존한다. 요청에는 확인한 업무/대상 HEAD·검토/소스 revision·업무 검증 참조를 남기고 후보의 `candidateCommit`은 null, `verificationRefs`는 빈 목록으로 저장한다. 업무 통과를 후보 통과로 사용하지 않으며 실제 후보 생성·변경 시 기준을 다시 검사해야 한다. Git 상태 조회와 DB 저장은 서로 다른 시스템이므로 외부 Git 변경까지 원자적으로 잠그지는 않는다.
+
+### 업무 결과 선택 커밋
+
+`GET /api/work/:id/integration/commit-preview`는 대기 중인 통합 요청의 업무 공간을 확인하여 `integrationId`, `version`, `head`, staged/unstaged/untracked `entries`와 `selectionMode:whole-file`을 반환한다. 최신 계획·필수 업무 검증이 필요하다. 버전에는 실제 소스·전체 index·Git 상태·대상 HEAD·검증 및 변환 설정을 결합한다.
+
+`POST /api/work/:id/integration/result-commit`은 `{integrationId, requestKey, confirmed:true, previewVersion, paths, message}`를 받는다. 파일 전체를 선택하며 검증 소스 변경을 남겨둘 수 없다. 부분 stage는 앱 소스/Git의 파일 전체 스테이징 후 다시 조회한다. 선택 밖 staged 파일·비밀 파일·미확인 제외 정책은 차단한다. 검토된 고정 로컬 자료와 생성물은 선택 대상에서 제외한다. Git ignore에 가려진 검증 소스나 제품 파일의 assume-unchanged/skip-worktree는 직접 정리하고 재검증해야 한다. 파일당 8MiB 초과와 clean 필터·working-tree-encoding·ident 변환은 명시적으로 거부한다.
+
+서버 소유 NUL 경로 파일로 선택한 경로만 stage한다. 부모 tree와 선택 파일의 내용·mode를 대조한 고정 tree로 커밋 객체를 만들고, 명시한 업무 ref가 기존 HEAD일 때만 CAS로 갱신한다. 전체 add·자동 stash/reset·원본 커밋·원격 push는 하지 않는다. 초기 요청의 `workHead`와 fingerprint는 유지하고 확인된 `resultCommit`/`resultTree`를 별도로 저장한다. 결과는 `committed`, 변경 없는 `noop`, 확인된 실패 `failed`, 실제 결과 확인이 필요한 `uncertain`으로 구분한다.
+
+같은 키의 재요청은 기존 기록과 실제 소유 공간·OID·부모·tree를 대조하며 Git 쓰기를 자동 반복하지 않는다. 확인된 실패의 index는 보존하여 새 미리보기와 명시 요청으로 다시 시도할 수 있다. 종료 불명 프로세스는 해당 공간의 점유와 종료·업데이트 보호를 유지한다. 결과 커밋은 후보 병합·후보 검증·원본 반영·업무 완료를 대신하지 않는다. 이 기능은 결합 검증 전 개발 상태다.
 
 파일 변경 API는 대상 경로가 한 변경 문서 폴더에 한정되면 문서 범위를, 그 외에는 해당 실행 공간 범위를 점유한다. 같은 원본의 Alpha 문서 미확인 기록이 Beta 문서 저장을 일괄 차단하지 않는다. Git API는 index/HEAD·공유 관리/ref·통합 범위를 작업 종류에 맞춰 취득하며 새 intent의 첫 저장부터 scope/commonDir/refs/affectedRoots를 보존한다. 같은 실제 ref의 symbolic-ref 별칭도 같은 잠금으로 처리한다. 종료 미확인 프로세스는 사용자 확인만으로 성공 처리하지 않고 실제 종료와 등록·커밋을 확인할 때까지 차단한다.
 
