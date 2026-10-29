@@ -33,7 +33,7 @@ async function launch(t, smoke = false, controls = {}) {
     close() { this.closeCount = (this.closeCount || 0) + 1; this.emit('close', { preventDefault() {} }); }
   }
   let tray;
-  class Tray extends EventEmitter { constructor() { super(); tray = this; } setToolTip(text) { this.tooltip = text; } setContextMenu(menu) { menus.push(menu); } }
+  class Tray extends EventEmitter { constructor() { super(); tray = this; } setToolTip(text) { this.tooltip = text; } setContextMenu(menu) { menus.push(menu); } isDestroyed() { return false; } }
   const updater = new EventEmitter(); updater.isUpdateSupported = () => true;
   updater.setFeedURL = value => { updater.feed = value; };
   updater.checkForUpdates = async () => {};
@@ -41,7 +41,7 @@ async function launch(t, smoke = false, controls = {}) {
   const gateway = new EventEmitter();
   Object.assign(gateway, { listen(_port, _host, done) { if (controls.gatewayFailure) { gateway.emit('error', new Error('fixture gateway failure')); return; } gateway.listening = true; done(); }, address: () => ({ port: 15001 }), closeAllConnections() {}, close(done) { gateway.listening = false; done?.(); } });
   let child;
-  const electron = { app, BrowserWindow: Window, Tray, nativeImage: { createFromDataURL: () => ({}) }, Menu: { buildFromTemplate: menu => menu, setApplicationMenu() {} }, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler), removeHandler: channel => handlers.delete(channel) }, shell: { openExternal: async url => { external.push(url); } }, dialog: { async showMessageBox(value, options) { const selected = options || value; dialogs.push(selected); return { response: typeof controls.dialogResponse === 'function' ? controls.dialogResponse(selected) : controls.dialogResponse ?? 1 }; } } };
+  const electron = { app, BrowserWindow: Window, Tray, nativeImage: { createFromPath: () => ({ isEmpty: () => false, getSize: () => ({ width: 32, height: 32 }) }) }, Menu: { buildFromTemplate: menu => menu, setApplicationMenu() {} }, ipcMain: { handle: (channel, handler) => handlers.set(channel, handler), removeHandler: channel => handlers.delete(channel) }, shell: { openExternal: async url => { external.push(url); } }, dialog: { async showMessageBox(value, options) { const selected = options || value; dialogs.push(selected); return { response: typeof controls.dialogResponse === 'function' ? controls.dialogResponse(selected) : controls.dialogResponse ?? 1 }; } } };
   const requireMock = id => {
     if (id === './drafts.cjs') return { DraftStore: class {}, registerDraftBridge: () => () => {} };
     if (id === './recovery-state.cjs') return {

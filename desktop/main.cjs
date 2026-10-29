@@ -11,6 +11,7 @@ const { reportPortableReady, reportPortableFailure, isPortableUpdateLaunch, vali
 const { assertRendererClosable } = require('./renderer-close.cjs');
 const { RendererRecovery } = require('./renderer-recovery.cjs');
 const { createDesktopApi } = require('./api-client.cjs');
+const { createTrayIcon } = require('./icons.cjs');
 const { RecoveryState, HealthJournal } = require('./recovery-state.cjs');
 const { HealthWindow } = require('./health-window.cjs');
 const { DraftStore, registerDraftBridge } = require('./drafts.cjs');
@@ -330,7 +331,7 @@ async function start() {
     });
   }
   startupPhase = 'tray';
-  const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFUlEQVR42mNkYPj/n4ECwESJ5lEDRg0AAH6zAh8HBnNmAAAAAElFTkSuQmCC');
+  const icon = createTrayIcon(nativeImage);
   tray = new Tray(icon); tray.setToolTip('OpenSpecBoard · 창을 닫아도 업무를 유지합니다');
   const recoverScreen = () => { void rendererRecovery?.report('manual'); };
   const menu = Menu.buildFromTemplate([{ label: 'OpenSpecBoard 열기', click: () => window.show() }, { label: '전체 상태 점검', click: () => void showHealth() }, { label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { type: 'separator' }, { label: '앱 종료', click: () => void requestQuit() }, { label: '강제 종료…', click: () => { void requestForceQuit().catch(() => {}); } }]);
@@ -359,6 +360,8 @@ async function start() {
       console.log('DESKTOP_PERSONAL_UPDATE_READY');
     }
     console.log('DESKTOP_SECURITY_READY');
+    if (icon.isEmpty() || icon.getSize().width < 16 || tray.isDestroyed()) throw Error('실제 트레이 아이콘 표시 리소스 검증 실패');
+    console.log('DESKTOP_TRAY_ICON_READY');
     const status = await api('status');
     if (!status.idle) throw new Error('격리한 앱이 유휴 상태가 아닙니다');
     if (process.argv.includes('--desktop-health-test')) {

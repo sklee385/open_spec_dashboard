@@ -29,6 +29,7 @@ child.on('exit', code => {
   }
   console.log(`데스크톱 프로세스 기동·인증 API·빈 프로젝트·정상 종료·백업 smoke 통과: ${dir}`);
   if (output.includes('DESKTOP_SECURITY_READY')) console.log('Electron 실제 렌더러 격리·업데이트 메인 프레임 IPC 통과');
+  if (output.includes('DESKTOP_TRAY_ICON_READY')) console.log('실제 Electron 트레이 아이콘 디코딩·생성·유지 통과');
   if (output.includes('DESKTOP_LIFECYCLE_READY')) console.log('Electron 실제 창 닫기·숨김·트레이 재열기 콜백·서비스 유지 통과');
   if (output.includes('DESKTOP_PERSONAL_UPDATE_READY')) console.log('개인용 미서명 GitHub 업데이트 활성·정상 상태 IPC 통과');
   if (output.includes('DESKTOP_RECOVERY_READY')) console.log('실제 Electron 렌더러 충돌·화면 재로드·동일 세션 유지 통과');

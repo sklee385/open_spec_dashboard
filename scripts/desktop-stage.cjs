@@ -24,6 +24,8 @@ stageBrowserRuntime(root, path.join(service, 'browser-runtime'));
 const copy = (from, to) => { fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true, dereference: true }); };
 for (const name of ['main.cjs','graphics.cjs','renderer-recovery.cjs','preload.cjs','dashboard-preload.cjs','attention-links.cjs','updates.cjs','update-policy.cjs','update-selection.cjs','portable-updater.cjs','portable-install.cjs','portable-swap.cjs','renderer-close.cjs','shutdown-guard.cjs','updates.html','updates-ui.cjs','api-client.cjs','recovery-state.cjs','health-window.cjs','health-preload.cjs','health-ui.cjs','health.html','health.css','emergency.cjs']) copy(path.join(root, 'desktop', name), path.join(stage, 'desktop', name));
   copy(path.join(root, 'desktop', 'drafts.cjs'), path.join(stage, 'desktop', 'drafts.cjs'));
+  copy(path.join(root, 'desktop', 'icons.cjs'), path.join(stage, 'desktop', 'icons.cjs'));
+  copy(path.join(root, 'desktop', 'assets'), path.join(stage, 'desktop', 'assets'));
   fs.writeFileSync(path.join(stage, 'desktop', 'release-policy.json'), JSON.stringify(makeUpdatePolicy(personalUpdate, { portable })));
 fs.writeFileSync(path.join(stage, 'package.json'), JSON.stringify({ name: 'openspecboard', productName: 'OpenSpecBoard', version: pkg.version, description: 'OpenSpecBoard 데스크톱 업무 공간', main: 'desktop/main.cjs', author: 'OpenSpecBoard', license: 'MIT', private: true, dependencies: {} }, null, 2));
 copy(path.join(root, 'backend', 'dist'), path.join(service, 'backend', 'dist'));

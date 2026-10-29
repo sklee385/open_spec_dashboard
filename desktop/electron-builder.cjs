@@ -17,6 +17,6 @@ module.exports = {
   protocols: [{ name: 'OpenSpecBoard attention', schemes: ['openspecboard'] }],
   artifactName: 'OpenSpecBoard-${version}-${os}-${arch}.${ext}',
   publish: { provider: 'github', owner: 'sklee385', repo: 'open_spec_dashboard', releaseType: 'draft' },
-  win: { target: [{ target: 'nsis', arch: ['x64'] }], forceCodeSigning: false, verifyUpdateCodeSignature: false },
+  win: { icon: 'desktop/assets/openspecboard.ico', target: [{ target: 'nsis', arch: ['x64'] }], forceCodeSigning: false, verifyUpdateCodeSignature: false },
   nsis: { oneClick: false, perMachine: false, allowToChangeInstallationDirectory: true, deleteAppDataOnUninstall: false },
 };
