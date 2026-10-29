@@ -100,7 +100,7 @@ export class DesktopController {
     const work = this.lifecycle.diagnostics().works.find(work => work.id === id);
     if (!work?.canInterrupt) throw new ConflictException('소유한 실행을 확인할 수 없습니다');
     if (this.execution.interrupt(id)) return { requested: true };
-    if (this.browser.status(id).running) { await this.browser.cancel(id); return { requested: true }; }
+    if (this.browser.activity(id).running) { await this.browser.cancel(id); return { requested: true }; }
     return this.tools.interrupt(id);
   }
 }

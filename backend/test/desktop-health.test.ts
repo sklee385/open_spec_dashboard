@@ -11,7 +11,8 @@ afterEach(() => { store?.onApplicationShutdown(); delete process.env.DATA_DIR; d
 function setup(state = 'recovery-required') {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'desktop-health-'));
   store = new WorkStore();
-  store.save({ id: 'w', sourceId: 's', projectPath: '.', changeName: '업무', requestKey: 'w', ideaIds: [], phase: 'planning', state, threadId: 't', reviewedVersion: null, createdAt: '', updatedAt: '' });
+  const root = join(process.env.DATA_DIR!, 'source'); mkdirSync(root);
+  store.save({ id: 'w', sourceId: 's', projectPath: root, changeName: 'work', requestKey: 'w', ideaIds: [], phase: 'planning', state, threadId: 't', reviewedVersion: null, createdAt: '', updatedAt: '' });
   return new DesktopLifecycle(store);
 }
 it('실행 없음이 확인된 복구 필요 업무는 종료를 막지 않고 동기 상태 복구한다', () => {

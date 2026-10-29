@@ -10,9 +10,9 @@ import { BrowserService } from '../src/browser/browser.service';
 let store: WorkStore, service: BrowserService;
 afterEach(async () => { await service?.onModuleDestroy(); store?.onApplicationShutdown(); delete process.env.DATA_DIR; });
 function setup() {
-  const root = mkdtempSync(join(tmpdir(), 'browser-mailbox-')); mkdirSync(join(root, 'openspec'));
+  const dir = mkdtempSync(join(tmpdir(), 'browser-mailbox-')), root = join(dir, 'source'); mkdirSync(root); mkdirSync(join(root, 'openspec'));
   copyFileSync(resolve('test/fixtures/browser-server.cjs'), join(root, 'server.cjs'));
-  process.env.DATA_DIR = join(root, '.data'); store = new WorkStore();
+  process.env.DATA_DIR = join(dir, 'data'); store = new WorkStore();
   const work = store.save({ id: 'legacy', sourceId: 'test', projectPath: root, changeName: 'legacy', requestKey: 'legacy', ideaIds: [], phase: 'implementation', state: 'idle', threadId: 'same-legacy-thread', reviewedVersion: null, createdAt: '', updatedAt: '' });
   new FileResults(store).prepare(work); service = new BrowserService(store);
   service.save(work.id, { name: '등록 시나리오', server: { command: 'node', args: ['server.cjs'], url: 'http://127.0.0.1:14321' }, steps: [{ op: 'expectURL', path: '/' }] });

@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { INestApplication } from '@nestjs/common';
 import { createApplication } from '../src/app';
 import { WorkStore } from '../src/work/store';
@@ -21,7 +21,7 @@ async function setup(before?: (store: WorkStore) => void) {
   return { store: app.get(WorkStore), call: (path: string, body?: unknown, token = 'secret') => fetch(`${base}/api/desktop/${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', 'x-desktop-token': token }, body: body === undefined ? undefined : JSON.stringify(body) }) };
 }
 function save(store: WorkStore, phase = 'planning', state = 'idle') {
-  return store.save({ id: 'w', sourceId: 'demo', projectPath: '.', changeName: 'test', requestKey: 'w', ideaIds: [], phase, state, threadId: 'thread', reviewedVersion: null, createdAt: '', updatedAt: '' });
+  return store.save({ id: 'w', sourceId: 'demo', projectPath: dirname(process.env.CONFIG_PATH!), changeName: 'test', requestKey: 'w', ideaIds: [], phase, state, threadId: 'thread', reviewedVersion: null, createdAt: '', updatedAt: '' });
 }
 it('진단과 복구 API는 인증·입력 검증·종료 잠금을 유지한다', async () => {
   const { store, call } = await setup(); save(store, 'planning', 'recovery-required');

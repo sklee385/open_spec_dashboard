@@ -177,7 +177,9 @@ export class WorkService {
     if (body?.action === 'reopen') { if (work.phase !== 'completed' || work.state !== 'idle') throw new ConflictException('완료된 업무만 다시 열 수 있습니다'); work.phase = 'verification'; this.store.save(work); return work; }
     if (body?.action === 'apply-changes') {
       if (body.confirmed !== true || work.phase !== 'verification' || work.state !== 'idle' || work.reviewedVersion !== this.planVersion(work)) throw new ConflictException('검증·최신 계획 검토·명시적 원본 반영 요청이 필요합니다');
-      this.requireVerifications(work);
+      const expectedWork = JSON.stringify(work), before = this.execution.snapshot(work);
+      await this.requireVerifications(work);
+      this.assertVerificationUnchanged(work, expectedWork, before);
       const report = this.execution.apply(work);
       this.store.event(id, 'changes-applied', { source: report.source }); this.legacy.updates.next(); return work;
     }
@@ -186,7 +188,11 @@ export class WorkService {
       const tasks = this.document(id, 'tasks.md').content.match(/^\s*-\s+\[([^\]]*)\]/gm) || [];
       if (!tasks.length || tasks.some(task => !/\[\s*[xX]\s*\]/.test(task)) || this.store.records(id, 'question').some(unresolvedQuestion)) throw new ConflictException('작업 또는 질문이 남아 있습니다');
       const snapshot = this.execution.snapshot(work);
-      this.requireVerifications(work, snapshotRevision(snapshot));
+      const expectedWork = JSON.stringify(work);
+      await this.requireVerifications(work, snapshotRevision(snapshot));
+      this.assertVerificationUnchanged(work, expectedWork, snapshot);
+      const latestTasks = this.document(id, 'tasks.md').content.match(/^\s*-\s+\[([^\]]*)\]/gm) || [];
+      if (!latestTasks.length || latestTasks.some(task => !/\[\s*[xX]\s*\]/.test(task))) throw new ConflictException('검증 확인 중 작업 목록이 변경되었습니다');
       work.completedDocuments = Object.fromEntries(this.documents(work).map(path => [path, this.document(id, path)]));
       this.execution.freeze(work, snapshot); this.store.event(id, 'completed', { confirmed: true }); this.legacy.updates.next(); return work;
     }
@@ -204,8 +210,11 @@ export class WorkService {
     }
     throw new BadRequestException('알 수 없는 동작입니다');
   }
-  private requireVerifications(work: Work, revision?: string) {
-    this.browser.assertPassed(work);
+  private assertVerificationUnchanged(work: Work, expectedWork: string, snapshot: ReturnType<ExecutionService['snapshot']>) {
+    if (JSON.stringify(this.get(work.id)) !== expectedWork || JSON.stringify(this.execution.snapshot(work)) !== JSON.stringify(snapshot) || this.store.records(work.id, 'question').some(unresolvedQuestion) || work.reviewedVersion !== this.planVersion(this.get(work.id))) throw new ConflictException('검증 확인 중 업무·소스·계획 또는 질문이 변경되었습니다. 다시 확인해 주세요');
+  }
+  private async requireVerifications(work: Work, revision?: string) {
+    await this.browser.assertPassed(work);
     new FileResults(this.store).assertSourcePlan(work);
     if (this.store.records(work.id, 'question').some(unresolvedQuestion)) throw new ConflictException('미해결 질문이 있습니다');
     const commands = this.execution.commands(work), results = this.execution.results(work, revision);

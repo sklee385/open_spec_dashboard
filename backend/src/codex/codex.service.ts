@@ -64,6 +64,7 @@ export class CodexService implements OnModuleDestroy {
   private active = new Map<string, { token: symbol; generation: string; turnId?: string; priorTurnId?: string; notifications?: any[]; childItems?: any[]; state: 'active' | 'unknown' }>();
   private stopped = new Set<string>();
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService, @Inject(EdgeService) readonly edge: EdgeService, @Inject(BrowserService) readonly browser: BrowserService) {
+    this.browser.setExecutionContextProvider?.('codex', id => { const run = this.active.get(id); return run ? { generation: run.generation, connection: this.clientFor(id).generation, turnId: run.turnId ?? null, state: run.state } : null; });
     desktopHealth(store).registerInterrupt('codex', work => {
       const run = this.active.get(work.id);
       return !!run && run.generation === this.clientFor(work.id).generation && !!work.threadId && !!run.turnId && !this.locks.has(work.id);

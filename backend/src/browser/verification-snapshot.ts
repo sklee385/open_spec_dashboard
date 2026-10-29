@@ -1,0 +1,147 @@
+import { ConflictException } from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
+import { chmod, lstat, mkdir, open, readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { dirname, join, parse, relative, resolve, sep } from 'node:path';
+import type { Work, WorkStore } from '../work/store';
+import { pathsOverlap } from '../work/workspace-paths';
+import { managedPrivatePath } from '../work/workspace-file-policy';
+
+export interface VerificationSnapshot { id: string; root: string; revision: string; sourceRoot: string; }
+type Entry = { kind: 'file'; path: string; hash: string; mode: number; size: number } | { kind: 'directory'; path: string; mode: number };
+type Budget = { signal?: AbortSignal; deadline: number };
+const excluded = (path: string) => managedPrivatePath(path) || path.split('/').some(part => ['.tools', '.idea-trash'].includes(part.toLowerCase()));
+function fail(message: string): never { throw new ConflictException(message); }
+const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path;
+function checkpoint(budget: Budget) { budget.signal?.throwIfAborted(); if (Date.now() > budget.deadline) fail('검증 사본 준비 시간이 초과됐습니다'); }
+const budget = (signal?: AbortSignal): Budget => ({ signal, deadline: Date.now() + 120000 });
+async function exists(path: string) { try { await lstat(path); return true; } catch (error: any) { if (error.code === 'ENOENT') return false; throw error; } }
+async function physicalPath(path: string): Promise<string> {
+  try { return await realpath(path); }
+  catch (error: any) { if (error.code !== 'ENOENT' || dirname(path) === path) throw error; return join(await physicalPath(dirname(path)), relative(dirname(path), path)); }
+}
+async function assertNoHostConfiguration(root: string) {
+  const configured = [process.env.CONFIG_PATH, process.env.OPENSPEC_UI_CONFIG].filter((value): value is string => !!value);
+  for (const value of configured.length ? configured : ['../config.local.json']) {
+    const path = resolve(value);
+    if (pathsOverlap(root, path) || pathsOverlap(root, await physicalPath(path))) fail('호스트 운영 설정이 포함된 소스는 검증 사본으로 복사할 수 없습니다. 설정을 작업 공간 밖으로 분리해 주세요');
+  }
+}
+
+/** Reject reparse parents before creating or deleting a host-owned container. */
+async function directory(path: string, create = false) {
+  const absolute = resolve(path); let current = parse(absolute).root;
+  for (const part of relative(current, absolute).split(sep).filter(Boolean)) {
+    current = join(current, part);
+    if (create && !await exists(current)) await mkdir(current);
+    const stat = await lstat(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || key(await realpath(current)) !== key(current)) fail('검증 사본 경로에 링크 또는 다른 경계가 있습니다');
+  }
+  return absolute;
+}
+
+/** Hash/copy in 1 MiB asynchronous chunks, checking cancellation between reads. */
+async function readOwned(root: string, path: string, limits: Budget, destination?: string) {
+  checkpoint(limits);
+  const absolute = join(root, path);
+  await directory(dirname(absolute));
+  if (key(await realpath(absolute)) !== key(resolve(absolute))) fail('파일의 링크 또는 실제 경계가 변경되었습니다');
+  const before = await lstat(absolute);
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) fail('링크 또는 공유 파일은 검증 사본으로 복사할 수 없습니다');
+  if (before.size > 512 * 1024 ** 2) fail('검증 사본의 개별 파일 크기 한도를 초과했습니다');
+  const fd = await open(absolute, 'r'); let output: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    const opened = await fd.stat();
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino) fail('복사 중 파일 소유가 변경되었습니다');
+    if (destination) { await directory(dirname(destination), true); output = await open(destination, 'wx'); }
+    const hash = createHash('sha256'), chunk = Buffer.allocUnsafe(1024 ** 2); let bytes = 0;
+    while (true) {
+      checkpoint(limits); const read = await fd.read(chunk, 0, chunk.length, null); if (!read.bytesRead) break;
+      bytes += read.bytesRead; if (bytes > before.size) fail('복사 중 원본 파일 크기가 변경되었습니다');
+      hash.update(chunk.subarray(0, read.bytesRead));
+      if (output) { let written = 0; while (written < read.bytesRead) { checkpoint(limits); written += (await output.write(chunk, written, read.bytesRead - written, null)).bytesWritten; } }
+    }
+    const after = await lstat(absolute);
+    if (key(await realpath(absolute)) !== key(resolve(absolute))) fail('복사 중 파일 부모의 링크 경계가 변경되었습니다');
+    if (bytes !== before.size || after.isSymbolicLink() || after.nlink !== 1 || after.ino !== before.ino || after.dev !== before.dev || after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.mode !== before.mode) fail('복사 중 원본 파일이 변경되었습니다');
+    if (output) { await output.close(); output = undefined; await chmod(destination!, before.mode & 0o777); }
+    return { hash: hash.digest('hex'), mode: before.mode & 0o777, size: bytes };
+  } finally { await output?.close(); await fd.close(); }
+}
+
+async function manifest(root: string, limits: Budget): Promise<Entry[]> {
+  await directory(root); await assertNoHostConfiguration(root);
+  const files: Entry[] = []; let bytes = 0;
+  const visit = async (dir: string, prefix = '') => {
+    checkpoint(limits); const before = await lstat(dir);
+    if (!before.isDirectory() || before.isSymbolicLink() || key(await realpath(dir)) !== key(resolve(dir))) fail('소스 링크 또는 디렉터리 경계를 확인할 수 없습니다');
+    if (prefix && await exists(join(dir, '.git'))) fail('중첩 Git 경계는 검증 사본으로 복사할 수 없습니다');
+    if (files.length >= 100000) fail('검증 사본 항목 수 한도를 초과했습니다');
+    files.push({ kind: 'directory', path: prefix, mode: before.mode & 0o777 });
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) {
+      checkpoint(limits); const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (excluded(path)) continue;
+      if (entry.isSymbolicLink()) fail('소스 링크는 검증 사본으로 복사할 수 없습니다');
+      if (entry.isDirectory()) { await visit(join(dir, entry.name), path); continue; }
+      const stat = await lstat(join(root, path)); bytes += stat.size;
+      if (files.length >= 100000 || bytes > 4 * 1024 ** 3) fail('검증 사본 크기 한도를 초과했습니다');
+      files.push({ kind: 'file', path, ...await readOwned(root, path, limits) });
+    }
+    const after = await lstat(dir);
+    if (after.isSymbolicLink() || after.ino !== before.ino || after.dev !== before.dev || after.mtimeMs !== before.mtimeMs) fail('복사 중 소스 디렉터리가 변경되었습니다');
+  };
+  await visit(root); return files;
+}
+const revision = (files: Entry[]) => createHash('sha256').update(JSON.stringify(files)).digest('hex');
+
+/** Host-only copies. No claim that the original AI writer has stopped. */
+export class VerificationSnapshots {
+  private owned = new Map<string, { container: string; dev: number; ino: number }>();
+  constructor(private store: WorkStore) {}
+  async revision(root: string, signal?: AbortSignal) {
+    const limits = budget(signal), first = revision(await manifest(root, limits));
+    if (first !== revision(await manifest(root, limits))) fail('소스 상태 확인 중 파일이 변경되었습니다');
+    return first;
+  }
+  async prepare(work: Work, sourceRoot: string, signal?: AbortSignal): Promise<VerificationSnapshot> {
+    const limits = budget(signal); sourceRoot = await directory(sourceRoot); checkpoint(limits);
+    const data = resolve(process.env.DATA_DIR || '../.data');
+    for (const current of [...this.store.list(), work]) {
+      for (const root of [current.projectPath, current.executionPath, current.workspace?.executionPath].filter((root): root is string => typeof root === 'string')) {
+        if (pathsOverlap(data, root) || await exists(root) && pathsOverlap(data, await realpath(root))) fail('호스트 검증 사본 경로가 AI 작업 공간과 겹칩니다');
+      }
+    }
+    await directory(data); const base = await directory(join(data, 'verification-snapshots'), true); checkpoint(limits);
+    const id = randomUUID(), container = join(base, id), root = join(container, 'project');
+    await mkdir(container); const stat = await lstat(container);
+    this.owned.set(id, { container, dev: stat.dev, ino: stat.ino });
+    const snapshot: VerificationSnapshot = { id, root, sourceRoot, revision: '' };
+    try {
+      const marker = await open(join(container, 'owner.json'), 'wx');
+      try { await marker.writeFile(JSON.stringify({ id, workId: work.id })); } finally { await marker.close(); }
+      await mkdir(root);
+      const before = await manifest(sourceRoot, limits); snapshot.revision = revision(before);
+      for (const file of before) {
+        if (file.kind === 'directory') { checkpoint(limits); await directory(join(root, file.path), true); continue; }
+        const copied = await readOwned(sourceRoot, file.path, limits, join(root, file.path));
+        if (copied.hash !== file.hash || copied.mode !== file.mode) fail('복사 중 원본 파일이 변경되었습니다');
+      }
+      // Set directory modes only after writing children, deepest first.
+      for (const entry of [...before].reverse()) if (entry.kind === 'directory') { checkpoint(limits); await chmod(join(root, entry.path), entry.mode); }
+      if (revision(await manifest(sourceRoot, limits)) !== snapshot.revision || revision(await manifest(root, limits)) !== snapshot.revision) fail('복사 중 원본 또는 사본이 변경되었습니다');
+      return snapshot;
+    } catch (error) { try { await this.cleanup(snapshot); } catch { /* Preserve an unconfirmed container. */ } throw error; }
+  }
+  async matches(snapshot: VerificationSnapshot, root: string, signal?: AbortSignal) {
+    try { return key(await directory(root)) === key(snapshot.sourceRoot) && await this.revision(root, signal) === snapshot.revision && await this.revision(snapshot.root, signal) === snapshot.revision; }
+    catch { return false; }
+  }
+  async cleanup(snapshot: VerificationSnapshot) {
+    const owned = this.owned.get(snapshot.id);
+    if (!owned || snapshot.root !== join(owned.container, 'project')) fail('검증 사본 소유 경로를 확인할 수 없습니다');
+    await directory(owned.container);
+    const stat = await lstat(owned.container), marker = JSON.parse(await readFile(join(owned.container, 'owner.json'), 'utf8'));
+    if (stat.dev !== owned.dev || stat.ino !== owned.ino || marker.id !== snapshot.id) fail('검증 사본 소유가 변경되어 보존합니다');
+    // Remove only the exact exclusively-created container; never follow links.
+    await rm(owned.container, { recursive: true, force: false }); this.owned.delete(snapshot.id);
+  }
+}
