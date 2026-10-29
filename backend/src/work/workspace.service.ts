@@ -28,8 +28,18 @@ export class WorkspaceService {
   constructor(private store: WorkStore, private options: WorkspaceOptions = {}) {}
   prepareStage<T>(work: Work, path: string, stage: PreparationStage, operation: () => T) { return new WorkspacePreparation(this.store, this.options.preparation).run(work, path, stage, operation); }
   reserve(work: Work, settings: WorkspaceSettingsService, kind: WorkWorkspace['kind']): WorkWorkspace {
-    if (!['copy', 'git-worktree'].includes(kind) || this.hasSpace(work)) throw new ConflictException('기존 공간이 있거나 공간 종류가 올바르지 않습니다.');
     return settings.withSelectedRoot(selected => {
+      const space = this.planReservation(work, selected, kind);
+      work.workspace = space; work.executionPath = space.executionPath; this.store.save(work);
+      return space;
+    });
+  }
+  /** Read-only planning before recording a request; reserve repeats it under the settings lock. */
+  preflightReservation(work: Work, settings: WorkspaceSettingsService, kind: WorkWorkspace['kind']): WorkWorkspace {
+    return this.planReservation(work, settings.view(), kind);
+  }
+  private planReservation(work: Work, selected: ReturnType<WorkspaceSettingsService['view']>, kind: WorkWorkspace['kind']): WorkWorkspace {
+    if (!['copy', 'git-worktree'].includes(kind) || this.hasSpace(work)) throw new ConflictException('기존 공간이 있거나 공간 종류가 올바르지 않습니다.');
     const persisted = this.store.get(work.id);
     if (!persisted || this.hasSpace(persisted)) throw new ConflictException('업무가 없거나 이미 공간을 준비했습니다. 최신 상태를 확인해 주세요.');
     assertActiveCapacity({ ...work, phase: 'implementation' }, selected.policy, this.store);
@@ -39,9 +49,7 @@ export class WorkspaceService {
     const projectId = createHash('sha256').update(realpathSync(work.projectPath)).digest('hex'), workspaceId = randomUUID();
     const space: WorkWorkspace = { version: 1, kind, status: 'preparing', profileId: selected.profileId, rootId: root.rootId, rootPath: root.path, managedPath: root.managedPath, projectId, workspaceId, executionPath: join(root.managedPath, 'projects', projectId, 'works', workspaceId, 'project'), preparationPolicyVersion: selected.version };
     if (kind === 'git-worktree') preflightGitDirectoryPath(space.executionPath);
-    work.workspace = space; work.executionPath = space.executionPath; this.store.save(work);
     return space;
-    });
   }
   hasSpace(work: Work) { return work.workspace !== undefined || !!work.executionPath || this.store.records(work.id, 'isolated-baseline').length > 0; }
   queryPath(work: Work) { return !['completed', 'archived'].includes(work.phase) && this.hasSpace(work) ? this.path(work) : work.projectPath; }

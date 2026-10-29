@@ -265,3 +265,27 @@ $env:TMP = $env:TEMP
 - 변경100파일 실제 fixture의 GET은146→47 Git 호출, cat-file100→1회로 감소했다. 독립 두 측정은 약2.75~2.91초였으며 동기 소유 검사 등 잔여 차단은 남는다. 앱의 모든 멈춤 해소를 의미하지 않는다.
 - 구현자 관련8파일87개 통과(68.14초). 루트 최종 직접검증: TEMP/TMP=C:/Windows/Temp에서 project node로 vitest run git-blobs worktree-result-batching work-read-performance →3파일45개 통과(27.52초), 이어 backend tsc exit0. OpenSpec strict 및 diff 검사 성공. 메모리 수정 후 명세·품질 재검토 모두 추가 P1/P2 없음.
 - 완료 개수26/54를 유지한다. 원본D·운영 DB·실행 서버·활성화·배포는 변경하지 않았다.
+
+## 2026-10-30: 5.2 및 예약 전 API 재시도 보완의 검증 대기
+
+- 5.2는 GET commit-preview/POST result-commit, 전체 파일 선택·검증 소스 누락 차단, 소유 NUL 경로 파일, 부모+선택 내용/mode와 일치하는 immutable tree, commit-tree와 명시 업무 ref CAS, 별도 resultCommit/resultTree 및 전역 PK와 구분한 intent ID를 구현했다. 원본 HEAD와 초기 예약 fingerprint는 유지한다.
+- 경쟁 패자의 기록 덮어쓰기, 정리 실패의 lifecycle 누수, CAS 이후 조회 실패의 복구 불가, noop의 부분 저장, 외부 index 변경 유입, 비공개 추적 파일의 변환 실행, ignored/assume/skip 소스 누락을 리뷰·회귀 작성 중 보완했다. 입력 키/선택 경로 순서만 바뀐 동일 요청도 정규화한다. 파일당8MiB 초과·미지원 변환은 안전하게 거부하며 종료 불명은 해당 점유를 보존한다.
+- 실행된 중간 결과: 초기20개 통과(460.98초), 후속25개 중24통과/skip-worktree1실패(669.86초), 별도 추적 비공개 filter1개 통과(16.31초). 마지막 실패는 readiness/status 이전 플래그 검사 및 실제 S 비트를 확인하는 fixture로 보완했다. 원인을 Git 자동 정리로 단정하지 않는다. 최신 CAS 복구2개·입력 정규화1개 및 플래그 보완 후 회귀는 아직 실행하지 않았다. 중간 통과를 최신 전체 통과로 계산하지 않는다.
+- 별도 실제 /prepare 재현으로 경로 미지원 이후 singleton 요청이 failed로 남아 동일/새 키 모두 재시도 불가임을 확인했다. 공통 읽기 전용 예약 계획과 request 저장 전 점검, 실제 reserve 재점검을 추가했다. 늦은 typed 경로 오류이면서 공간과9종 생성 근거가 모두 없는 경우만 실패 이력을 보존하고 명시적으로 다시 요청할 수 있다. legacy 무코드 실패·copy 실패·uncertain·잔여는 자동 해제하지 않는다. 신규 unit17개/HTTP2개는 아직 실행하지 않았다.
+- 추가 Vitest 실행들은 자동 승인 검토 서비스가 'Selected model is at capacity'로 거부하여 프로세스가 생성되지 않았다. 안전성 거부가 아니며 승인 검토를 우회하지 않았다. 기본 sandbox 실행도 esbuild 상위 디렉터리 접근 거부로 시작하지 못했다. 해당 테스트들은 미수행이다.
+- 두 수정이 동결된 뒤 루트가 기본 sandbox에서 project node tsc -p tsconfig.json을 직접 실행하여 exit0(2.57초), OpenSpec strict와 diff 검사 exit0을 확인했다. 정적 리뷰는 실행 테스트를 대신하지 않는다. 최종 회귀 전 체크박스·완료 개수·커밋·배포를 완료 처리하지 않는다. 운영D/13003/실사용DB는 변경하지 않았다.
+
+### 같은 날 후속 개발과 환경 대조
+
+- 5.3의 후보 전용 fixed path/identity/pointer/등록 검증, 별도 preview/prepare API, immutable merge-tree 대조·명시 후보 ref CAS, 준비 전체의 영속 관리 intent와 단계별 PID, 실제 충돌 및 응답 유실 관찰 복구를 작성했다. 이미 게시한 후보의 상태·검증 refs·시각은 같은 준비 요청 재조회로 되돌리지 않는다. CAS 뒤 owned MERGE_HEAD 잔여는 실제 근거를 보존하며 자동 merge/CAS/abort/reset을 하지 않는다. 이 단계의 실회귀는 미실행이다.
+- 환경 대조로 Git --system의 filter.lfs.clean/smudge/process 정의가 모든 fixture에 상속됨을 확인했다. 대상 파일은 check-attr filter/merge가 unspecified인데도 정의 존재만으로 후보를 일괄 거부하던 코드를 보완했다. target/result 전체 경로의 실제 속성과 선택된 merge.default/custom driver를 검사하며 미사용 정의는 허용한다. Git의 driver 선택 규칙에 따른 builtin 재정의·강제 builtin·미정의 fallback 회귀를 포함해 후보 회귀45개를 작성했다. 실제 시스템/global/프로젝트 설정은 변경하지 않았다.
+- 5.4는 candidateId/workId 및 source/project/workspace 관계, 현재 후보·fixed root·상태별 HEAD/MERGE_HEAD 검사를 모든 프로젝트 조회에 연결했다. 일반 후보 쓰기/reconcile은 명시 거부하고 strict/private/localOnly 정책 및 targetHead 기준 metadata를 추가했다. 신규 회귀27개는 미실행이다. 이후5.5 연결 중 candidate file GET의 async Promise를 펼쳐 본문이 누락되는 결함을 발견해 수정과 응답 본문 회귀를 진행 중이다.
+- 5.3/5.4의 build·테스트 파일 타입 검사는 구현자가 exit0을 확인했고, 루트도 LFS 후속 보완 전 합쳐진 backend build를 직접 exit0(2.52초)으로 확인했다. 컴파일된 순수 입력 정규화 검사도 기본 sandbox에서 exit0이지만 Git/API 회귀를 대신하지 않는다. 기본 sandbox의 실제 저장소 속성 probe는 CodexSandboxOffline SID와 저장소 소유 SID 차이의 Git 보호로 실패했으며 safe.directory/권한/설정은 변경하지 않았다.
+- 5.5 후보 편집·stage·해결 커밋과5.6 화면 연결 준비를 같은 그룹5 안에서 계속한다. 자동 승인 검토 서비스 capacity로 최종 Git/API 회귀가 계속 미실행이므로 검증 완료26/54와 기본 비활성을 유지한다. 그룹5 검증 전 그룹6으로 넘어가지 않는다.
+
+## 2026-10-30: 예약 전 API 실패의 재시도 잠금 수정 검증 완료
+
+- 승인 검토가 루트 명령에 다시 응답하여 동결된 사전 예약 수정의 실제 회귀를 수행했다. 프로젝트 node로 vitest run workspace-provisioner workspace-service git-path-preflight →4파일48개 통과(69.88초), 별도 vitest run workspace-preflight-api →실제 HTTP2개 통과(31.91초). 두 실행 모두 TEMP/TMP=C:/Windows/Temp, exit0이다.
+- 최초 긴 경로 거부는 업무 상태·요청·공간·Git 생성 기록·실제 원본 refs/index를 오염시키지 않는다. 짧은 루트로 변경한 뒤 같은 업무·대화에서 동일/새 요청 키로 준비된다. 늦은 typed 오류의 재시도는 공간 및9종 생성 근거가 없는 경우로 한정하고 실패 이력을 보존한다. 기존 공간·copy·legacy 불명·uncertain은 추정 해제하지 않는다.
+- 별도 명세·품질 리뷰에서 추가 확정 P1/P2 없음. 커밋 직전 루트가 합쳐진 backend tsc를 기본 sandbox에서 직접 exit0(3.07초), OpenSpec strict와 diff 검사 exit0으로 확인했다. 테스트는 신규 서비스가 포함된 현재 트리에서 실행했으며 운영D/13003/실사용DB를 건드리지 않았다.
+- 이 수정은 이미 완료한3.1/3.6의 회귀 보완이므로 완료 개수26/54는 유지한다. 선택 커밋과 후보 편집 실회귀는 별도 실행 중이며 이50개 통과로 대체하지 않는다. 활성화·배포는 아직 수행하지 않았다.

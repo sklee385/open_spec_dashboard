@@ -12,6 +12,9 @@ import { FileResults } from '../src/work/file-results';
 import { WorkspaceService } from '../src/work/workspace.service';
 import { GitError, runGit } from '../src/projects/git-runner';
 import { projectCoordinator } from '../src/projects/coordinator';
+import { ConflictException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import * as pathChecks from '../src/work/git-path-preflight';
 vi.setConfig({ testTimeout: 45000 });
 const git = (root: string, ...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const replacePointer = (path: string, content: string) => { const file = openSync(path, 'r+'); try { ftruncateSync(file); writeFileSync(file, content); } finally { closeSync(file); } };
@@ -77,6 +80,53 @@ it('Git 실행 오류는 copy 생성이나 원본 대체로 바꾸지 않는다'
   const broken = new WorkspaceProvisioner(store, settings, { enabled: () => true, manager: new WorktreeManager({ store, run: async () => { throw new GitError('fixture unavailable', 503); } }) });
   await expect(broken.prepare(work, { requestKey: 'bad', confirmed: true })).rejects.toThrow(/unavailable/);
   expect(store.get(work.id)?.executionPath).toBeUndefined(); expect(store.records(work.id, 'isolated-baseline')).toHaveLength(0);
+});
+it.each(['same', 'new'])('예약 전 typed 경로 오류만 남은 Git 업무는 %s 키로 재시도하고 실패 이력을 보존한다', async mode => {
+  repository(); const preview = await provisioner.preview(work, 'main');
+  const body = { requestKey: 'path-retry', selectedBranch: 'main', previewToken: preview.documents!.confirmationToken, excludedConfirmed: true, policy: { version: 1, projectId: preview.projectId, planRevision: preview.documents!.planRevision, confirmed: true, runtime: 'none', dependencies: 'none', paths: [], generatedPaths: [], commands: [] } };
+  const manager = (provisioner as any).manager as WorktreeManager;
+  const fail = vi.spyOn(manager, 'create').mockRejectedValueOnce(new ConflictException({ message: 'late preflight', errorCode: 'workspace-git-path-check-failed' }));
+  await expect(provisioner.prepare(work, body)).rejects.toThrow('late preflight'); fail.mockRestore();
+  expect(store.get(work.id)?.workspace).toBeUndefined(); expect(store.records(work.id, 'workspace-request')[0]).toMatchObject({ status: 'failed', errorCode: 'workspace-git-path-check-failed' });
+  if (mode === 'same') await expect(provisioner.prepare(work, { ...body, selectedBranch: 'other' })).rejects.toThrow(/기존 생성 요청/);
+  const renewed = await provisioner.preview(work, 'main');
+  const ready = await provisioner.prepare(work, { ...body, requestKey: mode === 'same' ? body.requestKey : 'fresh-path-retry', previewToken: renewed.documents!.confirmationToken });
+  expect(ready).toMatchObject({ kind: 'git-worktree', status: 'ready' });
+  expect(store.records(work.id, 'workspace-request-history')).toHaveLength(1);
+  expect(store.records(work.id, 'workspace-request-history')[0]).toMatchObject({ requestKey: body.requestKey, status: 'failed', errorCode: 'workspace-git-path-check-failed' });
+});
+it.each(['baseline', 'isolated-baseline', 'workspace-creation', 'workspace-documents', 'workspace-preparation', 'workspace-git-intent', 'workspace-local-preparation', 'workspace-local-process', 'workspace-baseline'])('typed 경로 실패여도 %s 흔적이 있으면 새 공간 재시도를 차단한다', async kind => {
+  repository(); store.record('old-request', work.id, 'workspace-request', { requestKey: 'old', kind: 'git-worktree', status: 'failed', errorCode: 'workspace-git-path-unsupported' });
+  store.record('residue', work.id, kind, { status: 'failed' });
+  await expect(provisioner.prepare(work, { requestKey: 'new' })).rejects.toThrow();
+  expect(store.records(work.id, 'workspace-request-history')).toHaveLength(0); expect(store.get(work.id)?.workspace).toBeUndefined();
+});
+it.each([{ kind: 'git-worktree', status: 'failed' }, { kind: 'copy', status: 'failed', errorCode: 'workspace-git-path-unsupported' }, { kind: 'git-worktree', status: 'uncertain', errorCode: 'workspace-git-path-unsupported' }])('legacy·copy·uncertain 요청은 자동 재시도하지 않는다: %j', async previous => {
+  repository(); store.record('old-request', work.id, 'workspace-request', { requestKey: 'old', ...previous });
+  await expect(provisioner.prepare(work, { requestKey: 'new' })).rejects.toThrow(); expect(store.records(work.id, 'workspace-request-history')).toHaveLength(0);
+});
+it('동일 키의 uncertain 요청도 workspace가 없다는 이유로 재실행하지 않는다', async () => {
+  repository(); const body = { requestKey: 'unknown' }, fingerprint = createHash('sha256').update(JSON.stringify({ ...body, previewToken: undefined })).digest('hex');
+  store.record('old-request', work.id, 'workspace-request', { ...body, fingerprint, kind: 'git-worktree', status: 'uncertain', errorCode: 'workspace-git-path-unsupported' });
+  await expect(provisioner.prepare(work, body)).rejects.toThrow(/실제 종료/); expect(store.records(work.id, 'workspace-request-history')).toHaveLength(0);
+});
+it('예약 사전검사는 settings 쓰기 잠금·업무 저장·생성 기록 없이 같은 계획을 검사한다', () => {
+  const spaces = new WorkspaceService(store), before = store.get(work.id), config = readFileSync(process.env.CONFIG_PATH!, 'utf8');
+  const lock = vi.spyOn(settings, 'withSelectedRoot');
+  const plan = spaces.preflightReservation(work, settings, 'copy');
+  expect(plan).toMatchObject({ kind: 'copy', status: 'preparing' }); expect(lock).not.toHaveBeenCalled();
+  expect(store.get(work.id)).toEqual(before); expect(readFileSync(process.env.CONFIG_PATH!, 'utf8')).toBe(config); expect(existsSync(plan.executionPath)).toBe(false);
+  expect(store.records(work.id, 'workspace-creation')).toHaveLength(0);
+  const actual = spaces.reserve(work, settings, 'copy'); expect(lock).toHaveBeenCalledOnce(); expect(actual.rootId).toBe(plan.rootId); expect(actual.executionPath.length).toBe(plan.executionPath.length);
+});
+it('실제 Git 예약은 readonly 검사 뒤에도 경로를 재확인하고 실패 시 공간을 저장하지 않는다', () => {
+  const spaces = new WorkspaceService(store), before = store.get(work.id);
+  const check = vi.spyOn(pathChecks, 'preflightGitDirectoryPath').mockReturnValueOnce({ state: 'git-directory-absent' }).mockImplementationOnce(() => { throw new ConflictException({ message: 'root changed', errorCode: 'workspace-git-path-check-failed' }); });
+  try {
+    spaces.preflightReservation(work, settings, 'git-worktree');
+    expect(() => spaces.reserve(work, settings, 'git-worktree')).toThrow('root changed'); expect(check).toHaveBeenCalledTimes(2);
+    expect(store.get(work.id)).toEqual(before); expect(work.workspace).toBeUndefined(); expect(work.executionPath).toBeUndefined();
+  } finally { check.mockRestore(); }
 });
 it('신규 기본값은 비활성이고 기존 copy 업무 재개는 경로·대화·기준을 그대로 쓴다', async () => {
   const disabled = new WorkspaceProvisioner(store, settings, { enabled: () => false });
