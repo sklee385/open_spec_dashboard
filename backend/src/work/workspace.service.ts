@@ -9,6 +9,7 @@ import type { WorkspaceSettingsService } from './workspace-settings.service';
 import { assertActiveCapacity, assertPreparationCapacity } from './workspace-policy';
 import { WorkspacePreparation, type PreparationOptions, type PreparationStage } from './workspace-preparation';
 import { verifyWorktreeRegistration } from './worktree-registration';
+import { preflightGitDirectoryPath } from './git-path-preflight';
 
 export interface WorkspaceLocation {
   kind: 'copy' | 'git-worktree'; legacy: boolean; rootId: string | null;
@@ -37,6 +38,7 @@ export class WorkspaceService {
     const root = selected.roots.find(root => root.rootId === selected.selectedRootId)!;
     const projectId = createHash('sha256').update(realpathSync(work.projectPath)).digest('hex'), workspaceId = randomUUID();
     const space: WorkWorkspace = { version: 1, kind, status: 'preparing', profileId: selected.profileId, rootId: root.rootId, rootPath: root.path, managedPath: root.managedPath, projectId, workspaceId, executionPath: join(root.managedPath, 'projects', projectId, 'works', workspaceId, 'project'), preparationPolicyVersion: selected.version };
+    if (kind === 'git-worktree') preflightGitDirectoryPath(space.executionPath);
     work.workspace = space; work.executionPath = space.executionPath; this.store.save(work);
     return space;
     });

@@ -218,3 +218,17 @@ $env:TMP = $env:TEMP
 - 명세 및 품질 리뷰에서 최종 추가 P1/P2 없음. 루트 직접 재검증: TEMP/TMP=C:/Windows/Temp, scripts/npm.ps1 run test:run --workspace backend -- project-workspace-metadata project-api workspaces-api project-coordinator workspace-service worktree-create → 6파일55개 통과(56.41초). frontend의 ProjectWorkspace SourceManagementApp → 2파일39개 통과(6.02초). 양쪽 build와 diff 검사 통과. frontend build의 기존 큰 번들 경고는 남는다.
 - 기본 임시 경로에서 executionPath223자일 때 신규/기존 Git 생성 모두 '$GIT_DIR too big'로 실패했다. 짧은 실행별 OS 임시 경로에서 기존 worktree-create8개도 통과했다. 전역 설정·ACL·실제 선택 폴더·원본 저장소는 변경하지 않았다. 별도 읽기 전용 조사에서 설치 Git2.54.0.windows.1의 checkout child explicit GIT_DIR 하드가드를 확인했으며, 예약 전에 이 오류를 검출하여 새 업무가 영구 경로에 고정되지 않도록 후속 회귀 보강한다.
 - Codex 내장 브라우저의 실제 화면 검증은 아직 9.5 미완료다. 운영 앱/13003 재시작·원본 반영·활성화·배포는 수행하지 않았다.
+
+## 2026-10-29: 예약 전 설치 Git 경로 하드가드 보강
+
+- 실제 Git2.54.0.windows.1에서 ASCII 실행 경로214/215자 worktree add 성공,216/223자 실패를 확인했다. checkout child에 전달된 explicit GIT_DIR의 내부 하드가드이며 core.longpaths나 ACL 문제가 아니다. source: https://raw.githubusercontent.com/git-for-windows/git/v2.54.0.windows.1/setup.c 및 builtin/worktree.c. 숫자 길이 상수로 제품을 제한하지 않는다.
+- git-path-preflight.ts가 예정 executionPath/.git를 explicit --git-dir로 읽기 전용 점검한다. 확인된 하드가드 오류는 경로 미지원으로, 미생성 저장소는 absent로, 예상 밖 진단/timeout/spawn/출력 상한은 점검 실패로 구분한다. absent/readable은 전체 Git 기능 확인이나 경로 소유·채택 허가가 아니다.
+- WorkspaceService.reserve에서 Git 업무에만 메모리/DB 저장 직전 검사한다. 실패 시 work.workspace/executionPath와 creation/preparation/Git-intent 기록은 없고, 짧은 루트 확인 후 같은 업무로 다시 요청할 수 있다. 기존 업무 재조회·소유 검증·복구, explicit copy는 그대로다. 자식 환경만 LC_ALL/LANG=C로 고정하며 전역 환경·원본 Git·실제 선택 폴더·ACL을 변경하지 않는다.
+- 실제 긴 경로의 기존 영구 고정 재현 RED를 확인한 뒤 무예약/기록0/원본 refs 보존/같은 업무 재시도 GREEN으로 검증했다. 한글 UTF-8 바이트 경계, 오류 분류, 자식 환경, 기존 재조회 비호출 회귀를 포함한다.
+- 구현자 최종8파일58개 통과(129.49초). 루트 직접 최종 검사: TEMP/TMP=C:/Windows/Temp, scripts/npm.ps1 run test:run --workspace backend -- git-path-preflight workspace-service worktree-create →4파일32개 통과(23.03초). backend build, OpenSpec strict, diff 검사 모두 exit0. 별도 명세 및 품질 리뷰 추가 P1/P2 없음.
+- 이 보강은 기존3.1의 발견된 경로/Git 사전 점검 결함 수정이며 완료 개수는25/54 그대로다. 후보 예약5.1도 같은 helper를 재사용한다. 정상 생성 fixture의 CI/전체 검증은 짧은 실행별 runner 임시 경로로 설정하며, 긴 경로는 별도 조기 차단 회귀로 검증한다.
+
+### 출시 전 후속 대조 메모
+
+- 그룹7.3/7.4는 사본 복사 무결성 raw digest와 빌드 산출물/캐시 및 tasks 체크 진행의 의미상 최신성을 구분해야 한다. 현재 보수적 stale 제한을 그대로 활성화·배포하지 않는다.
+- 그룹7.6 및9.2는 브라우저 cleanupStatus:uncertain의 영속 플래그만으로 영구 잠금이 남지 않도록 실제 소유 프로세스/Job의 PID·세대 등 재확인 근거 저장과 종료 관찰·복구 동선을 대조한다. 확인 불가를 무조건 해제하거나 타 프로세스를 종료해서는 안 된다. 실행이 종료됐다는 실제 증거로만 정리하며 기존 전반 상태 재확인/종료 UX와 연결한다.
