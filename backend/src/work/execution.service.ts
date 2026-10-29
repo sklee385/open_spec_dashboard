@@ -1,16 +1,18 @@
 import { BadRequestException, ConflictException, Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ChildProcess, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { LegacyService } from '../legacy/legacy.service';
 import { Work, WorkStore } from './store';
-import { runtimeCommand, runtimeEnvironment } from '../runtime';
+import { localRuntimeDirectory, runtimeCommand, runtimeEnvironment } from '../runtime';
 import { collectFiles, FileResults, Snapshot, snapshotRevision } from './file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { relatedTestCommands, type TestScope } from './test-commands';
 import { desktopHealth } from '../desktop/health';
 import { WorkspaceService } from './workspace.service';
+import { guardBrowserProcess } from '../browser/browser-job';
+import { stopOwnedProcess } from '../browser/browser-process';
 
 export interface VerificationCommand { id: string; command: string; args: string[]; }
 interface VerificationReadCommands { full: VerificationCommand[]; work: VerificationCommand[]; }
@@ -30,6 +32,7 @@ export class ExecutionService implements OnModuleDestroy {
   private batches = new Map<string, { scope: TestScope; remaining: string[] }>();
   private closing = false;
   private interrupted = new Set<string>();
+  private candidateChildren = new Map<string, ChildProcess>();
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService) {
     desktopHealth(store).register('verification', work => this.children.has(work.id) || this.batches.has(work.id) ? 'active' : undefined);
     for (const work of store.list().filter(work => !['completed', 'archived'].includes(work.phase))) for (const record of store.records(work.id, 'verification').filter(x => x.status === 'running')) store.record(record.id, work.id, 'verification', { ...record, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
@@ -114,5 +117,51 @@ export class ExecutionService implements OnModuleDestroy {
     const child = this.children.get(id); if (!child) return false;
     this.batches.delete(id); this.interrupted.add(id); child.kill(); return true;
   }
-  onModuleDestroy() { this.closing = true; for (const child of this.children.values()) child.kill(); this.children.clear(); }
+  /** Candidate context is explicit: never changes Work phase, commands or verification history. */
+  candidateCommandContext(commands: VerificationCommand[]) {
+    const configured = localRuntimeDirectory(), directory = configured ? realpathSync(configured) : undefined;
+    return { hostExecutable: realpathSync(process.execPath), hostNodeVersion: process.version, runtimeDirectory: directory ?? null, commands: commands.map(command => ({ id: command.id, ...runtimeCommand(command.command, command.args, directory) })) };
+  }
+  async runCandidateCommand(runId: string, cwd: string, command: VerificationCommand, signal: AbortSignal, onSpawn: (pid: number) => void) {
+    const result = { commandId: command.id, commandVersion: JSON.stringify(command), stdout: '', stderr: '', code: null as number | null, status: 'blocked', processTerminated: true, terminationEvidence: 'not-started' };
+    if (signal.aborted || this.closing) return { ...result, status: 'interrupted' };
+    const context = this.candidateCommandContext([command]), executable = context.commands[0], env = runtimeEnvironment(process.env, context.runtimeDirectory ?? undefined);
+    const privateEnvironment = new Set(['DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY', 'NODE_OPTIONS', 'NODE_PATH']);
+    for (const key of Object.keys(env)) if (privateEnvironment.has(key.toUpperCase()) || key.toUpperCase().startsWith('GIT_')) delete env[key];
+    // Same waiting-worker / kill-on-close Job contract as local preparation.
+    const worker = "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',b=>s+=b);process.stdin.on('end',()=>{try{const c=JSON.parse(s);const p=require('child_process').spawn(c.command,c.args,{cwd:process.cwd(),env:process.env,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});p.stdout.pipe(process.stdout);p.stderr.pipe(process.stderr);p.once('error',e=>{console.error(e.message);process.exit(1)});p.once('close',c=>process.exit(c===0?0:1));}catch{process.exit(1)}});";
+    const child = spawn(process.execPath, ['-e', worker], { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    result.terminationEvidence = 'unconfirmed';
+    this.candidateChildren.set(runId, child);
+    const closed = new Promise<void>(resolve => { child.once('error', error => { result.stderr += error.message; resolve(); }); child.once('close', code => { result.code = code; resolve(); }); });
+    const guard = guardBrowserProcess(child); void guard.catch(() => {});
+    let interrupted = false, exceeded = false, dispatched = false;
+    // Stop only this live owned ChildProcess. Never discover/kill a persisted PID.
+    const stop = () => { interrupted = true; void stopOwnedProcess(child).catch(() => {}); };
+    signal.addEventListener('abort', stop, { once: true });
+    const timer = setTimeout(stop, 600000);
+    const output = (key: 'stdout' | 'stderr', chunk: Buffer) => { const value = chunk.toString(); result[key] = (result[key] + value).slice(0, 2000000); if (value.length + result[key].length >= 2000000) { exceeded = true; stop(); } };
+    child.stdout!.on('data', chunk => output('stdout', chunk)); child.stderr!.on('data', chunk => output('stderr', chunk));
+    child.stdin!.on('error', stop);
+    try {
+      if (child.pid) onSpawn(child.pid);
+      const owned = await guard;
+      if (signal.aborted || this.closing) stop(); else { dispatched = true; child.stdin!.end(JSON.stringify(executable)); }
+      await closed; await owned.done;
+      result.terminationEvidence = 'job-and-worker-closed';
+      result.status = interrupted ? 'interrupted' : result.code === 0 && !exceeded ? 'passed' : 'failed';
+    } catch (error: any) {
+      result.stderr += error.message;
+      // A guard failure never permits project code; uncertain cleanup retains the scope.
+      try { await stopOwnedProcess(child); await closed; await (await guard).done; }
+      catch { result.processTerminated = !child.pid || !dispatched && (child.exitCode !== null || child.signalCode !== null); }
+      result.terminationEvidence = result.processTerminated ? dispatched ? 'job-and-worker-closed' : 'waiting-worker-closed' : 'unconfirmed';
+      result.status = signal.aborted ? 'interrupted' : 'blocked';
+    } finally {
+      clearTimeout(timer); signal.removeEventListener('abort', stop);
+      if (result.processTerminated) this.candidateChildren.delete(runId);
+    }
+    return result;
+  }
+  onModuleDestroy() { this.closing = true; for (const child of this.children.values()) child.kill(); this.children.clear(); for (const child of this.candidateChildren.values()) void stopOwnedProcess(child).catch(() => {}); }
 }

@@ -8,11 +8,18 @@ import { IntegrationPreparation } from './integration-preparation';
 import { IntegrationEditing } from './integration-editing';
 import { MutationAdmission } from './mutation-admission';
 import { createHash } from 'node:crypto';
+import { IntegrationVerification } from './integration-verification';
 @Controller('work/:id/integration')
 export class IntegrationController {
   private results: WorktreeResultCommit;
   private candidates: IntegrationPreparation;
-  constructor(@Inject(WorkService) private works: WorkService, @Inject(IntegrationService) private integration: IntegrationService, @Inject(DesktopLifecycle) lifecycle: DesktopLifecycle, @Inject(WorkspaceSettingsService) settings: WorkspaceSettingsService, @Inject(IntegrationEditing) private editing: IntegrationEditing) { this.results = new WorktreeResultCommit(works.store, works, lifecycle); this.candidates = new IntegrationPreparation(works.store, works, settings, lifecycle); }
+  constructor(@Inject(WorkService) private works: WorkService, @Inject(IntegrationService) private integration: IntegrationService, @Inject(DesktopLifecycle) lifecycle: DesktopLifecycle, @Inject(WorkspaceSettingsService) settings: WorkspaceSettingsService, @Inject(IntegrationEditing) private editing: IntegrationEditing, @Inject(IntegrationVerification) private verification: IntegrationVerification) { this.results = new WorktreeResultCommit(works.store, works, lifecycle); this.candidates = new IntegrationPreparation(works.store, works, settings, lifecycle); }
+  @Get(':candidateId/verification/preview') verificationPreview(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.verification.preview(id, candidateId); }
+  @Get(':candidateId/verification/results') verificationResults(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.verification.results(id, candidateId); }
+  @Get(':candidateId/verification/status') verificationStatus(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.verification.results(id, candidateId); }
+  @Post(':candidateId/verification/run') @HttpCode(200) verificationRun(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.verification.run(id, candidateId, body); }
+  @Post(':candidateId/verification/cancel') @HttpCode(200) verificationCancel(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.verification.cancel(id, candidateId, body); }
+  @Post(':candidateId/verification/reconcile') @HttpCode(200) verificationReconcile(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.verification.reconcile(id, candidateId, body); }
   @Get(':candidateId/edit/preview') editPreview(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.editing.preview(id, candidateId); }
   @Post(':candidateId/edit/stage') @HttpCode(200) editStage(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.editing.stage(id, candidateId, body); }
   @Post(':candidateId/edit/commit') @HttpCode(200) editCommit(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.editing.commit(id, candidateId, body); }
