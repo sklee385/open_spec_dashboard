@@ -7,6 +7,12 @@ const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo' } as Chan
 const work = { id: 'work-1', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null,
   documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
+it('외부 점유 업무에 새 세션 복구를 제공하고 모바일 연결은 모든 업무에서 안내한다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, threadId: 'old-thread', state: 'recovery-required', errorCode: 'thread-in-use' } })));
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  expect(await screen.findByRole('button', { name: '복구용 새 세션으로 이어하기' })).toBeEnabled();
+  expect(screen.getByText('모바일 Codex 연결')).toBeVisible();
+});
 it('문서 목록에서 verification.md를 선택해 검증 기록 원문과 미리보기를 연다', async () => {
   const mock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document')
     ? { path: new URL(url, 'http://localhost').searchParams.get('path'), content: url.includes('verification.md') ? '# 검증 결과\n488개 통과' : '# 계획', version: 'v1' }

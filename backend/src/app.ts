@@ -25,13 +25,14 @@ import { EdgeController } from './browser/edge.controller';
 import { EdgeService } from './browser/edge.service';
 import { BrowserService } from './browser/browser.service';
 import { BrowserController } from './browser/browser.controller';
+import { RemoteController, RemoteService } from './remote/service';
 
 @Controller()
 class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService] })
+@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService] })
 class AppModule {}
 
 export async function createApplication() {

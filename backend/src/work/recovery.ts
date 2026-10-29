@@ -1,7 +1,9 @@
 import { ConflictException } from '@nestjs/common';
-import { statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { FileResults } from './file-results';
 import { Work, WorkStore } from './store';
+import { desktopHealth } from '../desktop/health';
 
 export type RecoveryCode = 'legacy-workspace' | 'isolated-workspace' | 'workspace-unavailable' | 'project-unavailable' | 'thread-in-use' | 'session-restarted' | 'thread-unknown' | 'connection-failed' | 'busy' | 'completed';
 export interface RecoveryStatus { required: boolean; canReconnect: boolean; code: RecoveryCode; mode: 'shared' | 'isolated'; }
@@ -9,6 +11,23 @@ const availableStates = ['recovery-required', 'idle', 'interrupted', 'failed'];
 
 export class WorkRecovery {
   constructor(private store: WorkStore) {}
+  isRecoveredThread(work: Work) {
+    const matches = (record: any) => record?.status === 'completed' && !!work.threadId && record.newThreadId === work.threadId;
+    return matches(work.sessionRecovery) || this.store.records(work.id, 'session-recovery').some(matches);
+  }
+  assertWritableFolder(work: Work, cwd: string) {
+    const canonical = (path: string) => { let value: string; try { value = realpathSync(path); } catch { value = resolve(path); } return process.platform === 'win32' ? value.toLowerCase() : value; };
+    const target = canonical(cwd);
+    for (const other of this.store.list()) {
+      if (other.id === work.id || ['completed', 'archived'].includes(other.phase)) continue;
+      const runtime = desktopHealth(this.store).runtime(other);
+      if (runtime === 'inactive' && other.errorCode !== 'thread-in-use') continue;
+      const usesExecutionPath = ['implementation', 'verification'].includes(other.phase) || this.isRecoveredThread(other);
+      const path = canonical(usesExecutionPath && other.executionPath ? other.executionPath : other.projectPath);
+      const overlapping = (a: string, b: string) => { const value = relative(a, b); return value === '' || (!value.startsWith('..') && !isAbsolute(value)); };
+      if (overlapping(path, target) || overlapping(target, path)) throw new ConflictException('같은 작업 폴더의 다른 업무 실행·종료 상태를 확인한 뒤 다시 시도해 주세요');
+    }
+  }
   private isolated(work: Work) { return !!work.executionPath || this.store.records(work.id, 'isolated-baseline').length > 0; }
   path(work: Work) {
     if (this.isolated(work)) return new FileResults(this.store).path(work);

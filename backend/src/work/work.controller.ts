@@ -27,6 +27,8 @@ export class WorkController {
   @Post(':id/action') @HttpCode(200) action(@Param('id') id: string, @Body() body: unknown) { return this.service.action(id, body); }
   @Post(':id/message') @HttpCode(200) message(@Param('id') id: string, @Body() body: any) { this.service.get(id); return this.codex.send(id, body?.text); }
   @Post(':id/reconnect') @HttpCode(200) reconnect(@Param('id') id: string) { this.service.get(id); return this.codex.reconnect(id); }
+  @Post(':id/recover-session') @HttpCode(200) recoverSession(@Param('id') id: string, @Body() body: unknown) { this.service.get(id); return this.codex.recoverSession(id, body); }
+  @Post(':id/recover-session/cancel') @HttpCode(200) cancelSessionRecovery(@Param('id') id: string, @Body() body: unknown) { this.service.get(id); return this.codex.cancelSessionRecovery(id, body); }
   @Post(':id/answer') @HttpCode(200) answer(@Param('id') id: string, @Body() body: unknown) { this.service.get(id); return this.codex.answer(id, body); }
   @Post(':id/approval') @HttpCode(200) approval(@Param('id') id: string, @Body() body: unknown) { this.service.get(id); return this.codex.approval(id, body); }
   @Post(':id/interrupt') @HttpCode(200) async interrupt(@Param('id') id: string) { this.service.get(id); const browser = this.service.browser.status(id); if (browser.running) { await this.service.browser.cancel(id); if (browser.results.at(-1)?.owner !== 'tool') return { requested: true }; } if (this.service.execution.interrupt(id)) return { requested: true }; return this.codex.interrupt(id); }

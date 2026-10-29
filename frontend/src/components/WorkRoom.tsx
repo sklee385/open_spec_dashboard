@@ -21,6 +21,8 @@ import './WorkRoom.css';
 import { WorkTestActions, WorkTestResults, type TestResult, type TestScope } from './WorkTests';
 import { readDocumentDraft, useLocalDraft, workDraftKey } from '../hooks/useLocalDraft';
 import { draftStorage } from '../lib/draftStorage';
+import { SessionRecovery, type SessionRecoveryStatus } from './SessionRecovery';
+import { RemoteBoardConnection } from './RemoteBoardConnection';
 
 type Entry = { seq: number; type: string; data: Record<string, unknown> };
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: Record<string, unknown> & { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
@@ -28,6 +30,7 @@ type Verification = TestResult;
 type Command = { id: string; command: string; args: string[] };
 type Room = { id: string; changeName: string; phase: string; state: string; threadId: string | null; turnId?: string; error?: string; errorCode?: string; updatedAt: string; reviewedVersion: string | null; reviewRequired?: boolean;
   recovery?: RecoveryStatus;
+  sessionRecovery?: SessionRecoveryStatus;
   toolId?: string; toolConfigSnapshot?: { name: string; kind: string }; toolCapabilities?: { conversation: boolean; questions: boolean; approval: boolean; interrupt: boolean; nativeResume: boolean }; toolReadiness?: { ready: boolean; message: string };
   documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationCommands: Command[]; workVerificationCommands?: Command[];
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
@@ -362,6 +365,7 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
       <div><h1>{change.title || change.name}</h1><span>{room ? `${phases[room.phase] || room.phase} · ${states[room.state] || room.state}` : t('workRoom.loading')}</span></div>
       <AiActivity state={loadError ? undefined : room?.state} />
       <details><summary><span>{toolName}</span> · <span>{t('workRoom.sessionInfo')} {connection}</span></summary><small>{nativeResume ? room?.threadId ? `${toolName} ${room.threadId}` : t('workRoom.sessionHint') : t('aiTools.logicalSession')}</small><p>{nativeResume ? t('workRoom.approvalHint') : t('aiTools.limitations')}</p></details>
+      {room && <RemoteBoardConnection workId={room.id} />}
     </header>
     {error && !needsRecovery && <div className="work-error" role="alert">{error}</div>}
     {loadError && !needsRecovery && <div className="work-error" role="status">{loadError}</div>}
@@ -369,6 +373,9 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
     {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
     {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}
     {needsRecovery && room && <WorkRecovery status={room.recovery || { required: true, canReconnect: !!room.threadId, code: room.errorCode || 'connection-failed' }} busy={busy} error={room.error || error || loadError} onRecover={() => void recover()} />}
+    {nativeResume && room?.threadId && (room.errorCode === 'thread-in-use' || room.sessionRecovery) && <SessionRecovery key={`${room.id}:${room.threadId}:${room.errorCode || ''}`} workId={room.id} threadId={room.threadId} recovery={room.sessionRecovery} conflicted={room.errorCode === 'thread-in-use'} busy={busy}
+      onPreserve={() => chatPersistence.flush() && documentPersistence.flush()}
+      onRefresh={() => refresh(room.id)} />}
     {recoveryDone && !needsRecovery && <div className="work-notice" role="status">{t('recovery.done')}</div>}
     {room?.reviewRequired && <div className="work-notice">{t('workRoom.reviewAgain')}</div>}
     {pending && <div className="work-notice">{t('workRoom.unsaved')}

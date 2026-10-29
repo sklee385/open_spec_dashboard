@@ -29,6 +29,8 @@ export class AiToolService {
   interrupt(id: string) { return this.tool(id).tool.kind === 'codex' ? this.codex.interrupt(id) : this.external.interrupt(id); }
   private native(id: string) { if (this.tool(id).tool.kind !== 'codex') throw new BadRequestException('이 도구는 구조화 질문·승인·고유 세션 재개를 지원하지 않습니다'); return this.registry.get('codex') as CodexAdapter; }
   reconnect(id: string) { return this.native(id).recover(id); }
+  recoverSession(id: string, body: any) { this.native(id); return this.codex.recoverSession(id, body); }
+  cancelSessionRecovery(id: string, body: any) { this.native(id); return this.codex.cancelSessionRecovery(id, body); }
   answer(id: string, body: any) { return this.native(id).answer(id, body); }
   approval(id: string, body: any) { return this.native(id).approval(id, body); }
 }
