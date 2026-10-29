@@ -6,7 +6,7 @@ const path = require('node:path');
 const { createEmergencyTools } = require('../emergency.cjs');
 
 async function fixture(t) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osb-emergency-'));
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'osb-emergency-')));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const appDirectory = path.join(dir, 'app');
   const userDirectory = path.join(dir, 'user');
