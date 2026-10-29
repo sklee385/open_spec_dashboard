@@ -1,0 +1,9 @@
+<!doctype html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'"><title>OpenSpecBoard 상태 점검</title><link rel="stylesheet" href="health.css"></head>
+<body><header><span class="brand">OpenSpecBoard</span><span id="version"></span><span class="scope">진단 및 복구</span></header>
+<main><div class="title"><div><h1>전체 상태 점검</h1><p id="summary" role="status">현재 실행과 저장 상태를 확인할 준비가 됐습니다.</p></div><button id="inspect" class="primary">다시 점검</button></div>
+<p id="error" role="alert" hidden></p>
+<section aria-labelledby="connection-title"><div class="section-title"><h2 id="connection-title">앱과 서버</h2><small id="checked-at">아직 점검하지 않음</small></div><dl id="overview"></dl><div id="safe-notice" class="notice" hidden><strong>안전 모드</strong><span>자동 실행과 대기 메시지 전송을 보류합니다.</span></div><button id="safe-mode" hidden>안전 모드 설정</button></section>
+<section aria-labelledby="works-title"><div class="section-title"><h2 id="works-title">업무별 상태와 종료 차단 사유</h2><label><input id="problems-only" type="checkbox">확인이 필요한 업무만</label></div><div class="table-wrap"><table><thead><tr><th>업무</th><th>판정</th><th>마지막 변경 · 확인 내용</th><th>동작</th></tr></thead><tbody id="works"></tbody></table></div></section>
+<section aria-labelledby="requests-title"><h2 id="requests-title">처리 중 요청</h2><ul id="requests"></ul></section>
+<section aria-labelledby="history-title"><h2 id="history-title">최근 장애·복구 기록</h2><ul id="history"></ul></section>
+<footer><div><strong>앱을 종료할 수 없나요?</strong><p>강제 종료하면 미저장 입력과 진행 중 변경이 중단될 수 있습니다.</p></div><button id="force" class="danger">강제 종료…</button></footer></main><script src="health-ui.cjs"></script></body></html>

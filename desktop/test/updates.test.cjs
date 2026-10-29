@@ -9,6 +9,27 @@ function setup(overrides = {}) {
   return { manager, updater, service };
 }
 
+test('종료 대기 중 긴급 종료 잠금이 생기면 설치 인계 없이 취소한다', async () => {
+  let emergency = false, finishStop;
+  const { manager, updater, service } = setup({
+    stop: () => new Promise(resolve => { finishStop = resolve; }),
+    assertInstallAllowed: () => { if (emergency) throw Error('emergency'); },
+  });
+  updater.emit('update-downloaded', { version: '99.0.0' });
+  const installing = manager.install();
+  await new Promise(resolve => setImmediate(resolve));
+  emergency = true; finishStop(); await installing;
+  assert.equal(updater.installed, undefined); assert.equal(manager.installHandoff, false);
+  assert.equal(service.cancelled, 1); assert.equal(manager.snapshot().state, 'error');
+});
+
+test('설치 공급자 호출 전에 인계 상태를 고정하고 실패 시 해제한다', async () => {
+  const { manager, updater, service } = setup();
+  updater.quitAndInstall = async () => { assert.equal(manager.installHandoff, true); throw Error('handoff failed'); };
+  updater.emit('update-downloaded', { version: '99.0.0' }); await manager.install();
+  assert.equal(manager.installHandoff, false); assert.equal(service.cancelled, 1);
+});
+
 test('새 버전을 다운로드해도 재시작 전 현재 제품 버전은 유지한다', () => {
   const version = require('../../package.json').version;
   const { manager, updater } = setup({ version });

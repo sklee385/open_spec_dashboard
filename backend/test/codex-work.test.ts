@@ -63,6 +63,10 @@ describe('Codex 프로세스와 동일 대화', () => {
     await app.close(); app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     const restored = (await request(`work/${work.id}`)).data;
     expect(restored.questions.some((q: any) => q.status === 'expired')).toBe(true);
+    // A restart leaves execution ownership unknown. Reconnect and inspect the
+    // same terminal turn before explicitly requesting another AI turn.
+    expect((await request(`work/${work.id}/message`, { text: '미확인 실행 재전송 방지' })).status).toBe(409);
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
     expect((await request(`work/${work.id}/message`, { text: '미답변 질문부터 다시 확인해 줘' })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
   });
@@ -125,6 +129,7 @@ describe('Codex 프로세스와 동일 대화', () => {
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('waiting-input');
     await app.close(); app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     const detail = (await request(`work/${work.id}`)).data, q = detail.questions.filter((x: any) => x.status === 'expired').at(-1);
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
     expect((await request(`work/${work.id}/answer`, { questionId: q.id, recover: true, answers: { choice: { answers: ['복구한 결정'] } } })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
     expect((await request(`work/${work.id}`)).data.questions.find((x: any) => x.id === q.id).status).toBe('answered');
@@ -148,6 +153,7 @@ describe('Codex 프로세스와 동일 대화', () => {
     expect((await request(`work/${work.id}/message`, { text: '복구 요청' })).status).toBe(409);
     expect((await request(`work/${work.id}`)).data).toMatchObject({ threadId: 'thread-1', state: 'recovery-required' });
     await app.close(); delete process.env.CODEX_TEST_MODE; app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
     expect((await request(`work/${work.id}/message`, { text: '재시도' })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
   });
@@ -156,6 +162,7 @@ describe('Codex 프로세스와 동일 대화', () => {
     store.record(q.id, work.id, 'question', { ...q, status: 'recovering', answer: { choice: { answers: ['보존할 답변'] } } });
     await app.close(); app = await createApplication(); await app.listen(0, '127.0.0.1'); base = await app.getUrl();
     const restored = (await request(`work/${work.id}`)).data.questions.find((x: any) => x.id === q.id); expect(restored.status).toBe('expired'); expect(restored.answer.choice.answers).toEqual(['보존할 답변']);
+    expect((await request(`work/${work.id}/reconnect`, {})).status).toBe(200);
     expect((await request(`work/${work.id}/answer`, { questionId: q.id, recover: true, answers: restored.answer })).status).toBe(200);
     await expect.poll(async () => (await request(`work/${work.id}`)).data.state).toBe('idle');
   });

@@ -1,4 +1,7 @@
 export const enRecoveryCopy = {
+  'draft.restored': 'Local draft restored. The original remains unchanged until you save.',
+  'draft.failed': 'Could not save the local draft. Keep this screen open and check storage space and permissions.',
+  'draft.readFailed': 'Could not read the local draft. The original is shown; check local storage before editing.',
   'recovery.title': 'Work recovery',
   'recovery.action': 'Recover work',
   'recovery.working': 'Recovering…',
@@ -16,6 +19,9 @@ export const enRecoveryCopy = {
   'recovery.completed': 'Completed or archived work does not require reconnection.',
 };
 export const koRecoveryCopy: Record<keyof typeof enRecoveryCopy, string> = {
+  'draft.restored': '로컬 초안을 복원했습니다. 원본은 저장할 때까지 변경되지 않습니다.',
+  'draft.failed': '로컬 초안을 저장하지 못했습니다. 이 화면을 유지하고 저장 공간과 권한을 확인해 주세요.',
+  'draft.readFailed': '로컬 초안을 읽지 못해 원본을 표시합니다. 편집 전에 로컬 저장소를 확인해 주세요.',
   'recovery.title': '업무 복구',
   'recovery.action': '업무 복구',
   'recovery.working': '복구 중…',

@@ -9,6 +9,7 @@ import { runtimeCommand, runtimeEnvironment } from '../runtime';
 import { collectFiles, FileResults, Snapshot, snapshotRevision } from './file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { relatedTestCommands, type TestScope } from './test-commands';
+import { desktopHealth } from '../desktop/health';
 
 export interface VerificationCommand { id: string; command: string; args: string[]; }
 @Injectable()
@@ -27,7 +28,8 @@ export class ExecutionService implements OnModuleDestroy {
   private closing = false;
   private interrupted = new Set<string>();
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService) {
-    for (const work of store.list()) for (const record of store.records(work.id, 'verification').filter(x => x.status === 'running')) store.record(record.id, work.id, 'verification', { ...record, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
+    desktopHealth(store).register('verification', work => this.children.has(work.id) || this.batches.has(work.id) ? 'active' : undefined);
+    for (const work of store.list().filter(work => !['completed', 'archived'].includes(work.phase))) for (const record of store.records(work.id, 'verification').filter(x => x.status === 'running')) store.record(record.id, work.id, 'verification', { ...record, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
   }
   snapshot(work: Work): Snapshot { return collectFiles(this.executionPath(work)); }
   revision(work: Work) { return snapshotRevision(this.snapshot(work)); }
@@ -66,6 +68,7 @@ export class ExecutionService implements OnModuleDestroy {
     return result;
   }
   run(work: Work, commandId: string, scope: TestScope = 'full') {
+    desktopHealth(this.store).assertExecutionAllowed();
     if (!['work', 'full'].includes(scope)) throw new BadRequestException('잘못된 테스트 범위입니다');
     projectCoordinator(this.store).assertWorkCanStart(work);
     if (this.children.has(work.id) || !['idle', 'interrupted', 'failed'].includes(work.state) || ['completed', 'archived'].includes(work.phase)) throw new ConflictException('업무의 다른 실행이 진행 중이거나 완료되었습니다');
@@ -89,6 +92,7 @@ export class ExecutionService implements OnModuleDestroy {
       if (this.closing) return;
       record.durationMs = Date.now() - started;
       record.code = code; record.status = this.interrupted.delete(work.id) ? 'interrupted' : code === 0 && !error ? 'passed' : 'failed'; if (error) record.stderr += error;
+      if (record.status === 'failed') desktopHealth(this.store).event('execution-failed', work.id, 'failed', 'verification-failed');
       this.store.record(record.id, work.id, 'verification', record); const latest = this.store.get(work.id)!; latest.state = 'idle'; this.store.save(latest);
       const batch = this.batches.get(work.id), next = batch?.remaining.shift();
       if (record.status === 'passed' && next && batch) {

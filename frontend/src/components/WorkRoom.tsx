@@ -5,7 +5,7 @@ import { AiActivity } from './AiActivity';
 import { WorkRecovery, type RecoveryStatus } from './WorkRecovery';
 import { DeleteBoardItem } from './BoardTrash';
 import { QuestionAnswers, RecoveredAnswer, recoveredAnswer } from './QuestionAnswers';
-import { useCallback, useEffect, useRef, useState, useImperativeHandle, type Ref } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useImperativeHandle, type Ref } from 'react';
 import { AttentionBell } from './AttentionCenter';
 import type { AttentionTarget, WorkRoomNavigation } from '../lib/attentionNavigation';
 import { JsonBlock, MarkdownContent } from './WorkContent';
@@ -19,6 +19,8 @@ import type { FileDiffProps } from './FileDiff';
 import type { Change } from '../types';
 import './WorkRoom.css';
 import { WorkTestActions, WorkTestResults, type TestResult, type TestScope } from './WorkTests';
+import { readDocumentDraft, useLocalDraft, workDraftKey } from '../hooks/useLocalDraft';
+import { draftStorage } from '../lib/draftStorage';
 
 type Entry = { seq: number; type: string; data: Record<string, unknown> };
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: Record<string, unknown> & { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
@@ -31,15 +33,15 @@ type Room = { id: string; changeName: string; phase: string; state: string; thre
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
   executionPath?: string; changeReport?: ChangeReport; changes: (FileDiffProps & { status: string })[] };
 type Doc = { path: string; content: string; version: string };
-function readChatDraft(changeId: string): { message: string; answers: Record<string, string> } {
+function readChatDraft(changeId: string): { message: string; answers: Record<string, string>; failed?: boolean } {
   try {
-    const value = JSON.parse(localStorage.getItem(`work-chat-draft:${changeId}`) || 'null');
+    const value = JSON.parse(draftStorage.getItem(`work-chat-draft:${changeId}`) || 'null');
     return { message: typeof value?.message === 'string' ? value.message : '', answers: Object.fromEntries(Object.entries(value?.answers || {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) };
-  } catch { return { message: '', answers: {} }; }
+  } catch { return { message: '', answers: {}, failed: true }; }
 }
 function readWorkView(changeId: string) {
   try {
-    const value = JSON.parse(localStorage.getItem(`work-view:${changeId}`) || 'null');
+    const value = JSON.parse(draftStorage.getItem(`work-view:${changeId}`) || 'null');
     return {
       pane: value?.pane === 'output' ? 'output' : 'chat',
       tab: ['documents', 'review', 'results', 'openspec'].includes(value?.tab) ? value.tab as string : 'documents',
@@ -77,7 +79,11 @@ function conversation(events: Entry[], toolName: string) {
   return [...messages.values()].slice(-100);
 }
 
-export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navigationRef }: { change: Change; onClose: () => void; onOpenSource?: (work?: { id: string; executionPath?: string }) => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation> }) {
+type WorkRoomProps = { change: Change; onClose: () => void; onOpenSource?: (work?: { id: string; executionPath?: string }) => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation>; workId?: string };
+export function WorkRoom(props: WorkRoomProps) {
+  return <WorkRoomContent key={JSON.stringify([props.change.id, props.workId ?? null])} {...props} />;
+}
+function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navigationRef, workId }: WorkRoomProps) {
   const { t } = useI18n();
   const states: Record<string, string> = { idle: t('workRoom.idle'), running: t('workRoom.running'), connecting: t('workRoom.connecting'), 'creating-thread': t('workRoom.creating'), 'waiting-input': t('workRoom.waitingInput'), 'waiting-approval': t('workRoom.waitingApproval'), 'recovery-required': t('workRoom.recovery'), failed: t('workRoom.failed'), interrupted: t('workRoom.interrupted') };
   const phases: Record<string, string> = { planning: t('workRoom.planning'), reviewed: t('workRoom.reviewed'), implementation: t('workRoom.implementation'), verification: t('workRoom.verificationPhase'), completed: t('workRoom.completed'), archived: t('workRoom.archived') };
@@ -85,12 +91,14 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
 
   const operations: Record<string, string> = { status: t('workRoom.dependencies'), instructions: t('workRoom.instructions'), schemas: t('workRoom.schemas'), specs: t('workRoom.specs'), spec: t('workRoom.spec'), deltas: t('workRoom.deltas'), diff: t('workRoom.diff'), validate: t('workRoom.validate'), doctor: t('workRoom.doctor'), context: t('workRoom.context') };
   const [room, setRoom] = useState<Room | null>(null), [doc, setDoc] = useState<Doc | null>(null), [draft, setDraft] = useState('');
-  const [initialWorkId] = useState(attentionTarget?.workId);
+  const [initialWorkId] = useState(attentionTarget?.workId ?? workId);
   const questionNodes = useRef(new Map<string, HTMLDivElement>());
   const attentionNotice = useRef<HTMLParagraphElement>(null);
   const focusedTarget = useRef<number | null>(null);
   const [readyTarget, setReadyTarget] = useState<number | null>(null);
   const [initialChat] = useState(() => readChatDraft(change.id));
+  const [draftRestored, setDraftRestored] = useState(!!initialChat.message || Object.keys(initialChat.answers).length > 0);
+  const [draftError, setDraftError] = useState(initialChat.failed ? t('draft.readFailed') : '');
   const [message, setMessage] = useState(initialChat.message), [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const recovered = useRef(new Set<string>());
   const [conflict, setConflict] = useState<Doc | null>(null);
@@ -137,16 +145,24 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
     focusedTarget.current = attentionTarget.token;
   }, [attentionTarget, readyTarget, room, pane]);
   const [answers, setAnswers] = useState<Record<string, string>>(initialChat.answers), [cli, setCli] = useState<{ ok: boolean; stdout: string; stderr: string; json?: unknown } | null>(null);
-  useEffect(() => {
-    try { localStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message, answers })); } catch { /* Keep the current input usable if browser storage is unavailable. */ }
-  }, [change.id, message, answers]);
+  const liveChat = useRef({ message, answers });
+  useLayoutEffect(() => { liveChat.current = { message, answers }; }, [message, answers]);
+  const chatPersistence = useLocalDraft(`work-chat-draft:${change.id}`, { message, answers }, !!message || Object.keys(answers).length > 0, () => setDraftError(t('draft.failed')));
+  const retainChat = (nextMessage: string, nextAnswers: Record<string, string>) => {
+    try {
+      if (nextMessage || Object.keys(nextAnswers).length) draftStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message: nextMessage, answers: nextAnswers }));
+      else draftStorage.removeItem(`work-chat-draft:${change.id}`);
+      chatPersistence.cancel();
+    } catch { setDraftError(t('draft.failed')); }
+  };
   const [operation, setOperation] = useState('status'), [artifact, setArtifact] = useState('proposal');
   const cliStatus = operation === 'status' ? cli?.json as { artifacts?: { id: string; status: string; requires?: string[] }[]; nextSteps?: string[] } | undefined : undefined;
   const [commandId, setCommandId] = useState(''), [command, setCommand] = useState(''), [args, setArgs] = useState('');
   const [commandScope, setCommandScope] = useState<TestScope>('work');
   const answerText = (q: Question, id: string) => answers[`${q.id}:${id}`] ?? (q.answer as Record<string, { answers?: string[] }> | undefined)?.[id]?.answers?.join('\n') ?? '';
-  const dirty = !!doc && draft !== doc.content;
-  const live = useRef({ doc, dirty }); live.current = { doc, dirty };
+  const dirty = !!doc && (draft !== doc.content || !!conflict);
+  const live = useRef({ doc, dirty });
+  useLayoutEffect(() => { live.current = { doc, dirty }; }, [doc, dirty]);
   const documentRequest = useRef(0);
   const activeOperations = useRef(0);
   const refresh = useCallback(async (id: string) => { const result = await api<Room>(`work/${id}`); setRoom(result); setLoadError(''); return result; }, []);
@@ -160,24 +176,29 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
     return () => { cancelled = true; };
   }, [attentionTarget, room?.id, t]);
   useEffect(() => {
-    if (!nativeResume || attentionTarget || !room?.threadId || room.state !== 'recovery-required' || room.errorCode !== 'session-restarted') return;
+    if (!nativeResume || attentionTarget || workId || !room?.threadId || room.state !== 'recovery-required' || room.errorCode !== 'session-restarted') return;
     if (recovered.current.has(room.id)) return;
     recovered.current.add(room.id);
     void api(`work/${room.id}/reconnect`, 'POST', {}).then(() => refresh(room.id)).catch(e => setLoadError(errorMessage(e, t)));
-  }, [attentionTarget, room?.id, room?.state, room?.errorCode, room?.threadId, nativeResume, refresh, t]);
+  }, [attentionTarget, workId, room?.id, room?.state, room?.errorCode, room?.threadId, nativeResume, refresh, t]);
   const openDoc = useCallback(async (id: string, path: string, expectedVersion?: string) => {
     const request = ++documentRequest.current;
     setConflict(null);
     const result = await api<Doc>(`work/${id}/document?path=${encodeURIComponent(path)}`);
     if (request !== documentRequest.current) return false;
     if (expectedVersion && result.version !== expectedVersion) throw new ProductError('review.changed');
-    const saved = localStorage.getItem(`work-draft:${id}:${path}`);
-    if (saved) {
-      try { const value = JSON.parse(saved); setDoc({ ...result, version: value.version }); setDraft(value.content); return true; } catch { /* restore server copy if draft is invalid */ }
-    }
+    try {
+      const value = readDocumentDraft(workDraftKey(id, path)) ?? readDocumentDraft(`work-draft:${id}:${path}`);
+      if (value) {
+        setDoc({ ...result, version: value.version, content: value.baseContent ?? (result.version !== value.version ? '' : result.content) });
+        setDraft(value.content); setDraftRestored(true);
+        if (result.version !== value.version) setConflict(result);
+        return true;
+      }
+    } catch { setDraftError(t('draft.readFailed')); }
     setDoc(result); setDraft(result.content);
     return true;
-  }, []);
+  }, [t]);
   useEffect(() => {
     if (!room?.id || typeof EventSource === 'undefined') return;
     let cursor = room.events.at(-1)?.seq || 0;
@@ -238,22 +259,24 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
   }, [change.id, change.name, change.sourceId, initialWorkId, refresh, openDoc, initialView.path, t]);
   useEffect(() => {
     if (!doc) return;
-    try { localStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc.path })); } catch { /* Keep this view open; explicit notification navigation checks persistence. */ }
+    try { draftStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc.path })); } catch { /* Keep this view open; explicit notification navigation checks persistence. */ }
   }, [change.id, doc, pane, tab]);
-  useEffect(() => {
-    if (!room || !doc) return;
-    const key = `work-draft:${room.id}:${doc.path}`;
-    try { if (dirty) localStorage.setItem(key, JSON.stringify({ content: draft, version: doc.version })); else localStorage.removeItem(key); } catch { /* Preserve the live editor; navigation must not discard it. */ }
-  }, [room, doc, draft, dirty]);
+  const documentPersistence = useLocalDraft(room && doc ? workDraftKey(room.id, doc.path) : null, { content: draft, version: doc?.version, baseContent: doc?.content }, dirty, () => setDraftError(t('draft.failed')));
+  const discardDocumentDraft = () => {
+    if (!room || !doc) return true;
+    try { draftStorage.removeItem(workDraftKey(room.id, doc.path)); draftStorage.removeItem(`work-draft:${room.id}:${doc.path}`); documentPersistence.cancel(); return true; }
+    catch { setDraftError(t('draft.failed')); return false; }
+  };
   useImperativeHandle(navigationRef, () => ({ preserveDrafts() {
     if (activeOperations.current > 0) return false;
     try {
-      localStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message, answers }));
-      localStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc?.path || null }));
-      if (room && doc && dirty) localStorage.setItem(`work-draft:${room.id}:${doc.path}`, JSON.stringify({ content: draft, version: doc.version }));
+      if (message || Object.keys(answers).length) draftStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message, answers }));
+      draftStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc?.path || null }));
+      if (!chatPersistence.flush() || !documentPersistence.flush()) return false;
+      if (room && doc && dirty) draftStorage.setItem(workDraftKey(room.id, doc.path), JSON.stringify({ content: draft, version: doc.version, baseContent: doc.content }));
       return true;
     } catch { setError(t('attention.navigationError')); return false; }
-  } }), [change.id, message, answers, room, doc, dirty, draft, pane, tab, t]);
+  } }), [change.id, message, answers, room, doc, dirty, draft, pane, tab, t, chatPersistence, documentPersistence]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => { if (live.current.dirty) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard);
@@ -274,9 +297,10 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
   };
   const save = async (version = doc?.version) => {
     if (!room || !doc) return false;
-    return run(async () => { const result = await api<Doc>(`work/${room.id}/document`, 'PUT', { path: doc.path, version, content: draft }); setConflict(null); setDoc(result); setDraft(result.content); setReviewRevision(value => value + 1); localStorage.removeItem(`work-draft:${room.id}:${doc.path}`); });
+    return run(async () => { const result = await api<Doc>(`work/${room.id}/document`, 'PUT', { path: doc.path, version, content: draft }); documentPersistence.cancel(); setConflict(null); setDoc(result); setDraft(result.content); setReviewRevision(value => value + 1); try { draftStorage.removeItem(workDraftKey(room.id, doc.path)); draftStorage.removeItem(`work-draft:${room.id}:${doc.path}`); } catch { setDraftError(t('draft.failed')); } });
   };
   const navigate = async (path: string) => {
+    if ((path === ':close' || path === ':source') && (!chatPersistence.flush() || !documentPersistence.flush())) return;
     if (path === ':close') { onClose(); return; }
     if (path === ':source') { onOpenSource?.(room ? { id: room.id, executionPath: room.executionPath } : undefined); return; }
     if (!room) return;
@@ -307,7 +331,18 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
     if (busy || !room || !message.trim()) return;
     if (dirty) { setError(t('workRoom.saveFirst')); return; }
     const text = doc ? `대상 문서: ${doc.path} (버전 ${doc.version})\n${message}` : message;
-    void run(async () => { await api(`work/${room.id}/message`, 'POST', { text }); setMessage(''); });
+    void run(async () => { await api(`work/${room.id}/message`, 'POST', { text }); const current = liveChat.current; const remainingMessage = current.message === message ? '' : current.message; retainChat(remainingMessage, current.answers); setMessage(remainingMessage); });
+  };
+  const answerQuestion = (question: Question) => {
+    if (!room || busy) return;
+    const submitted = Object.fromEntries((question.params.questions || []).map(input => [input.id, { answers: [answerText(question, input.id)] }]));
+    const keys = new Set((question.params.questions || []).map(input => `${question.id}:${input.id}`));
+    void run(async () => {
+      await api(`work/${room.id}/answer`, 'POST', { questionId: question.id, recover: question.status === 'expired', answers: submitted });
+      const current = liveChat.current;
+      const remaining = Object.fromEntries(Object.entries(current.answers).filter(([key, value]) => !keys.has(key) || value !== answers[key]));
+      retainChat(current.message, remaining); setAnswers(remaining);
+    });
   };
   const inspect = () => { if (room) void run(async () => setCli(await api(`work/${room.id}/openspec?operation=${operation}&artifact=${artifact}`))); };
   const testsBlocked = busy || !room || !['implementation', 'verification'].includes(room.phase) || !['idle', 'failed', 'interrupted'].includes(room.state) || !room.reviewedVersion || !!room.reviewRequired || dirty;
@@ -317,6 +352,8 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
     void run(() => api(`work/${room.id}/verify-all`, 'POST', { scope }));
   };
   return <section className="work-room" aria-label={t('workRoom.space')}>
+    {draftError && <p role="alert">{draftError}</p>}
+    {draftRestored && <p role="status">{t('draft.restored')}</p>}
     <header className="work-header">
       <AttentionBell />
       <button onClick={() => setDetailOpen(true)}>{t('review.documents')}</button>
@@ -336,7 +373,7 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
     {room?.reviewRequired && <div className="work-notice">{t('workRoom.reviewAgain')}</div>}
     {pending && <div className="work-notice">{t('workRoom.unsaved')}
       <button onClick={() => void save().then(ok => { if (ok) { const target = pending; setPending(null); void navigate(target); } })}>{t('workRoom.saveMove')}</button>
-      <button onClick={() => { if (room && doc) localStorage.removeItem(`work-draft:${room.id}:${doc.path}`); const target = pending; setPending(null); void navigate(target); }}>{t('workRoom.discardMove')}</button>
+      <button onClick={() => { if (!discardDocumentDraft()) return; const target = pending; setPending(null); void navigate(target); }}>{t('workRoom.discardMove')}</button>
       <button onClick={() => { setPending(null); reviewDestination.current = null; }}>{t('common.cancel')}</button></div>}
     <nav className="work-actions" aria-label={t('workRoom.actions')}>
       {room && !['completed','archived'].includes(room.phase) && <DeleteBoardItem id={change.id} kind="change" state={room.state} onDeleted={onClose} />}
@@ -368,7 +405,7 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
           </label>)}</> : <ApprovalRequest method={q.method} params={q.params} />}
           </div>
           <div className="work-question-actions">
-            {q.kind === 'input' ? <button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/answer`, 'POST', { questionId: q.id, recover: q.status === 'expired', answers: Object.fromEntries((q.params.questions || []).map(question => [question.id, { answers: [answerText(q, question.id)] }])) }))}>{q.status === 'expired' ? t('workRoom.restoreAnswer') : t('workRoom.answer')}</button> : <><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'accept' }))}>{t('workRoom.approve')}</button><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'decline' }))}>{t('workRoom.decline')}</button></>}
+            {q.kind === 'input' ? <button disabled={busy} onClick={() => answerQuestion(q)}>{q.status === 'expired' ? t('workRoom.restoreAnswer') : t('workRoom.answer')}</button> : <><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'accept' }))}>{t('workRoom.approve')}</button><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'decline' }))}>{t('workRoom.decline')}</button></>}
           </div>
         </div>)}
         {!!room?.questions.some(q => q.status === 'answered') && <details className="work-event"><summary>{t('workRoom.answerHistory')}</summary>{room.questions.filter(q => q.status === 'answered').map(q => <div key={q.id}><p>{q.params.questions?.map(x => x.question).join(' · ') || t('workRoom.executionApproval')}</p><>{q.kind === 'input' && q.params.questions?.length ? <QuestionAnswers questions={q.params.questions} answers={q.answer} /> : <JsonBlock value={q.answer} />}</><p>{q.reflection === 'applied' ? t('workRoom.reflected') : q.reflection === 'pending' ? t('workRoom.reflectionPending') : t('workRoom.reflectionCheck')}</p>{q.documents?.map(d => <p key={d.path}>{d.path} · {d.version.slice(0, 12)}</p>)}</div>)}</details>}
@@ -384,7 +421,7 @@ export function WorkRoom({ change, onClose, onOpenSource, attentionTarget, navig
       <section className="work-output"><nav className="work-tabs">{[['documents', t('workRoom.documents')], ['review', t('review.title')], ['results', t('workRoom.results')], ['openspec', 'OpenSpec']].map(([value, label]) => <button aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>
         {tab === 'review' && <ReviewItems {...review} busy={busy} onSelect={item => { if (busy) return; reviewDestination.current = item; void move(item.path); }} />}
         {tab === 'documents' && <><div className="work-document-bar"><select disabled={busy} aria-label={t('workRoom.selectDoc')} value={doc?.path || ''} onChange={event => void move(event.target.value)}>{!room?.documents.length && <option>{t('workRoom.createDoc')}</option>}{room?.documents.map(path => <option key={path}>{path}</option>)}</select><button disabled={!dirty || busy} onClick={() => void save()}>{t('workRoom.saveDoc')}</button><button onClick={() => setPreview(!preview)}>{preview ? t('common.edit') : t('workRoom.preview')}</button><span>{dirty ? t('workRoom.unsavedDraft') : t('workRoom.saved')}</span></div>
-          {conflict && <div className="work-notice" role="region" aria-label={t('workRoom.conflict')}><p>{t('workRoom.conflictHint')}</p><h3>{t('workRoom.latest')}</h3><pre>{conflict.content}</pre><button disabled={busy} onClick={() => void save(conflict.version)}>{t('workRoom.reapply')}</button><button disabled={busy} onClick={() => { setDoc(conflict); setDraft(conflict.content); setConflict(null); setError(''); }}>{t('workRoom.useLatest')}</button></div>}
+          {conflict && <div className="work-notice" role="region" aria-label={t('workRoom.conflict')}><p>{t('workRoom.conflictHint')}</p><h3>{t('workRoom.latest')}</h3><pre>{conflict.content}</pre><button disabled={busy} onClick={() => void save(conflict.version)}>{t('workRoom.reapply')}</button><button disabled={busy} onClick={() => { if (!discardDocumentDraft()) return; setDoc(conflict); setDraft(conflict.content); setConflict(null); setError(''); }}>{t('workRoom.useLatest')}</button></div>}
           {doc && (preview ? <article className="work-preview"><MarkdownDocument text={draft} /></article> : <textarea ref={editor} className="work-editor" aria-label={t('workRoom.content')} disabled={busy || room?.phase === 'archived' || room?.phase === 'completed'} value={draft} onChange={event => setDraft(event.target.value)} />)}
           {!room?.documents.length && <p className="work-hint">{t('workRoom.createHint')}</p>}
         </>}

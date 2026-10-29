@@ -1,7 +1,8 @@
 const { EventEmitter } = require('node:events');
 class UpdateManager extends EventEmitter {
-  constructor({ updater, enabled, prepare, stop, cancel, version = '' }) {
-    super(); Object.assign(this, { updater, enabled, prepare, stop, cancel });
+  constructor({ updater, enabled, prepare, stop, cancel, assertInstallAllowed = () => {}, version = '' }) {
+    super(); Object.assign(this, { updater, enabled, prepare, stop, cancel, assertInstallAllowed });
+    this.installHandoff = false;
     this.value = { state: enabled ? 'idle' : 'disabled', currentVersion: version, targetVersion: '', percent: 0, message: enabled ? '' : '개발·일반 검사 빌드에서는 자동 업데이트를 사용하지 않습니다. 개인용 업데이트 배포 파일을 설치해 주세요.' };
     this.downloaded = false; this.busy = false; this.checking = false;
     updater.autoDownload = true; updater.autoInstallOnAppQuit = false; updater.allowDowngrade = false; updater.allowPrerelease = false;
@@ -34,8 +35,8 @@ class UpdateManager extends EventEmitter {
       try { lease = await this.prepare(); }
       catch (e) { this.set('waiting', { message: e.message || '업무가 유휴 상태가 되면 다시 요청해 주세요.' }); return this.snapshot(); }
       this.set('installing');
-      try { await this.updater.prepareInstall?.(); await this.stop(lease); await this.updater.quitAndInstall(false, true); }
-      catch { await this.cancel(lease).catch(() => {}); this.set('error', { message: '정상 종료·백업·설치를 완료하지 못했습니다. 데이터는 보존됩니다. 앱을 다시 열어 복구 상태를 확인해 주세요.' }); }
+      try { await this.updater.prepareInstall?.(); await this.stop(lease); this.assertInstallAllowed(); this.installHandoff = true; await this.updater.quitAndInstall(false, true); }
+      catch { this.installHandoff = false; await this.cancel(lease).catch(() => {}); this.set('error', { message: '정상 종료·백업·설치를 완료하지 못했습니다. 데이터는 보존됩니다. 앱을 다시 열어 복구 상태를 확인해 주세요.' }); }
     } finally { this.busy = false; }
     return this.snapshot();
   }

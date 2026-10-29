@@ -49,9 +49,10 @@ export async function createApplication() {
       const mutation = !['GET','HEAD','OPTIONS'].includes(req.method);
       if (mutation && !req.url.startsWith('/api/desktop/')) {
         if (lifecycle.locked) return res.status(503).json({ error: '앱 종료·업데이트 준비 중입니다' });
-        lifecycle.requests++;
+        const match = req.url.match(/^\/api\/work\/([a-zA-Z0-9-]+)(?:\/|$)/);
+        const completeRequest = lifecycle.beginRequest(match ? 'work-mutation' : 'mutation', match?.[1]);
         let finished = false;
-        const done = () => { if (!finished) { finished = true; lifecycle.requests--; } };
+        const done = () => { if (!finished) { finished = true; completeRequest(); } };
         res.once('finish', done); res.once('close', done);
       }
     }

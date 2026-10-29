@@ -13,6 +13,7 @@ import { readiness, ToolConfig } from './config.service';
 import { windowsProcessTreeScript } from './windows-process-tree';
 import { FileResults } from '../work/file-results';
 import { projectCoordinator } from '../projects/coordinator';
+import { desktopHealth } from '../desktop/health';
 
 type Running = { child: ChildProcess; stopped?: string; kill?: Promise<boolean>; done: Promise<void> };
 const diagnostics: Record<string, string> = {
@@ -27,7 +28,11 @@ const diagnostics: Record<string, string> = {
 export class ExternalCliAdapter implements OnModuleDestroy {
   private running = new Map<string, Running>();
   constructor(@Inject(WorkStore) private store: WorkStore, @Inject(LegacyService) private legacy: LegacyService) {
-    for (const work of store.list().filter(w => w.toolId && w.toolId !== 'codex' && ['running', 'connecting', 'recovery-required'].includes(w.state))) {
+    desktopHealth(store).register('external-cli', work => {
+      if (!work.toolId || work.toolId === 'codex') return undefined;
+      return this.running.has(work.id) ? 'active' : ['external-restarted', 'termination-unconfirmed'].includes(String(work.errorCode)) ? 'unknown' : ['completed', 'archived'].includes(work.phase) ? 'inactive' : ['running', 'connecting', 'recovery-required'].includes(work.state) ? 'unknown' : 'inactive';
+    });
+    for (const work of store.list().filter(w => w.toolId && w.toolId !== 'codex' && !['completed', 'archived'].includes(w.phase) && ['running', 'connecting', 'recovery-required'].includes(w.state))) {
       work.state = 'recovery-required'; work.errorCode = 'external-restarted'; work.error = '외부 실행 결과가 불명확합니다. 기록과 프로세스를 확인한 뒤 새 메시지를 요청해 주세요. 자동 재실행하지 않습니다.'; store.save(work);
     }
   }
@@ -38,7 +43,9 @@ export class ExternalCliAdapter implements OnModuleDestroy {
     });
   }
   send(id: string, text: string, tool: ToolConfig, phase?: string) {
+    desktopHealth(this.store).assertExecutionAllowed();
     const work = this.store.get(id)!;
+    if (desktopHealth(this.store).runtime(work) === 'unknown') throw new ConflictException('이전 외부 실행의 종료를 확인할 수 없어 재실행을 보류합니다');
     const cwd = ['implementation', 'verification'].includes(phase || work.phase) ? new FileResults(this.store).path(work) : work.projectPath;
     if (this.running.has(id) || ['running', 'connecting', 'waiting-input', 'waiting-approval'].includes(work.state)) throw new ConflictException('이미 실행 중입니다. 종료 확인 후 요청해 주세요.');
     projectCoordinator(this.store).assertWorkCanStart(work);
@@ -81,7 +88,8 @@ export class ExternalCliAdapter implements OnModuleDestroy {
     work.state = reason === 'interrupted' ? 'interrupted' : reason === 'termination-unconfirmed' ? 'recovery-required' : reason ? 'failed' : 'idle';
     if (reason) { work.errorCode = reason; work.error = diagnostics[reason]; }
     else { delete work.error; delete work.errorCode; }
-    this.store.save(work); this.store.event(id, 'turn/completed', { turn: { id: work.turnId, status: reason === 'interrupted' ? 'interrupted' : reason ? 'failed' : 'completed' }, code, diagnostic: reason }); this.legacy.updates.next();
+    this.store.save(work); if (reason) desktopHealth(this.store).event('execution-failed', id, work.state, reason);
+    this.store.event(id, 'turn/completed', { turn: { id: work.turnId, status: reason === 'interrupted' ? 'interrupted' : reason ? 'failed' : 'completed' }, code, diagnostic: reason }); this.legacy.updates.next();
   }
   private stop(id: string, reason: string) {
     const execution = this.running.get(id); if (!execution) return Promise.resolve(true);

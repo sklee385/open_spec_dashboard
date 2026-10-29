@@ -42,7 +42,7 @@ it('이동 전 문서·메시지·답변 초안을 보존하고 저장 실패에
   fireEvent.change(await screen.findByRole('textbox', { name: '문서 내용' }), { target: { value: '문서 초안' } });
   let preserved = false; act(() => { preserved = navigation.current!.preserveDrafts(); }); expect(preserved).toBe(true);
   expect(JSON.parse(localStorage.getItem('work-chat-draft:demo/feature')!)).toEqual({ message: '메시지 초안', answers: { 'q2:choice': '답변 초안' } });
-  expect(JSON.parse(localStorage.getItem('work-draft:w:proposal.md')!)).toEqual({ content: '문서 초안', version: 'v1' });
+  expect(JSON.parse(localStorage.getItem('work-draft:["w","proposal.md"]')!)).toMatchObject({ content: '문서 초안', version: 'v1' });
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
   act(() => { preserved = navigation.current!.preserveDrafts(); }); expect(preserved).toBe(false);
   expect(screen.getByRole('textbox', { name: 'AI와 문답' })).toHaveValue('메시지 초안');

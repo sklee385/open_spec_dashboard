@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { projectApi as unscopedProjectApi, ProjectApiError, projectQuery } from '../lib/projectApi';
 import type { GitStatus, GitOperation, GitDetail, GitDiff, OperationKind, ProjectEntry, ProjectFile, ProjectPage, GitCommit, GitReconciliation } from '../types/project';
+import { useI18n } from '../i18n/context';
+import { projectDraftKey, readDocumentDraft, useLocalDraft } from './useLocalDraft';
+import { draftStorage } from '../lib/draftStorage';
 
 function persistOperation(resourceKey: string, value: GitOperation) {
   localStorage.setItem(`project-operation:${resourceKey}`, value.id);
@@ -8,7 +11,10 @@ function persistOperation(resourceKey: string, value: GitOperation) {
 }
 
 export function useProjectWorkspace(sourceId: string | null, active = true, workId?: string | null) {
+  const { t } = useI18n();
+  const [draftNotice, setDraftNotice] = useState(''), [draftError, setDraftError] = useState('');
   const resourceKey = workId ? JSON.stringify([sourceId, workId]) : sourceId ?? '';
+  const viewKey = `project-view:${JSON.stringify([sourceId, workId ?? null])}`;
   const projectApi = useCallback(<T>(id: string, endpoint: string, body?: unknown, method = 'POST') => unscopedProjectApi<T>(id, endpoint, body, method, workId), [workId]);
   const generation = useRef(0), source = useRef(sourceId), busyRef = useRef(false), fileRequest = useRef(0), treeRequest = useRef(0), statusInFlight = useRef<string | null>(null);
   const treeRequests = useRef(new Map<string, number>());
@@ -21,7 +27,8 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
   const [history, setHistory] = useState<GitCommit[]>([]), [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [detail, setDetail] = useState<GitDetail | null>(null), [diff, setDiff] = useState<GitDiff | null>(null), [historical, setHistorical] = useState<{ path: string; content: string | null; base?: string; reason?: string } | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [operation, setOperation] = useState<GitOperation | null>(null);
-  const dirty = file !== null && draft !== (file.content ?? '').replace(/\r\n?/g, '\n');
+  const dirty = file !== null && (draft !== (file.content ?? '').replace(/\r\n?/g, '\n') || !!latest);
+  const persistence = useLocalDraft(sourceId && file ? projectDraftKey(sourceId, workId, file.path) : null, { content: draft, version: file?.version, baseContent: file?.content }, dirty, () => setDraftError(t('draft.failed')));
   const fileView = useRef({ file, dirty, sourceId });
   useEffect(() => { fileView.current = { file, dirty, sourceId }; }, [file, dirty, sourceId]);
   const valid = useCallback((id: string, gen: number) => source.current === id && generation.current === gen, []);
@@ -75,7 +82,8 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     generation.current++; fileRequest.current++; setEntries([]); setTreePages({}); setDirectory(''); setFile(null); setDraft(''); setEditing(false); setLatest(null); setStatus(null); setError(''); setDetail(null); setDiff(null); setHistorical(null); setHistory([]); setBranches([]); setOperation(null); busyRef.current = false; setBusy(false);
     if (!sourceId) return;
     const gen = generation.current;
-    const saved = localStorage.getItem(`project-operation:${resourceKey}`);
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(`project-operation:${resourceKey}`); } catch { setDraftError(t('draft.readFailed')); }
     try { const record = JSON.parse(localStorage.getItem(`project-operation-record:${resourceKey}`) ?? 'null') as GitOperation | null; if (record?.id && record.status) setOperation(record); } catch { /* A malformed local cache cannot cause a mutation. */ }
     if (saved) void projectApi<GitOperation>(sourceId, `/git/operations/${encodeURIComponent(saved)}`).then(value => { if (valid(sourceId, gen) && value.id && value.status) { setOperation(value); persistOperation(resourceKey, value); } }).catch(() => {});
     void loadHistory();
@@ -99,8 +107,25 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
   }, [active, sourceId, operation?.id, operation?.status, refresh, loadTree, loadHistory, openDetail, valid, projectApi, resourceKey]);
   const openFile = async (path: string) => {
     if (!sourceId) return; const gen = generation.current, request = ++fileRequest.current; setError('');
-    try { const value = await projectApi<ProjectFile>(sourceId, `/file${projectQuery({ path })}`); if (valid(sourceId, gen) && request === fileRequest.current) { setFile(value); setDraft((value.content ?? '').replace(/\r\n?/g, '\n')); setEditing(false); setLatest(null); setDiff(null); setHistorical(null); } } catch (err) { if (valid(sourceId, gen)) report(err); }
+    try { const value = await projectApi<ProjectFile>(sourceId, `/file${projectQuery({ path })}`); if (valid(sourceId, gen) && request === fileRequest.current) {
+      let restored: ReturnType<typeof readDocumentDraft> = null;
+      try { restored = readDocumentDraft(projectDraftKey(sourceId, workId, path)); } catch { setDraftError(t('draft.readFailed')); }
+      setFile(restored ? { ...value, version: restored.version, content: restored.baseContent ?? (restored.version === value.version ? value.content : '') } : value);
+      setDraft(restored ? restored.content : (value.content ?? '').replace(/\r\n?/g, '\n')); setEditing(!!restored);
+      setLatest(restored && restored.version !== value.version ? value : null);
+      setDraftNotice(restored ? t('draft.restored') : ''); setDiff(null); setHistorical(null);
+      try { draftStorage.setItem(viewKey, JSON.stringify({ path })); } catch { setDraftError(t('draft.failed')); }
+    } } catch (err) { if (valid(sourceId, gen)) report(err); }
   };
+  useEffect(() => {
+    if (!sourceId) return;
+    try {
+      const saved = JSON.parse(draftStorage.getItem(viewKey) ?? 'null');
+      if (typeof saved?.path === 'string' && saved.path) void openFile(saved.path);
+    } catch { setDraftError(t('draft.readFailed')); }
+    // The resource identity alone owns restoration; openFile rejects stale requests.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceId, workId, viewKey]);
   const save = async () => {
     if (!sourceId || !file || busyRef.current) return false;
     const gen = generation.current; busyRef.current = true; setBusy(true); setError('');
@@ -108,11 +133,11 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     const separators = file.content?.match(/\r\n|\r|\n/g) ?? [];
     let line = 0;
     const content = newline === 'crlf' || file.newline === '\r\n' ? draft.replace(/\r?\n/g, '\r\n') : newline === 'mixed' ? draft.replace(/\n/g, () => separators[line++] ?? '\n') : draft;
-    try { const result = await projectApi<ProjectFile>(sourceId, '/file', { path: file.path, content, version: file.version }, 'PUT'); if (!valid(sourceId, gen)) return false; setFile({ ...file, ...result, content }); setLatest(null); void refresh(); void loadTree(); return true; }
+    try { const result = await projectApi<ProjectFile>(sourceId, '/file', { path: file.path, content, version: file.version }, 'PUT'); if (!valid(sourceId, gen)) return false; persistence.cancel(); try { draftStorage.removeItem(projectDraftKey(sourceId, workId, file.path)); } catch { setDraftError(t('draft.failed')); } setDraftNotice(''); setFile({ ...file, ...result, content }); setLatest(null); void refresh(); void loadTree(); return true; }
     catch (err) { if (valid(sourceId, gen)) { report(err); if (err instanceof ProjectApiError && err.status === 409) { const current = err.data.latest ?? err.data.current; if (current && typeof current === 'object') setLatest(current as ProjectFile); } } return false; }
     finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } }
   };
-  const discard = () => { setDraft((file?.content ?? '').replace(/\r\n?/g, '\n')); setEditing(false); setLatest(null); };
+  const discard = () => { if (sourceId && file) { try { draftStorage.removeItem(projectDraftKey(sourceId, workId, file.path)); } catch { setDraftError(t('draft.failed')); return false; } } persistence.cancel(); setDraftNotice(''); if (latest) setFile(latest); setDraft((latest?.content ?? file?.content ?? '').replace(/\r\n?/g, '\n')); setEditing(false); setLatest(null); return true; };
   const mutate = async (endpoint: string, body: unknown, method = 'POST') => {
     if (!sourceId || busyRef.current) return false; const gen = generation.current; busyRef.current = true; setBusy(true); setError('');
     try { await projectApi(sourceId, endpoint, body, method); if (!valid(sourceId, gen)) return false; if (endpoint === '/entries/move') { setTreePages({}); void loadTree(''); } else void loadTree(); void refresh(); return true; } catch (err) { if (valid(sourceId, gen)) report(err); return false; } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } }
@@ -136,5 +161,5 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     } catch (err) { if (valid(sourceId, gen)) report(err); return false; }
   };
   const reconcile = async () => { if (!sourceId || !operation || busyRef.current) return; const gen = generation.current; busyRef.current = true; setBusy(true); try { const response = await projectApi<GitReconciliation>(sourceId, `/git/operations/${encodeURIComponent(operation.id)}/reconcile`, { confirmed: true }); if (valid(sourceId, gen)) { const value = { ...response.operation, evidence: response.evidence }; setOperation(value); setStatus(response.status); persistOperation(resourceKey, value); } } catch (err) { if (valid(sourceId, gen)) report(err); } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } } };
-  return { entries, treePages, directory, cursor, query, setQuery, hidden, setHidden, ignoredUnavailable, loadTree, file, draft, setDraft, editing, setEditing, latest, dirty, error, setError, busy, status, branches, history, historyCursor, loadHistory, detail, openDetail, diff, historical, showDiff, showHistorical, operation, run, refresh, openFile, save, discard, mutate, clearFile, reconcile, moveEntry };
+  return { entries, treePages, directory, cursor, query, setQuery, hidden, setHidden, ignoredUnavailable, loadTree, file, draft, setDraft, editing, setEditing, latest, dirty, error, draftNotice, draftError, setError, busy, status, branches, history, historyCursor, loadHistory, detail, openDetail, diff, historical, showDiff, showHistorical, operation, run, refresh, openFile, save, discard, mutate, clearFile, reconcile, moveEntry };
 }

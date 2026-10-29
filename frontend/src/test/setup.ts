@@ -1,5 +1,8 @@
 import '@testing-library/jest-dom'
-import { vi } from 'vitest'
+import { beforeEach, vi } from 'vitest'
+
+// Unmount flushes recovery drafts after test-local teardown; each test starts fresh.
+beforeEach(() => { localStorage.clear(); })
 
 // Mock window.matchMedia for components that use useMediaQuery
 Object.defineProperty(window, 'matchMedia', {

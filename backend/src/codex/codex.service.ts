@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { existsSync } from 'node:fs';
 import { Work, WorkStore } from '../work/store';
 import { LegacyService } from '../legacy/legacy.service';
-import { CodexClient } from './client';
+import { CodexClient, CodexRpcRejectedError } from './client';
 import { randomUUID } from 'node:crypto';
 import { Subscription } from 'rxjs';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import { edgeBrowserTool, edgeToolResponse } from '../browser/edge-tools';
 import { BrowserService } from '../browser/browser.service';
 import { backgroundBrowserTool, backgroundToolResponse } from '../browser/browser-tools';
 import { localRuntimeDirectory } from '../runtime';
+import { desktopHealth } from '../desktop/health';
 const browserTools = [askUserTool, edgeBrowserTool, backgroundBrowserTool];
 
 @Injectable()
@@ -31,9 +32,23 @@ export class CodexService implements OnModuleDestroy {
   private draining = new Set<string>();
   private queueSubscription: Subscription;
   private closing = false;
+  private active = new Map<string, { token: symbol; generation: string; turnId?: string; priorTurnId?: string; notifications?: any[]; state: 'active' | 'unknown' }>();
+  private stopped = new Set<string>();
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Inject(LegacyService) readonly legacy: LegacyService, @Inject(EdgeService) readonly edge: EdgeService, @Inject(BrowserService) readonly browser: BrowserService) {
+    desktopHealth(store).registerInterrupt('codex', work => {
+      const run = this.active.get(work.id);
+      return !!run && run.generation === this.client.generation && !!work.threadId && !!run.turnId && !this.locks.has(work.id);
+    });
+    desktopHealth(store).register('codex', work => {
+      if (work.toolId && work.toolId !== 'codex') return undefined;
+      if (this.locks.has(work.id)) return 'active';
+      const run = this.active.get(work.id); if (run) return run.state;
+      if (this.stopped.has(work.id)) return 'inactive';
+      if (['completed', 'archived'].includes(work.phase)) return 'inactive';
+      return ['running', 'connecting', 'creating-thread', 'waiting-input', 'waiting-approval', 'recovery-required'].includes(work.state) ? 'unknown' : 'inactive';
+    });
     this.queueSubscription = store.updates.subscribe(event => setImmediate(() => { void this.drain(event.workId); }));
-    for (const work of this.store.list().filter(work => !work.toolId || work.toolId === 'codex')) {
+    for (const work of this.store.list().filter(work => (!work.toolId || work.toolId === 'codex') && !['completed', 'archived'].includes(work.phase))) {
       if (['running', 'connecting', 'creating-thread', 'waiting-input', 'waiting-approval'].includes(work.state)) {
         work.state = 'recovery-required'; work.error = '세션 서버가 재시작되었습니다. 같은 대화로 복구할 수 있습니다.'; work.errorCode = 'session-restarted'; this.store.save(work);
       }
@@ -52,10 +67,15 @@ export class CodexService implements OnModuleDestroy {
     });
     this.client.on('disconnected', message => {
       this.loaded.clear();
-      for (const work of this.store.list().filter(w => w.threadId || w.state === 'creating-thread')) {
+      for (const work of this.store.list().filter(w => (!w.toolId || w.toolId === 'codex') && (this.active.has(w.id) || this.locks.has(w.id)))) {
+        const run = this.active.get(work.id);
+        if (run) { run.state = 'unknown'; run.generation = `disconnected:${run.generation}`; }
+        this.stopped.delete(work.id);
+        if (['completed', 'archived'].includes(work.phase)) continue;
         this.edge.bridge.disconnect(work.id);
         void this.browser.cancel(work.id);
-        work.state = 'recovery-required'; work.error = message; this.store.save(work);
+        work.state = 'recovery-required'; work.error = message; work.errorCode = 'codex-disconnected'; this.store.save(work);
+        desktopHealth(store).event('codex-disconnected', work.id, 'recovery-required');
         for (const q of this.store.records(work.id, 'question').filter(x => x.status === 'pending')) this.store.record(q.id, work.id, 'question', { ...q, status: 'expired' });
       }
       this.legacy.updates.next();
@@ -66,20 +86,24 @@ export class CodexService implements OnModuleDestroy {
     return { connected: true, authenticated: !!result.account, accountType: result.account?.type ?? null };
   }
   async send(id: string, text: string, phase?: string) {
+    desktopHealth(this.store).assertExecutionAllowed();
     if (typeof text !== 'string' || !text.trim() || text.length > 100000) throw new BadRequestException('메시지를 입력해 주세요');
     const work = this.store.get(id);
     if (!work) throw new BadRequestException('업무가 없습니다');
     if (['implementation', 'verification'].includes(phase || work.phase)) this.requireReviewedPlan(work);
     if (['archived', 'completed'].includes(work.phase)) throw new ConflictException('완료된 업무는 수정 단계로 다시 열어 주세요');
+    if (desktopHealth(this.store).runtime(work) === 'unknown') throw new ConflictException('이전 실행 결과가 불명확합니다. 같은 대화 재연결로 확인한 뒤 직접 요청해 주세요.');
     if (this.locks.has(id) || ['running', 'waiting-input', 'waiting-approval', 'connecting', 'creating-thread'].includes(work.state)) {
       const queuedId = randomUUID(); this.store.record(queuedId, id, 'queued-message', { text, phase, status: 'queued' });
       this.store.event(id, 'message-queued', { id: queuedId, text }); return { ...work, queued: true };
     }
     if (work.state === 'recovery-required' && !work.threadId) throw new ConflictException('대화 생성 결과가 불명확합니다. 새 대화를 자동 생성하지 않습니다');
     projectCoordinator(this.store).assertWorkCanStart(work);
-    this.locks.add(id); work.state = 'connecting'; this.store.save(work);
+    const token = Symbol(id);
+    this.stopped.delete(id); this.locks.add(id); work.state = 'connecting'; this.store.save(work);
     try {
       await this.client.ready();
+      const generation = this.client.generation;
       if (!work.threadId) {
         work.state = 'creating-thread'; this.store.save(work);
         const result = await this.client.rpc('thread/start', { cwd: this.executionCwd(work, phase), ephemeral: false, sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', dynamicTools: browserTools,
@@ -89,10 +113,11 @@ export class CodexService implements OnModuleDestroy {
         await this.resume(work);
         this.loaded.add(work.threadId);
       }
+      if (generation !== this.client.generation) throw new Error('Codex 연결 세대가 변경되어 실행 결과 확인이 필요합니다');
       if (phase) work.phase = phase;
       if (['implementation', 'verification'].includes(work.phase)) this.requireReviewedPlan(this.store.get(id)!);
       work.documentVersions = this.documentVersions(work);
-      work.state = 'running'; delete work.error; delete work.errorCode; this.store.save(work);
+      this.active.set(id, { token, generation, priorTurnId: work.turnId, state: 'active' }); work.state = 'running'; delete work.error; delete work.errorCode; this.store.save(work);
       this.store.event(id, 'user-message', { text });
       const cwd = this.executionCwd(work);
       const changeRoot = join(work.executionPath ? new FileResults(this.store).path(work) : work.projectPath, 'openspec', 'changes', work.changeName);
@@ -102,8 +127,16 @@ export class CodexService implements OnModuleDestroy {
       const runtime = existsSync(join(cwd, '.tools/node-runtime/node.exe')) ? join(cwd, '.tools/node-runtime/node.exe') : appRuntime ? join(appRuntime, 'node.exe') : process.execPath;
       const browserInstruction = work.browserScenario ? `\n등록한 브라우저 시나리오가 있다. 새 도구가 없는 기존 대화의 PowerShell 실행 명령: ${existsSync(join(cwd, 'scripts/node.ps1')) ? './scripts/node.ps1 .tools/browser-verification/cli.cjs' : `& ${quote(runtime)} ${quote(join(cwd, '.tools/browser-verification/cli.cjs'))}`} run (또는 status, cancel). 등록 시나리오만 실행하며 결과의 imagePath로 화면을 확인한다.\n` : '';
       const result = await this.client.rpc('turn/start', { threadId: work.threadId, cwd, sandboxPolicy: { type: 'workspaceWrite', writableRoots, networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }, approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', input: [{ type: 'text', text: `현재 업무: ${work.changeName}\n현재 단계: ${work.phase}\n작업 경로: ${cwd}\nOpenSpec 변경: ${changeRoot}\n\n${reviewInstructions}\n\n${testingInstructions}\n${browserInstruction}\n${text}`, text_elements: [] }] });
+      if (generation !== this.client.generation) throw new Error('Codex 연결 세대가 변경되어 실행 결과 확인이 필요합니다');
+      const run = this.active.get(id);
+      if (run?.token === token) { run.turnId = result.turn.id; for (const notification of run.notifications?.splice(0) || []) this.client.emit('notification', notification); }
       const latest = this.store.get(id)!; latest.turnId = result.turn.id; this.store.save(latest); this.legacy.updates.next(); return latest;
     } catch (error: any) {
+      const run = this.active.get(id);
+      if (run?.token === token) {
+        if (error instanceof CodexRpcRejectedError && error.method === 'turn/start') { this.active.delete(id); this.stopped.add(id); }
+        else run.state = 'unknown';
+      } else if (!run && error instanceof CodexRpcRejectedError) this.stopped.add(id);
       throw this.connectionFailure(id, error);
     } finally { this.locks.delete(id); }
   }
@@ -139,6 +172,7 @@ export class CodexService implements OnModuleDestroy {
     latest.error = conflict ? '다른 Codex 앱에서 이 업무 대화를 사용 중입니다. 해당 앱에서 이 대화를 닫은 뒤 ‘같은 대화 다시 연결’을 눌러 주세요. 문서와 대화 기록은 유지됩니다.' : error.message;
     if (conflict) { latest.errorCode = 'thread-in-use'; if (latest.threadId) this.loaded.delete(latest.threadId); }
     else latest.errorCode = 'connection-failed';
+    desktopHealth(this.store).event('execution-failed', id, 'recovery-required', String(latest.errorCode));
     this.store.save(latest); this.legacy.updates.next();
     return new ConflictException({ message: latest.error, errorCode: latest.errorCode });
   }
@@ -148,12 +182,37 @@ export class CodexService implements OnModuleDestroy {
     const recovery = new WorkRecovery(this.store).assertReconnect(work);
     projectCoordinator(this.store).assertWorkCanStart(work);
     if (this.locks.has(id) || !['recovery-required', 'idle', 'interrupted', 'failed'].includes(work.state)) throw new ConflictException('실행을 마친 뒤 다시 연결해 주세요.');
-    this.locks.add(id); work.state = 'connecting'; this.store.save(work);
+    const uncertain = desktopHealth(this.store).runtime(work) === 'unknown';
+    const previousRun = this.active.get(id);
+    this.stopped.delete(id); this.locks.add(id); work.state = 'connecting'; this.store.save(work);
     try {
       await this.client.ready();
+      const generation = this.client.generation;
       await this.resume(work);
+      if (generation !== this.client.generation) throw new Error('Codex 연결 세대가 변경되어 복구 결과 확인이 필요합니다');
+      // A resumed writer is not proof that an old turn or its children finished.
+      // Only terminal evidence for the same known turn can clear uncertainty.
+      const expectedTurnId = previousRun ? previousRun.turnId : work.turnId;
+      let turns: any[] = [];
+      if (uncertain) {
+        try { const observed = await this.client.rpc('thread/read', { threadId: work.threadId, includeTurns: true }); if (observed.thread?.id === work.threadId && Array.isArray(observed.thread.turns)) turns = observed.thread.turns; }
+        catch { /* Read failure preserves unknown; reconnect itself remains useful. */ }
+      }
+      if (generation !== this.client.generation) throw new Error('Codex 연결 세대가 변경되어 실행 확인이 필요합니다');
+      const observedActiveTurn = turns.find(turn => typeof turn.id === 'string' && turn.status === 'inProgress' && turn.id !== previousRun?.priorTurnId)?.id;
+      const completed = expectedTurnId && !turns.some(turn => turn.status === 'inProgress') && turns.some(turn => turn.id === expectedTurnId && ['completed', 'interrupted', 'failed'].includes(turn.status));
+      const interruptTurnId = observedActiveTurn || expectedTurnId;
+      const remainsUnknown = uncertain && !completed;
+      if (remainsUnknown) {
+        this.active.set(id, { token: previousRun?.token || Symbol(id), generation, turnId: interruptTurnId, priorTurnId: previousRun?.priorTurnId, state: 'unknown' });
+        this.stopped.delete(id);
+      } else { this.active.delete(id); this.stopped.add(id); }
       this.loaded.add(work.threadId!);
-      const latest = this.store.get(id)!; latest.state = 'idle'; delete latest.error; delete latest.errorCode;
+      const latest = this.store.get(id)!;
+      if (remainsUnknown && interruptTurnId) latest.turnId = interruptTurnId;
+      latest.state = remainsUnknown ? 'recovery-required' : 'idle';
+      if (remainsUnknown) { latest.error = '대화 연결은 복원했지만 이전 실행의 종료를 확인하지 못했습니다. 실행 중단 또는 완료 확인이 필요합니다.'; latest.errorCode = 'execution-unconfirmed'; }
+      else { delete latest.error; delete latest.errorCode; }
       this.store.transaction(() => {
         // A reconnect must not dispatch instructions left over from a lost turn.
         for (const queued of this.store.records(id, 'queued-message').filter(message => message.status === 'queued')) {
@@ -173,6 +232,12 @@ export class CodexService implements OnModuleDestroy {
     if (message.generation && message.generation !== this.client.generation) return;
     const params = message.params || {}, work = this.store.list().find(w => w.threadId === params.threadId);
     if (!work) return;
+    const run = this.active.get(work.id);
+    if (message.method === 'turn/completed' && ((run?.state === 'unknown' && !run.turnId) || (!run && work.state === 'recovery-required' && desktopHealth(this.store).runtime(work) === 'unknown'))) return;
+    if (run && (run.generation !== (message.generation || this.client.generation) || (run.turnId && (params.turnId || params.turn?.id) && run.turnId !== (params.turnId || params.turn?.id)))) return;
+    if (run && !run.turnId && run.state === 'active' && (params.turnId || params.turn?.id)) { (run.notifications ||= []).push(message); return; }
+    if (run && !run.turnId && run.priorTurnId && (params.turnId || params.turn?.id) === run.priorTurnId) return;
+    if (!run && ['completed', 'archived'].includes(work.phase)) return;
     if (message.id !== undefined) {
       const dynamic = message.method === 'item/tool/call';
       if (dynamic && params.tool === 'browser_verification') { void this.backgroundCall(work.id, message); return; }
@@ -188,6 +253,7 @@ export class CodexService implements OnModuleDestroy {
       this.store.record(`${this.client.generation}:${message.id}`, work.id, 'question', { requestId: message.id, generation: this.client.generation, kind, method: message.method, params, status: 'pending', createdAt: new Date().toISOString() });
       work.state = kind === 'input' ? 'waiting-input' : 'waiting-approval'; this.store.save(work);
     } else if (message.method === 'turn/completed') {
+      this.active.delete(work.id); this.stopped.add(work.id);
       this.edge.bridge.cancel(work.id);
       void this.browser.cancel(work.id);
       for (const q of this.store.records(work.id, 'question').filter(q => q.status === 'pending' && q.params.turnId === params.turn?.id && q.generation === this.client.generation)) {
@@ -276,7 +342,7 @@ export class CodexService implements OnModuleDestroy {
     if (!work.reviewedVersion || work.reviewedVersion !== version || this.store.records(work.id, 'question').some(unresolvedQuestion)) throw new ConflictException('구현 전 최신 문서 검토와 질문 해결이 필요합니다. 문서 수정은 계획 작성·수정에서 진행해 주세요.');
   }
   private async drain(id: string) {
-    if (this.closing || this.draining.has(id) || this.locks.has(id)) return;
+    if (this.closing || desktopHealth(this.store).safeMode || this.draining.has(id) || this.locks.has(id)) return;
     const work = this.store.get(id); if (!work || (work.toolId && work.toolId !== 'codex') || work.state !== 'idle' || ['completed', 'archived'].includes(work.phase)) return;
     const queued = this.store.records(id, 'queued-message').find(x => x.status === 'queued'); if (!queued) return;
     this.draining.add(id); this.store.record(queued.id, id, 'queued-message', { ...queued, status: 'dispatching' });

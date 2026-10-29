@@ -4,7 +4,73 @@ import { render } from '../test/render';
 import { ProjectWorkspace } from './ProjectWorkspace';
 const workspaces = [{ id: 'work/one', sourceId: 'demo', changeName: 'feature', executionPath: 'D:/isolated', phase: 'implementation' }, { id: 'wrong', sourceId: 'other', changeName: 'other', executionPath: 'D:/other', phase: 'implementation' }];
 
-afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); delete window.desktopDrafts; });
+it('automatically restores the last project draft from profile storage after an origin change', async () => {
+  const data = new Map<string, string>();
+  window.desktopDrafts = { getItem: key => data.get(key) ?? null, setItem: (key, value) => { data.set(key, value); }, removeItem: key => { data.delete(key); } };
+  mockApi(); const first = render(<ProjectWorkspace sourceId="demo" workId="one" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'profile project draft' } });
+  first.unmount(); localStorage.clear();
+  render(<ProjectWorkspace sourceId="demo" workId="one" />);
+  expect(await screen.findByRole('textbox', { name: '파일 내용' })).toHaveValue('profile project draft');
+  expect(data.has('project-view:["demo","one"]')).toBe(true);
+});
+it('keeps project and work draft scopes separate across navigation and restores each input', async () => {
+  mockApi(); const view = render(<ProjectWorkspace sourceId="demo" workId="one" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'one draft' } });
+  view.rerender(<ProjectWorkspace sourceId="demo" workId="two" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  expect(await screen.findByTestId('project-source')).not.toHaveTextContent('one draft');
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'two draft' } });
+  view.rerender(<ProjectWorkspace sourceId="demo" workId="one" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  expect(await screen.findByRole('textbox', { name: '파일 내용' })).toHaveValue('one draft');
+  expect(JSON.parse(localStorage.getItem('project-draft:["demo","two","a.json"]')!)).toMatchObject({ content: 'two draft' });
+});
+it('keeps the editor available and warns when recovery storage cannot be read', async () => {
+  mockApi();
+  const get = Storage.prototype.getItem;
+  const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function(this: Storage, key) { if (key.startsWith('project-draft:')) throw new Error('denied'); return get.call(this, key); });
+  render(<ProjectWorkspace sourceId="demo" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  expect(await screen.findByTestId('project-source')).toHaveTextContent('"z": 1');
+  expect(screen.getByText('로컬 초안을 읽지 못해 원본을 표시합니다. 편집 전에 로컬 저장소를 확인해 주세요.')).toBeInTheDocument();
+  spy.mockRestore();
+});
+it('blocks navigation when explicitly discarding the local recovery record fails', async () => {
+  mockApi(); render(<ProjectWorkspace sourceId="demo" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'keep this draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'b.txt' }));
+  const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('denied'); });
+  fireEvent.click(await screen.findByRole('button', { name: '변경 버리기' }));
+  expect(screen.getByRole('dialog', { name: '이동 전에 변경 내용을 저장할까요?' })).toBeInTheDocument();
+  expect(screen.getByRole('textbox', { name: '파일 내용' })).toHaveValue('keep this draft');
+  remove.mockRestore();
+});
+it('restores a persisted project draft after reload and retains its original CAS version', async () => {
+  const mock = mockApi();
+  const first = render(<ProjectWorkspace sourceId="demo" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'recover this draft' } });
+  fireEvent(window, new Event('beforeunload'));
+  first.unmount();
+  const implementation = mock.getMockImplementation()!;
+  mock.mockImplementation(async (url, init) => url.includes('/file') && init?.method !== 'PUT' ? { ok: true, json: async () => ({ path: 'a.json', content: 'external version', version: 'v2', editable: true }) } : implementation(url, init));
+  render(<ProjectWorkspace sourceId="demo" />);
+  expect(await screen.findByRole('textbox', { name: '파일 내용' })).toHaveValue('recover this draft');
+  expect(screen.getByText('로컬 초안을 복원했습니다. 원본은 저장할 때까지 변경되지 않습니다.')).toBeInTheDocument();
+  expect(screen.getAllByText('external version').length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole('button', { name: '저장' }));
+  await waitFor(() => expect(mock.mock.calls.some(([, init]) => init?.method === 'PUT' && JSON.parse(String(init.body)).version === 'v1')).toBe(true));
+});
 const original = '{ "z": 1, "a": 2 }\r\n';
 function mockApi(failSave = false) {
   const mock = vi.fn(async (url: string, init?: RequestInit): Promise<{ ok: boolean; status?: number; json: () => Promise<unknown> }> => {

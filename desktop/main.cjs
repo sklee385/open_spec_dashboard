@@ -10,11 +10,17 @@ const { allowPersonalUpdates, allowPortableUpdates } = require('./update-policy.
 const { reportPortableReady, reportPortableFailure, isPortableUpdateLaunch, validateConfig } = require('./portable-swap.cjs');
 const { assertRendererClosable } = require('./renderer-close.cjs');
 const { RendererRecovery } = require('./renderer-recovery.cjs');
+const { createDesktopApi } = require('./api-client.cjs');
+const { RecoveryState, HealthJournal } = require('./recovery-state.cjs');
+const { HealthWindow } = require('./health-window.cjs');
+const { DraftStore, registerDraftBridge } = require('./drafts.cjs');
+const { captureOwner, launchEmergency } = require('./emergency.cjs');
 const { ShutdownGuard } = require('./shutdown-guard.cjs');
 const shutdownGuard = new ShutdownGuard();
 const { AttentionRouter, registerAttentionProtocol, trustedAttentionSender } = require('./attention-links.cjs');
 
-let window, updateWindow, tray, child, gateway, manager, origin, rendererRecovery;
+let window, updateWindow, tray, child, gateway, manager, origin, rendererRecovery, healthWindow, ownerRecord;
+let screenState = 'loading', forceRequested = false, emergencyLock = false, startupCount = 0, storageWarning = false, disposeDraftBridge;
 function showDashboard() { if (window && !window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } }
 const attentionRouter = new AttentionRouter({ send: target => window.webContents.send('desktop:attention', target), show: showDashboard });
 attentionRouter.accept(process.argv);
@@ -22,6 +28,8 @@ let startupPhase = 'initialization';
 let smokeServiceDiagnostics = '';
 const smoke = process.argv.includes('--desktop-smoke-test');
 const recoverySmoke = smoke && process.argv.includes('--desktop-recovery-test');
+const forceSmoke = smoke && process.argv.includes('--desktop-force-test');
+const postForceToken = process.argv.find(arg => /^--desktop-post-force-test=[a-f0-9]{32}$/.test(arg))?.split('=')[1];
 let recoverySmokePrompts = 0;
 let recoverySmokeReadyCount = 0, recoverySmokeReadyWaiter;
 function waitForRecoverySmokeReady(after) {
@@ -35,11 +43,16 @@ if (smoke) {
   if (!process.env.DESKTOP_SMOKE_DIRECTORY) throw new Error('격리한 smoke 데이터 경로가 필요합니다');
   mkdirSync(process.env.DESKTOP_SMOKE_DIRECTORY, { recursive: true });
   if (readdirSync(process.env.DESKTOP_SMOKE_DIRECTORY).length) {
+    if (postForceToken) {
+      const fixture = JSON.parse(readFileSync(join(process.env.DESKTOP_SMOKE_DIRECTORY, '.desktop-force-smoke.json'), 'utf8'));
+      if (fixture.token !== postForceToken || fixture.version !== app.getVersion() || fixture.appDirectory !== dirname(process.execPath)) throw Error('격리 강제 종료 재시작 검사 소유권 불일치');
+    } else {
     const matches = process.argv.filter(arg => /^--portable-update-job=[a-f0-9]{32}$/.test(arg));
     if (matches.length !== 1) throw new Error('smoke에는 비어 있는 새 프로필 경로가 필요합니다');
     const jobPath = join(process.env.DESKTOP_SMOKE_DIRECTORY, 'portable-updates', 'jobs', matches[0].split('=')[1], 'config.json');
     const job = validateConfig(JSON.parse(readFileSync(jobPath, 'utf8')), jobPath);
     if (job.smoke !== true || job.userDirectory.toLowerCase() !== process.env.DESKTOP_SMOKE_DIRECTORY.toLowerCase() || job.appDirectory.toLowerCase() !== dirname(process.execPath).toLowerCase() || job.version !== app.getVersion()) throw new Error('격리한 무설치 교체 검사 경로 불일치');
+    }
   }
   app.setPath('userData', process.env.DESKTOP_SMOKE_DIRECTORY);
 }
@@ -54,7 +67,12 @@ const nodeBinary = join(nodeDirectory, process.platform === 'win32' ? 'node.exe'
 const dataDirectory = join(userDirectory, 'data');
 const configPath = join(userDirectory, 'config.json');
 const updateURL = pathToFileURL(join(__dirname, 'updates.html')).href;
-const log = message => { mkdirSync(join(userDirectory, 'logs'), { recursive: true }); appendFileSync(join(userDirectory, 'logs', 'desktop.log'), `${new Date().toISOString()} ${message}\n`); };
+const log = message => { try { mkdirSync(join(userDirectory, 'logs'), { recursive: true }); appendFileSync(join(userDirectory, 'logs', 'desktop.log'), `${new Date().toISOString()} ${message}\n`); } catch { storageWarning = true; } };
+const recoveryState = new RecoveryState(userDirectory);
+const healthJournal = new HealthJournal(userDirectory);
+const recordHealth = (type, details) => { try { healthJournal.record(type, details); } catch { storageWarning = true; } };
+const journal = { record: recordHealth };
+function persistSafeMode(enabled) { recoveryState.safeMode = enabled; try { recoveryState.setSafeMode(enabled); } catch { storageWarning = true; } }
 app.on('child-process-gone', (_event, details) => { if (details.type === 'GPU') log(`GPU process exited: ${details.reason}; hardwareAcceleration=${graphics.hardwareAcceleration}`); });
 app.on('will-quit', () => rendererRecovery?.dispose());
 
@@ -95,26 +113,69 @@ async function recoverStartup(error) {
   const result = await dialog.showMessageBox({ type: 'error', title: 'OpenSpecBoard 시작 실패', message: '앱을 준비하지 못했습니다.', detail: `단계: ${startupPhase}\n업무 데이터는 보존됩니다. 진단 경로: ${join(userDirectory, 'logs')}${canRetry ? '' : '\n기존 서버 종료를 확인하지 못해 재실행을 보류합니다.'}`, buttons: canRetry ? ['다시 시도', '앱 종료'] : ['확인'] });
   if (!canRetry) return;
   if (result.response === 1) { allowQuit = true; app.quit(); return; }
-  window?.destroy(); updateWindow?.destroy(); tray?.destroy(); gateway?.closeAllConnections(); gateway?.close();
+  disposeDraftBridge?.(); healthWindow?.dispose(); window?.destroy(); updateWindow?.destroy(); tray?.destroy(); gateway?.closeAllConnections(); gateway?.close();
   for (const channel of ['status','check','install','attention-ready']) ipcMain.removeHandler(`desktop:${channel}`);
   allowQuit = false; gate.locked = false; gate.pending = 0; smokeServiceDiagnostics = '';
   shutdownGuard.release(recoveryLease);
   await start().catch(recoverStartup);
 }
 
-async function api(path, method = 'GET') {
-  if (!child?.sessionPort || child.exitCode !== null) throw new Error('대화 서버 연결을 확인할 수 없습니다. 설치를 보류합니다.');
-  const response = await fetch(`http://127.0.0.1:${child.sessionPort}/api/desktop/${path}`, { method, headers: { 'x-desktop-token': token }, signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error('실행·연결·질문·승인 또는 처리 중인 요청이 있습니다. 업무 화면에서 처리한 뒤 다시 요청해 주세요.');
-  return response.json();
+const api = createDesktopApi({ child: () => child, token, fetchImpl: fetch });
+async function inspectHealth() {
+  const checkedAt = new Date().toISOString();
+  const results = await Promise.allSettled([api('diagnostics'), (async () => {
+    if (!window || window.isDestroyed()) return 'crashed';
+    let timer;
+    try {
+      const ready = await Promise.race([window.webContents.executeJavaScript("document.readyState === 'complete' && (document.getElementById('root')?.childElementCount || 0) > 0"), new Promise((_, reject) => { timer = setTimeout(() => reject(Error('timeout')), 1500); })]);
+      return ready ? 'ready' : 'loading';
+    } catch { return 'unresponsive'; } finally { clearTimeout(timer); }
+  })()]);
+  const server = results[0].status === 'fulfilled' ? results[0].value : null;
+  const error = results[0].status === 'rejected' ? { code: results[0].reason.code || 'connection', message: results[0].reason.message } : undefined;
+  screenState = results[1].status === 'fulfilled' ? results[1].value : 'unresponsive';
+  recordHealth(error ? 'inspection-failed' : 'inspection-completed', { code: error?.code });
+  if (server) recoveryState.safeMode = server.safeMode;
+  return { checkedAt, server, error, desktop: { version: app.getVersion(), screen: screenState, safeMode: recoveryState.safeMode, ownerVerified: !!ownerRecord, storageWarning }, events: healthJournal.list() };
+}
+function showHealth() { return healthWindow?.show().catch(() => { log('health window unavailable'); }); }
+async function requestForceQuit(normalAttempted = false) {
+  if (forceRequested) return { requested: true };
+  if (manager?.installHandoff) { await dialog.showMessageBox({ type: 'info', message: '업데이트 교체 도구로 종료를 인계했습니다.', detail: '앱 파일 교체가 끝날 때까지 기다려 주세요.' }); return { cancelled: true }; }
+  const selectedOwner = ownerRecord;
+  if (!selectedOwner) { await dialog.showMessageBox({ type: 'error', message: '앱 프로세스 소유권을 확인하지 못했습니다.', detail: '전체 상태 점검을 다시 요청해 주세요. 확인되지 않은 프로세스는 강제 종료하지 않습니다.' }); return { cancelled: true }; }
+  const result = await dialog.showMessageBox({ type: 'warning', title: 'OpenSpecBoard 강제 종료', message: '앱과 이 앱이 실행한 작업을 종료할까요?',
+    detail: '미저장 입력과 진행 중 파일·명령 변경이 중단될 수 있습니다. 강제 종료 뒤에는 안전 모드로 시작하며 작업을 자동 재실행하지 않습니다.',
+    buttons: normalAttempted ? ['강제 종료', '취소'] : ['정상 종료 먼저 시도', '강제 종료', '취소'], defaultId: normalAttempted ? 1 : 0, cancelId: normalAttempted ? 1 : 2,
+  });
+  if (!normalAttempted && result.response === 0) { await requestQuit(); return { requested: true }; }
+  if (result.response !== (normalAttempted ? 0 : 1)) return { cancelled: true };
+  if (manager?.installHandoff) return { cancelled: true };
+  if (selectedOwner !== ownerRecord) throw Error('확인 중 앱 실행 소유자가 변경됐습니다. 다시 점검해 주세요.');
+  forceRequested = true; emergencyLock = true; gate.locked = true; persistSafeMode(true); recordHealth('force-exit-requested');
+  const failed = async () => {
+    if (!forceRequested) return;
+    forceRequested = false; recordHealth('force-exit-unconfirmed');
+    await dialog.showMessageBox({ type: 'error', message: '강제 종료를 확인하지 못했습니다.', detail: '작업 재실행은 보류합니다. 상태 점검을 다시 열거나 앱 폴더의 긴급 종료 도구를 사용해 주세요.' });
+  };
+  try { await launchEmergency({ ownerPath: selectedOwner.ownerPath, confirm: true, expectedNonce: selectedOwner.nonce, onFailure: () => { void failed().catch(() => {}); } }); }
+  catch { await failed(); return { cancelled: true }; }
+  const timer = setTimeout(() => { void failed().catch(() => {}); }, 35000); timer.unref?.();
+  return { requested: true };
 }
 async function prepare() {
-  return shutdownGuard.prepare({ gate, probe: () => assertRendererClosable(window), api });
+  assertNoEmergency();
+  const lease = await shutdownGuard.prepare({ gate, probe: async () => { assertNoEmergency(); await assertRendererClosable(window); assertNoEmergency(); }, api: (...args) => { assertNoEmergency(); return api(...args); } });
+  if (emergencyLock) { await cancel(lease).catch(() => {}); assertNoEmergency(); }
+  return lease;
 }
+function assertNoEmergency() { if (emergencyLock) throw Error('긴급 종료를 요청하여 새 종료·업데이트 설치를 보류합니다.'); }
 async function cancel(lease) {
-  return shutdownGuard.cancel(lease, { gate, api });
+  try { return await shutdownGuard.cancel(lease, { gate, api }); }
+  finally { if (emergencyLock) gate.locked = true; }
 }
 async function stop(lease) {
+  assertNoEmergency();
   shutdownGuard.assertOwner(lease);
   stopping = true;
   try {
@@ -127,11 +188,15 @@ async function stop(lease) {
       child.on('message', message); child.once('exit', exit);
       child.send({ type: 'shutdown' }, error => { if (error) done(error); });
     });
+    assertNoEmergency();
     if (gateway?.listening) { gateway.closeAllConnections(); await new Promise(resolve => gateway.close(resolve)); }
-    allowQuit = true; log('normal shutdown and backup completed');
+    assertNoEmergency();
+    try { recoveryState.stopped(); } catch { storageWarning = true; }
+    recordHealth('app-stopped'); allowQuit = true; log('normal shutdown and backup completed');
   } finally { stopping = false; }
 }
 async function requestQuit() {
+  if (forceRequested) return;
   if (shutdownRequested) return;
   if (child && (child.exitCode !== null || child.signalCode !== null) && !shutdownGuard.active) {
     gateway?.closeAllConnections(); gateway?.close(); allowQuit = true; app.quit(); return;
@@ -139,7 +204,12 @@ async function requestQuit() {
   shutdownRequested = true;
   let lease;
   try { lease = await prepare(); await stop(lease); app.quit(); }
-  catch (error) { await cancel(lease).catch(() => {}); await dialog.showMessageBox({ type: 'info', message: '앱 종료를 보류했습니다.', detail: error.message }); }
+  catch (error) {
+    await cancel(lease).catch(() => {}); recordHealth('quit-blocked', { code: error.code });
+    const result = await dialog.showMessageBox({ type: 'info', message: '앱 종료를 보류했습니다.', detail: error.message, buttons: ['전체 상태 점검', '강제 종료…', '닫기'], defaultId: 0, cancelId: 2 });
+    if (result.response === 0) await showHealth();
+    else if (result.response === 1) await requestForceQuit(true);
+  }
   finally { shutdownRequested = false; }
 }
 function showUpdates() {
@@ -151,6 +221,10 @@ function showUpdates() {
 }
 async function start() {
   startupPhase = 'session';
+  const safeStartup = recoveryState.safeMode || recoveryState.safeStartup || startupCount++ > 0 || process.env.OPENSPEC_SAFE_MODE === '1';
+  recoveryState.safeMode = safeStartup;
+  try { recoveryState.started(); } catch { recoveryState.safeMode = true; storageWarning = true; }
+  recordHealth('app-started', { state: recoveryState.safeMode ? 'safe' : 'normal' });
   rendererRecovery?.dispose();
   rendererRecovery = undefined;
   let portableReported = false;
@@ -165,9 +239,13 @@ async function start() {
   if (smoke) writeFileSync(join(dataDirectory, 'notifications.json'), JSON.stringify({ enabled: false, dashboardUrl: 'http://127.0.0.1:13001/' }));
   child = spawn(nodeBinary, [join(serviceDirectory, 'backend', 'dist', 'desktop-main.js')], {
     cwd: userDirectory, windowsHide: true, stdio: ['ignore', 'ignore', smoke ? 'pipe' : 'ignore', 'ipc'],
-    env: { ...process.env, DESKTOP_TOKEN: token, DATA_DIR: dataDirectory, CONFIG_PATH: configPath, OPENSPEC_NOTIFICATION_TARGET: 'desktop', OPENSPEC_DESKTOP_PROTOCOL_READY: protocolReady ? '1' : '0', OPENSPEC_NODE_DIRECTORY: nodeDirectory, OPENSPEC_BROWSER_DIRECTORY: join(serviceDirectory, 'browser-runtime'), PATH: `${nodeDirectory}${require('node:path').delimiter}${process.env.PATH || ''}` },
+    env: { ...process.env, OPENSPEC_SAFE_MODE: recoveryState.safeMode ? '1' : '0', DESKTOP_TOKEN: token, DATA_DIR: dataDirectory, CONFIG_PATH: configPath, OPENSPEC_NOTIFICATION_TARGET: 'desktop', OPENSPEC_DESKTOP_PROTOCOL_READY: protocolReady ? '1' : '0', OPENSPEC_NODE_DIRECTORY: nodeDirectory, OPENSPEC_BROWSER_DIRECTORY: join(serviceDirectory, 'browser-runtime'), PATH: `${nodeDirectory}${require('node:path').delimiter}${process.env.PATH || ''}` },
   });
   if (smoke) child.stderr.on('data', chunk => { smokeServiceDiagnostics = (smokeServiceDiagnostics + chunk).slice(-4000); });
+    ownerRecord = undefined;
+    const ownerCapture = app.isPackaged && Number.isSafeInteger(process.pid) && Number.isSafeInteger(child.pid)
+      ? captureOwner({ appDirectory: dirname(process.execPath), userDirectory, pid: process.pid, childPid: child.pid }).then(owner => { ownerRecord = owner; }).catch(() => { recordHealth('owner-unavailable'); log('emergency owner could not be verified'); })
+      : Promise.resolve();
   const sessionPort = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('서비스 준비 시간 초과')), 30000);
     child.once('error', () => { clearTimeout(timer); reject(new Error('동봉 Node 실행 실패')); });
@@ -176,8 +254,11 @@ async function start() {
       if (value?.type === 'ready' && Number.isInteger(value.port) && value.port > 0) { clearTimeout(timer); resolve(value.port); }
       if (value?.type === 'startup-error') { clearTimeout(timer); reject(new Error('서비스 초기화 실패')); }
     });
-  });
+  }).finally(() => ownerCapture);
   child.sessionPort = sessionPort;
+  healthWindow = new HealthWindow({ BrowserWindow, ipcMain, directory: __dirname, dialog, inspect: inspectHealth, api, forceQuit: () => requestForceQuit(), journal, onSafeMode: persistSafeMode,
+    openWork: id => { window?.webContents.send('desktop:open-work', id); showDashboard(); },
+  });
   startupPhase = 'gateway';
   const { createGateway } = require(join(serviceDirectory, 'backend', 'dist', 'gateway.js'));
   gateway = createGateway(sessionPort, dataDirectory, { staticDirectory: join(serviceDirectory, 'frontend'), token, gate });
@@ -185,22 +266,26 @@ async function start() {
   origin = `http://127.0.0.1:${gateway.address().port}`;
   startupPhase = 'window';
   window = new BrowserWindow({ width: 1440, height: 960, minWidth: 900, minHeight: 600, title: 'OpenSpecBoard', show: false, webPreferences: { preload: join(__dirname, 'dashboard-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  disposeDraftBridge = registerDraftBridge({ ipcMain, window, origin, store: new DraftStore(userDirectory) });
   if (!smoke || recoverySmoke) {
     const dashboard = window;
     const recoveryDialog = recoverySmoke ? { showMessageBox: async () => { recoverySmokePrompts++; return { response: 0 }; } } : dialog;
     rendererRecovery = new RendererRecovery({ window: dashboard, dialog: recoveryDialog, log,
       reload: () => dashboard.loadURL(attentionRouter.initialURL(origin)),
-      isStopping: () => stopping || allowQuit || shutdownGuard.active || gate.locked,
+      isStopping: () => stopping || allowQuit || forceRequested || shutdownGuard.active || gate.locked,
     });
   }
   ipcMain.handle('desktop:attention-ready', event => {
     if (!trustedAttentionSender(event, window, origin)) throw new Error('허용되지 않은 알림 요청입니다');
     if (recoverySmoke) { recoverySmokeReadyCount++; recoverySmokeReadyWaiter?.(); }
     rendererRecovery?.ready();
+    screenState = 'ready';
     if (!smoke) void confirmPortableReady().catch(() => log('portable readiness report failed; retained update diagnostics'));
     attentionRouter.ready(); return true;
   });
-  window.webContents.on('did-start-loading', () => attentionRouter.reset());
+  window.webContents.on('did-start-loading', () => { screenState = 'loading'; attentionRouter.reset(); });
+  window.webContents.on('render-process-gone', () => { screenState = 'crashed'; recordHealth('screen-error', { code: 'renderer-gone' }); });
+  window.on('unresponsive', () => { screenState = 'unresponsive'; recordHealth('screen-error', { code: 'unresponsive' }); });
   const session = window.webContents.session;
   session.webRequest.onBeforeSendHeaders({ urls: [`${origin}/*`] }, (details, callback) => {
     const allowed = details.webContentsId === window.webContents.id;
@@ -215,7 +300,7 @@ async function start() {
     if (rendererRecovery?.reloading) { event.preventDefault(); log('window-unload allowed by explicit screen recovery'); }
     else log('window-unload-veto; unsaved UI retained');
   });
-  child.on('exit', () => { if (!stopping && !allowQuit) { log('session lost; automatic duplicate restart prevented'); void dialog.showMessageBox({ type: 'error', message: '대화 서버 연결이 끊겼습니다.', detail: '업무 데이터를 보존했습니다. 실행 상태를 확인한 뒤 앱을 다시 실행해 주세요.' }); } });
+  child.on('exit', () => { if (!stopping && !allowQuit && !forceRequested) { recordHealth('server-exited'); log('session lost; automatic duplicate restart prevented'); void showHealth(); } });
 
   startupPhase = 'updater';
   const policy = require(join(__dirname, 'release-policy.json'));
@@ -237,7 +322,7 @@ async function start() {
     if (updatesEnabled) autoUpdater.setFeedURL({ provider: 'github', owner: 'sklee385', repo: 'open_spec_dashboard' });
     updater = autoUpdater;
   }
-  manager = new UpdateManager({ updater, enabled: updatesEnabled, prepare, stop, cancel, version: app.getVersion() });
+  manager = new UpdateManager({ updater, enabled: updatesEnabled, prepare, stop, cancel, assertInstallAllowed: assertNoEmergency, version: app.getVersion() });
   for (const [channel, operation] of [['status', () => manager.snapshot()], ['check', () => manager.check()], ['install', () => manager.install()]]) {
     ipcMain.handle(`desktop:${channel}`, event => {
       if (event.sender !== updateWindow?.webContents || event.senderFrame !== updateWindow?.webContents.mainFrame || event.senderFrame?.url !== updateURL) throw new Error('허용되지 않은 앱 요청입니다');
@@ -248,9 +333,9 @@ async function start() {
   const icon = nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFUlEQVR42mNkYPj/n4ECwESJ5lEDRg0AAH6zAh8HBnNmAAAAAElFTkSuQmCC');
   tray = new Tray(icon); tray.setToolTip('OpenSpecBoard · 창을 닫아도 업무를 유지합니다');
   const recoverScreen = () => { void rendererRecovery?.report('manual'); };
-  const menu = Menu.buildFromTemplate([{ label: 'OpenSpecBoard 열기', click: () => window.show() }, { label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { type: 'separator' }, { label: '앱 종료', click: () => void requestQuit() }]);
+  const menu = Menu.buildFromTemplate([{ label: 'OpenSpecBoard 열기', click: () => window.show() }, { label: '전체 상태 점검', click: () => void showHealth() }, { label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { type: 'separator' }, { label: '앱 종료', click: () => void requestQuit() }, { label: '강제 종료…', click: () => { void requestForceQuit().catch(() => {}); } }]);
   tray.setContextMenu(menu); tray.on('double-click', () => window.show());
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'OpenSpecBoard', submenu: [{ label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { label: '앱 종료', click: () => void requestQuit() }] }, { role: 'editMenu' }, { role: 'viewMenu' }]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'OpenSpecBoard', submenu: [{ label: '전체 상태 점검', click: () => void showHealth() }, { label: '화면 복구', click: recoverScreen }, { label: '앱 업데이트', click: showUpdates }, { label: '앱 종료', click: () => void requestQuit() }, { label: '강제 종료…', click: () => { void requestForceQuit().catch(() => {}); } }] }, { role: 'editMenu' }, { role: 'viewMenu' }]));
   startupPhase = 'page';
   try { await window.loadURL(attentionRouter.initialURL(origin)); }
   catch (error) {
@@ -258,6 +343,7 @@ async function start() {
     await rendererRecovery.report('load-failed');
   }
   if (!smoke) window.show(); log('desktop page loaded; awaiting renderer readiness');
+  if (!smoke && recoveryState.safeMode) await showHealth();
   if (smoke) {
     const rendererSafe = await window.webContents.executeJavaScript("typeof require === 'undefined' && typeof process === 'undefined' && typeof window.desktopUpdates === 'undefined'");
     if (!rendererSafe) throw new Error('대시보드 렌더러의 권한 격리 실패');
@@ -275,6 +361,30 @@ async function start() {
     console.log('DESKTOP_SECURITY_READY');
     const status = await api('status');
     if (!status.idle) throw new Error('격리한 앱이 유휴 상태가 아닙니다');
+    if (process.argv.includes('--desktop-health-test')) {
+      const initial = await inspectHealth();
+      if (!initial.server?.idle || !Array.isArray(initial.server.works) || !initial.desktop.ownerVerified) throw Error('실제 소유 프로세스·전체 상태 점검 실패');
+      if (postForceToken) {
+        const saved = await window.webContents.executeJavaScript("window.desktopDrafts.getItem('work-chat-draft:force-smoke')");
+        const first = JSON.parse(readFileSync(join(userDirectory, '.desktop-force-smoke.json'), 'utf8'));
+        if (first.origin === origin || !initial.server.safeMode || saved !== 'isolated-restart-draft') throw Error('강제 종료 후 새 origin·안전 시작·프로필 초안 복원 실패');
+        console.log('DESKTOP_POST_FORCE_READY');
+      }
+      await healthWindow.show();
+      const healthContent = healthWindow.window.webContents;
+      const waitUntil = Date.now() + 10000;
+      let inspected = false;
+      while (!inspected && Date.now() < waitUntil) {
+        inspected = await healthContent.executeJavaScript("document.getElementById('summary')?.textContent.includes('현재 종료를 막는') === true");
+        if (!inspected) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!inspected) throw Error('실제 진단 렌더러·고정 IPC 점검 실패');
+      const enabled = await api('safe-mode', 'POST', { enabled: true }); persistSafeMode(enabled.safeMode);
+      if (!(await inspectHealth()).server.safeMode) throw Error('안전 모드 적용 실패');
+      const disabled = await api('safe-mode', 'POST', { enabled: false }); persistSafeMode(disabled.safeMode);
+      if ((await inspectHealth()).server.safeMode) throw Error('안전 모드 명시적 해제 실패');
+      console.log('DESKTOP_HEALTH_READY');
+    }
     if (recoverySmoke) {
       await waitForRecoverySmokeReady(0);
       const sessionPid = child.pid;
@@ -300,6 +410,15 @@ async function start() {
       console.log('DESKTOP_LIFECYCLE_READY');
     }
     console.log('DESKTOP_SMOKE_READY');
+    if (forceSmoke) {
+      if (!ownerRecord) throw Error('격리 강제 종료 소유권 미확인');
+      await window.webContents.executeJavaScript("window.desktopDrafts.setItem('work-chat-draft:force-smoke', 'isolated-restart-draft')");
+      writeFileSync(join(userDirectory, '.desktop-force-smoke.json'), JSON.stringify({ token: ownerRecord.nonce, version: app.getVersion(), appDirectory: dirname(process.execPath), origin }));
+      forceRequested = true; emergencyLock = true; persistSafeMode(true);
+      console.log('DESKTOP_FORCE_READY');
+      await launchEmergency({ ownerPath: ownerRecord.ownerPath, confirm: true, expectedNonce: ownerRecord.nonce });
+      await new Promise(() => {}); return;
+    }
     await confirmPortableReady();
     await requestQuit(); return;
   }

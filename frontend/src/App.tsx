@@ -2,7 +2,7 @@ import { useI18n } from '@/i18n/context';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { AttentionContext, AttentionOverlays } from './components/AttentionCenter';
 import { useAttention } from './hooks/useAttention';
-import { consumeAttentionLink, parseAttentionLink, loadAttentionDestination, type AttentionLink, type AttentionTarget, type WorkRoomNavigation } from './lib/attentionNavigation';
+import { consumeAttentionLink, parseAttentionLink, loadAttentionDestination, loadWorkDestination, type AttentionLink, type AttentionTarget, type WorkRoomNavigation } from './lib/attentionNavigation';
 import { Header } from './components/Header';
 import { useAiActivity } from './hooks/useAiActivity';
 import { BoardTrashContext, useBoardTrash } from './components/BoardTrash';
@@ -53,17 +53,38 @@ function App() {
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
   const registerProjectGuard = useCallback((guard: () => Promise<boolean>) => { projectNavigation.current = guard; }, []);
   const targetToken = useRef(0);
+  const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [attentionTarget, setAttentionTarget] = useState<AttentionTarget>();
+  const [diagnosticWorkId, setDiagnosticWorkId] = useState<{ id: string; changeId: string }>();
   const openAttention = useCallback(async (item: AttentionLink) => {
     const destination = await loadAttentionDestination(item);
     if (projectNavigation.current && !await projectNavigation.current()) return;
     if (workRoomNavigation.current && !workRoomNavigation.current.preserveDrafts()) throw new Error('Draft preservation failed');
     setSelectedIdea(null);
     setSelectedChange(destination);
+    setDiagnosticWorkId(undefined);
     setWorkHidden(false);
     setAttentionTarget({ workId: item.workId, questionId: item.questionId, token: ++targetToken.current });
   }, []);
   const attention = useAttention(openAttention);
+  const reportNavigationError = attention.reportNavigationError;
+  useEffect(() => {
+    const bridge = window.desktopRecovery;
+    if (!bridge) return;
+    let stopped = false, pending = Promise.resolve();
+    const unsubscribe = bridge.onOpenWork(workId => {
+      pending = pending.then(async () => {
+        if (stopped) return;
+        const destination = await loadWorkDestination(workId);
+        if (stopped || (projectNavigation.current && !await projectNavigation.current())) return;
+        if (stopped) return;
+        if (workRoomNavigation.current && !workRoomNavigation.current.preserveDrafts()) throw new Error('Draft preservation failed');
+        setSelectedIdea(null); setSelectedChange(destination); setAttentionTarget(undefined);
+        setDiagnosticWorkId({ id: workId, changeId: destination.id }); setWorkHidden(false);
+      }).catch(() => { if (!stopped) reportNavigationError(); });
+    });
+    return () => { stopped = true; unsubscribe(); };
+  }, [reportNavigationError]);
   const initialLinkStarted = useRef(false);
   const initialNavigation = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
@@ -85,7 +106,6 @@ function App() {
     void initialNavigation.current.then(() => { if (!stopped) return bridge.ready(); }).catch(() => { if (!stopped) attention.reportNavigationError(); });
     return () => { stopped = true; unsubscribe(); };
   }, [openAttention, attention.reportNavigationError]);
-  const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(() => {
     return localStorage.getItem(SELECTED_SOURCE_KEY);
   });
@@ -252,6 +272,7 @@ function App() {
             key={selectedChange.id}
             change={selectedChange}
             attentionTarget={attentionTarget}
+            workId={diagnosticWorkId?.changeId === selectedChange.id ? diagnosticWorkId.id : undefined}
             navigationRef={workRoomNavigation}
             onOpenSource={work => void openProject(work)}
             onClose={() => { setSelectedChange(null); setWorkHidden(false); setAttentionTarget(undefined); }}

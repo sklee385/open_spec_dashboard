@@ -12,7 +12,34 @@ vi.mock('./components/IdeaCapture', () => ({ IdeaCapture: () => null }));
 const item = { workId: 'w', sourceId: 'demo', changeName: 'feature', title: '알림 업무', questionId: 'q', kind: 'input', status: 'pending', createdAt: '2026-10-25T01:00:00Z' };
 const work = { id: 'w', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'waiting-input', threadId: 't', reviewedVersion: null, documents: [], events: [], questions: [{ id: 'q', kind: 'input', status: 'pending', params: { questions: [{ id: 'choice', question: '대상 질문' }] } }], verifications: [], verificationCommands: [], changes: [] };
 const change = { id: 'demo/feature', sourceId: 'demo', name: 'feature', title: '알림 업무', status: 'draft', proposal: null, design: null, specs: [], tasks: null, schema: 'spec-driven', artifacts: [] };
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, '', '/'); delete window.desktopAttention; });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); window.history.replaceState(null, '', '/'); delete window.desktopAttention; delete window.desktopRecovery; });
+it('opens a diagnostic work through the fixed bridge without creating or reconnecting work', async () => {
+  let receive: ((id: string) => void) | undefined;
+  const unsubscribe = vi.fn();
+  window.desktopRecovery = { onOpenWork: listener => { receive = listener; return unsubscribe; } };
+  const mock = mockFetch({ ...work, state: 'recovery-required', errorCode: 'session-restarted' } as typeof work);
+  const view = render(<App />);
+  await act(async () => { receive?.('w'); });
+  expect(await screen.findByRole('textbox', { name: 'AI와 문답' })).toBeInTheDocument();
+  expect(mock.mock.calls.some(([url]) => url === '/api/work/w')).toBe(true);
+  expect(mock.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+  view.unmount(); expect(unsubscribe).toHaveBeenCalledOnce();
+});
+it('rejects invalid diagnostic work ids and retains a current draft if local persistence fails', async () => {
+  let receive: ((id: string) => void) | undefined;
+  window.desktopRecovery = { onOpenWork: listener => { receive = listener; return () => {}; } };
+  localStorage.setItem('openspec-active-change', JSON.stringify({ ...change, title: '기존 업무' }));
+  const mock = mockFetch(); render(<App />);
+  const message = await screen.findByRole('textbox', { name: 'AI와 문답' });
+  fireEvent.change(message, { target: { value: '유지할 초안' } });
+  await act(async () => { receive?.('\ninvalid'); });
+  expect(mock.mock.calls.some(([url]) => url.includes('invalid'))).toBe(false);
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
+  await act(async () => { receive?.('w'); });
+  expect(message).toHaveValue('유지할 초안');
+  expect(screen.getByRole('heading', { name: '기존 업무' })).toBeInTheDocument();
+  expect(screen.getAllByText(/요청을 열지 못했습니다/).length).toBeGreaterThan(0);
+});
 function mockFetch(currentWork = work) {
   const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.endsWith('/attention') ? { items: [item] } : url === '/api/notifications/settings' ? { enabled: true, effectiveEnabled: true, dashboardUrl: 'http://localhost/', registrationStatus: 'registered', lastError: null } : url.endsWith('/trash') ? { entries: [] } : url.endsWith('/review-items') ? { items: [], errors: [], documentVersions: {} } : url.includes('/changes/') ? change : currentWork }));
   vi.stubGlobal('fetch', mock); return mock;

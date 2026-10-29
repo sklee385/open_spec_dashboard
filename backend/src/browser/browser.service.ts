@@ -15,6 +15,7 @@ import { stopOwnedProcess } from './browser-process';
 import type { BrowserOutcome } from './browser-runner';
 import { guardBrowserProcess } from './browser-job';
 import { BrowserMailbox } from './browser-mailbox';
+import { desktopHealth } from '../desktop/health';
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 @Injectable()
@@ -23,8 +24,9 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
   private active?: { workId: string; child: ChildProcess; cancelled: boolean; done: Promise<void> };
   private closing = false;
   constructor(@Inject(WorkStore) readonly store: WorkStore) {
+    desktopHealth(store).register('browser', work => this.active?.workId === work.id ? 'active' : undefined);
     this.mailbox = new BrowserMailbox(store, (id, input) => this.tool(id, input));
-    for (const work of store.list()) for (const row of store.records(work.id, 'browser-verification').filter(row => row.status === 'running')) {
+    for (const work of store.list().filter(work => !['completed', 'archived'].includes(work.phase))) for (const row of store.records(work.id, 'browser-verification').filter(row => row.status === 'running')) {
       store.record(row.id, work.id, 'browser-verification', { ...row, status: 'interrupted', error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
       if (work.state === 'running' && row.owner === 'user') { work.state = 'interrupted'; store.save(work); }
     }
@@ -54,6 +56,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (!latest?.fresh || latest.status !== 'passed') throw new ConflictException('현재 코드와 시나리오의 브라우저 검증을 통과해야 합니다');
   }
   run(id: string, owner: 'user' | 'tool' = 'user') {
+    desktopHealth(this.store).assertExecutionAllowed();
     const work = this.work(id);
     if (this.active || this.closing) throw new ConflictException('다른 브라우저 검증이 진행 중이거나 종료 중입니다');
     if (!['implementation', 'verification'].includes(work.phase) || !(owner === 'tool' ? work.state === 'running' : ['idle', 'failed', 'interrupted'].includes(work.state))) throw new ConflictException('현재 업무 상태에서는 검증을 실행할 수 없습니다');

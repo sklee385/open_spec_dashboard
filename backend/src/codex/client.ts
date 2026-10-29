@@ -3,11 +3,16 @@ import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
 import { runtimeEnvironment, localRuntimeDirectory } from '../runtime';
 
+/** Only a JSON-RPC error response proves that this particular request was rejected. */
+export class CodexRpcRejectedError extends Error {
+  constructor(message: string, readonly method: string, readonly code?: number) { super(message); }
+}
+
 export class CodexClient extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
   private initializing?: Promise<void>;
   private nextId = 0;
-  private pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { method: string; resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   readonly requests = new Map<string | number, any>();
   generation = Math.random().toString(36).slice(2);
   private stopping = false;
@@ -28,7 +33,7 @@ export class CodexClient extends EventEmitter {
       if (!message.method && message.id !== undefined) {
         const request = this.pending.get(message.id); if (!request) return;
         clearTimeout(request.timer); this.pending.delete(message.id);
-        if (message.error) request.reject(new Error(message.error.message)); else request.resolve(message.result);
+        if (message.error) request.reject(new CodexRpcRejectedError(message.error.message, request.method, message.error.code)); else request.resolve(message.result);
       } else {
         if (message.id !== undefined) this.requests.set(message.id, message);
         this.emit('notification', { ...message, generation });
@@ -53,7 +58,7 @@ export class CodexClient extends EventEmitter {
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Codex 요청 결과를 확인할 수 없습니다: ${method}`)); }, 30000);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { method, resolve, reject, timer });
       try { this.write({ id, method, params }); } catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
