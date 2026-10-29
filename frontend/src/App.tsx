@@ -5,6 +5,7 @@ import { useAttention } from './hooks/useAttention';
 import { consumeAttentionLink, parseAttentionLink, loadAttentionDestination, loadWorkDestination, type AttentionLink, type AttentionTarget, type WorkRoomNavigation } from './lib/attentionNavigation';
 import { Header } from './components/Header';
 import { useAiActivity } from './hooks/useAiActivity';
+import { useCoalescedRefresh } from './hooks/useCoalescedRefresh';
 import { BoardTrashContext, useBoardTrash } from './components/BoardTrash';
 import { KanbanBoard } from './components/KanbanBoard';
 import { SpecsView } from './components/SpecsView';
@@ -49,6 +50,7 @@ function App() {
   const [workHidden, setWorkHidden] = useState(false);
   const [workPicker, setWorkPicker] = useState(false);
   const [workScopeId, setWorkScopeId] = useState<string | null>(null);
+  const [candidateScopeId, setCandidateScopeId] = useState<string | null>(null);
   const [workspaces, setWorkspaces] = useState<ProjectWorkScope[]>([]);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
   const registerProjectGuard = useCallback((guard: () => Promise<boolean>) => { projectNavigation.current = guard; }, []);
@@ -173,17 +175,17 @@ function App() {
   const changeSource = async (sourceId: string | null) => {
     if (sourceId === selectedSourceId) return;
     if (projectNavigation.current && !await projectNavigation.current()) return;
-    setWorkScopeId(null);
+    setWorkScopeId(null); setCandidateScopeId(null);
     setSelectedSourceId(sourceId);
   };
-  const openProject = async (work?: { id: string; executionPath?: string }) => {
+  const openProject = async (work?: { id: string; executionPath?: string; candidateId?: string }) => {
     if (!selectedChange) return;
     if (projectNavigation.current && !await projectNavigation.current()) return;
     if (workRoomNavigation.current && !workRoomNavigation.current.preserveDrafts()) return;
     if (work?.executionPath) {
-      setWorkScopeId(work.id);
+      setWorkScopeId(work.id); setCandidateScopeId(work.candidateId ?? null);
       setWorkspaces(current => current.some(item => item.id === work.id) ? current : [...current, { ...work, sourceId: selectedChange.sourceId, changeName: selectedChange.name, title: selectedChange.title, phase: 'implementation' }]);
-    } else setWorkScopeId(null);
+    } else { setWorkScopeId(null); setCandidateScopeId(null); }
     setWorkspaceRevision(value => value + 1);
     setSelectedSourceId(selectedChange.sourceId); setProjectVisited(true); setCurrentView('project'); setWorkHidden(true);
   };
@@ -199,14 +201,11 @@ function App() {
   };
 
   // Connect to SSE for real-time updates
-  const handleUpdate = useCallback(() => {
-    refetchChanges();
-    refetchSpecs();
-    refetchSources();
-    refetchIdeas();
-  }, [refetchChanges, refetchSpecs, refetchSources, refetchIdeas]);
+  const handleUpdate = useCoalescedRefresh(async () => {
+    await Promise.allSettled([refetchChanges(), refetchSpecs(), refetchSources(), refetchIdeas()]);
+  });
 
-  useSSE(handleUpdate);
+  useSSE(handleUpdate, currentView !== 'project' && !(selectedChange && !workHidden));
 
   const handleSourcesSaved = (saved: SourceConfig[]) => {
     setSelectedSourceId(current => current && saved.some(source => source.name === current) ? current : null);
@@ -264,13 +263,14 @@ function App() {
           ) : currentView === 'specs' ? (
             <SpecsView selectedSourceId={selectedSourceId} refreshVersion={sourceRevision} />
           ) : null}
-          {projectVisited && <div hidden={currentView !== 'project'}><ProjectWorkspace sourceId={selectedSourceId} workspaces={workspaces} workId={workScopeId} onWorkScopeChange={setWorkScopeId} active={currentView === 'project' && (!selectedChange || workHidden)} registerNavigationGuard={registerProjectGuard} onOpenWork={() => void openProjectWork()} /></div>}
+          {projectVisited && <div hidden={currentView !== 'project'}><ProjectWorkspace sourceId={selectedSourceId} workspaces={workspaces} workId={workScopeId} candidateId={candidateScopeId} onWorkScopeChange={id => { setWorkScopeId(id); setCandidateScopeId(null); }} active={currentView === 'project' && (!selectedChange || workHidden)} registerNavigationGuard={registerProjectGuard} onOpenWork={() => void openProjectWork()} /></div>}
         </main>
         {selectedChange && (
           <div hidden={workHidden}>
           <WorkRoom
             key={selectedChange.id}
             change={selectedChange}
+            active={!workHidden}
             attentionTarget={attentionTarget}
             workId={diagnosticWorkId?.changeId === selectedChange.id ? diagnosticWorkId.id : undefined}
             navigationRef={workRoomNavigation}

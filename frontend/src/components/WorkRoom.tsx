@@ -1,3 +1,5 @@
+import { useCoalescedRefresh } from '../hooks/useCoalescedRefresh';
+import { useReadRequests } from '../hooks/useReadRequests';
 import { ProductError, errorMessage } from '@/i18n/errors';
 import { useI18n } from '@/i18n/context';
 import { BrowserVerification } from './BrowserVerification';
@@ -15,6 +17,8 @@ import { ReviewItems } from './ReviewItems';
 import { DetailModal } from './DetailModal';
 import { matchReviewItem, useReviewItems, type ReviewItem } from '../hooks/useReviewItems';
 import { ChangeResults, type ChangeReport } from './ChangeResults';
+import { WorkspacePreparation } from './WorkspacePreparation';
+import { WorkIntegration } from './WorkIntegration';
 import type { FileDiffProps } from './FileDiff';
 import type { Change } from '../types';
 import './WorkRoom.css';
@@ -53,8 +57,8 @@ function readWorkView(changeId: string) {
   } catch { return { pane: 'chat', tab: 'documents', path: null }; }
 }
 class RequestError extends Error { readonly latest?: Doc; readonly status?: number; constructor(message: string, latest?: Doc, status?: number) { super(message); this.latest = latest; this.status = status; } }
-async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch(`/api/${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(`/api/${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), ...(method === 'GET' && signal ? { signal } : {}) });
   let data;
   try { data = await response.json(); } catch { throw new ProductError('workRoom.noResponse'); }
   if (!response.ok) {
@@ -82,11 +86,11 @@ function conversation(events: Entry[], toolName: string) {
   return [...messages.values()].slice(-100);
 }
 
-type WorkRoomProps = { change: Change; onClose: () => void; onOpenSource?: (work?: { id: string; executionPath?: string }) => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation>; workId?: string };
+type WorkRoomProps = { change: Change; active?: boolean; onClose: () => void; onOpenSource?: (work?: { id: string; executionPath?: string; candidateId?: string }) => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation>; workId?: string };
 export function WorkRoom(props: WorkRoomProps) {
   return <WorkRoomContent key={JSON.stringify([props.change.id, props.workId ?? null])} {...props} />;
 }
-function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navigationRef, workId }: WorkRoomProps) {
+function WorkRoomContent({ change, active = true, onClose, onOpenSource, attentionTarget, navigationRef, workId }: WorkRoomProps) {
   const { t } = useI18n();
   const states: Record<string, string> = { idle: t('workRoom.idle'), running: t('workRoom.running'), connecting: t('workRoom.connecting'), 'creating-thread': t('workRoom.creating'), 'waiting-input': t('workRoom.waitingInput'), 'waiting-approval': t('workRoom.waitingApproval'), 'recovery-required': t('workRoom.recovery'), failed: t('workRoom.failed'), interrupted: t('workRoom.interrupted') };
   const phases: Record<string, string> = { planning: t('workRoom.planning'), reviewed: t('workRoom.reviewed'), implementation: t('workRoom.implementation'), verification: t('workRoom.verificationPhase'), completed: t('workRoom.completed'), archived: t('workRoom.archived') };
@@ -94,6 +98,7 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
 
   const operations: Record<string, string> = { status: t('workRoom.dependencies'), instructions: t('workRoom.instructions'), schemas: t('workRoom.schemas'), specs: t('workRoom.specs'), spec: t('workRoom.spec'), deltas: t('workRoom.deltas'), diff: t('workRoom.diff'), validate: t('workRoom.validate'), doctor: t('workRoom.doctor'), context: t('workRoom.context') };
   const [room, setRoom] = useState<Room | null>(null), [doc, setDoc] = useState<Doc | null>(null), [draft, setDraft] = useState('');
+  const [gitManaged, setGitManaged] = useState(false);
   const [initialWorkId] = useState(attentionTarget?.workId ?? workId);
   const questionNodes = useRef(new Map<string, HTMLDivElement>());
   const attentionNotice = useRef<HTMLParagraphElement>(null);
@@ -168,51 +173,76 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
   useLayoutEffect(() => { live.current = { doc, dirty }; }, [doc, dirty]);
   const documentRequest = useRef(0);
   const activeOperations = useRef(0);
-  const refresh = useCallback(async (id: string) => { const result = await api<Room>(`work/${id}`); setRoom(result); setLoadError(''); return result; }, []);
+  const scopeLive = useRef(true);
+  const activeRef = useRef(active), previouslyActive = useRef(active);
+  useLayoutEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => { scopeLive.current = true; return () => { scopeLive.current = false; }; }, []);
+  const read = useReadRequests();
+  const readApi = useCallback(<T,>(path: string) => read(signal => api<T>(path, 'GET', undefined, signal)), [read]);
+  const openDoc = useCallback(async (id: string, path: string, expectedVersion?: string) => {
+    const request = ++documentRequest.current;
+    setConflict(null);
+    const result = await readApi<Doc>(`work/${id}/document?path=${encodeURIComponent(path)}`);
+    if (!scopeLive.current || request !== documentRequest.current) return false;
+    if (expectedVersion && result.version !== expectedVersion) throw new ProductError('review.changed');
+    try {
+      const value = readDocumentDraft(workDraftKey(id, path)) ?? readDocumentDraft(`work-draft:${id}:${path}`);
+      if (value) {
+        const restoredDoc = { ...result, version: value.version, content: value.baseContent ?? (result.version !== value.version ? '' : result.content) };
+        live.current = { doc: restoredDoc, dirty: value.content !== restoredDoc.content || result.version !== value.version };
+        setDoc(restoredDoc);
+        setDraft(value.content); setDraftRestored(true);
+        if (result.version !== value.version) setConflict(result);
+        return true;
+      }
+    } catch { setDraftError(t('draft.readFailed')); }
+    live.current = { doc: result, dirty: false }; setDoc(result); setDraft(result.content);
+    return true;
+  }, [readApi, t]);
+  const refresh = useCoalescedRefresh(async (id: string) => {
+    const result = await readApi<Room>(`work/${id}`);
+    if (!scopeLive.current) return result;
+    setRoom(result); setLoadError('');
+    try { if (!live.current.doc && result.documents[0]) {
+      const path = initialView.path && result.documents.includes(initialView.path) ? initialView.path : result.documents[0];
+      await openDoc(id, path);
+    } else if (live.current.doc && !live.current.dirty) {
+      const path = live.current.doc.path, request = documentRequest.current;
+      const latest = await readApi<Doc>(`work/${id}/document?path=${encodeURIComponent(path)}`);
+      if (scopeLive.current && request === documentRequest.current && live.current.doc?.path === path && !live.current.dirty) { setDoc(latest); setDraft(latest.content); }
+    } } catch (error) { if (scopeLive.current) setLoadError(errorMessage(error, t)); }
+    return result;
+  });
+  useEffect(() => {
+    const returned = active && !previouslyActive.current;
+    previouslyActive.current = active;
+    if (returned && room?.id) void refresh(room.id).catch(error => setLoadError(errorMessage(error, t)));
+  }, [active, room?.id, refresh, t]);
   useEffect(() => {
     if (!attentionTarget || room?.id !== attentionTarget.workId) return;
     let cancelled = false;
-    void api<Room>(`work/${encodeURIComponent(attentionTarget.workId)}`).then(result => {
-      if (cancelled) return;
-      setRoom(result); setReadyTarget(attentionTarget.token);
+    void refresh(attentionTarget.workId).then(result => {
+      if (cancelled || result.id !== attentionTarget.workId) return;
+      setReadyTarget(attentionTarget.token);
     }).catch(error => { if (!cancelled) setLoadError(errorMessage(error, t)); });
     return () => { cancelled = true; };
-  }, [attentionTarget, room?.id, t]);
+  }, [attentionTarget, room?.id, refresh, t]);
   useEffect(() => {
     if (!nativeResume || attentionTarget || workId || !room?.threadId || room.state !== 'recovery-required' || room.errorCode !== 'session-restarted') return;
     if (recovered.current.has(room.id)) return;
     recovered.current.add(room.id);
     void api(`work/${room.id}/reconnect`, 'POST', {}).then(() => refresh(room.id)).catch(e => setLoadError(errorMessage(e, t)));
   }, [attentionTarget, workId, room?.id, room?.state, room?.errorCode, room?.threadId, nativeResume, refresh, t]);
-  const openDoc = useCallback(async (id: string, path: string, expectedVersion?: string) => {
-    const request = ++documentRequest.current;
-    setConflict(null);
-    const result = await api<Doc>(`work/${id}/document?path=${encodeURIComponent(path)}`);
-    if (request !== documentRequest.current) return false;
-    if (expectedVersion && result.version !== expectedVersion) throw new ProductError('review.changed');
-    try {
-      const value = readDocumentDraft(workDraftKey(id, path)) ?? readDocumentDraft(`work-draft:${id}:${path}`);
-      if (value) {
-        setDoc({ ...result, version: value.version, content: value.baseContent ?? (result.version !== value.version ? '' : result.content) });
-        setDraft(value.content); setDraftRestored(true);
-        if (result.version !== value.version) setConflict(result);
-        return true;
-      }
-    } catch { setDraftError(t('draft.readFailed')); }
-    setDoc(result); setDraft(result.content);
-    return true;
-  }, [t]);
   useEffect(() => {
     if (!room?.id || typeof EventSource === 'undefined') return;
     let cursor = room.events.at(-1)?.seq || 0;
-    let timer: ReturnType<typeof setTimeout> | undefined, refreshing = false, again = false, closed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined, closed = false;
     const schedule = () => {
       if (closed) return;
-      if (refreshing) { again = true; return; }
       if (timer) return;
       timer = setTimeout(() => {
-        timer = undefined; refreshing = true;
-        void refresh(room.id).catch(e => setLoadError(errorMessage(e, t))).finally(() => { refreshing = false; if (again) { again = false; schedule(); } });
+        timer = undefined;
+        void refresh(room.id).catch(e => setLoadError(errorMessage(e, t)));
       }, 150);
     };
     const stream = new EventSource(`/api/work/${room.id}/events?after=${cursor}`);
@@ -230,12 +260,10 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
     let retryTimer: ReturnType<typeof setTimeout> | undefined, retryDelay = 1000;
     const start = async () => {
       const result = initialWorkId
-        ? await api<Room>(`work/${encodeURIComponent(initialWorkId)}`)
+        ? await readApi<Room>(`work/${encodeURIComponent(initialWorkId)}`)
         : await api<Room>('work', 'POST', { sourceId: change.sourceId, changeName: change.name, requestKey: `change:${change.id}` });
       if (cancelled) return; currentId = result.id;
-      const detail = await refresh(result.id);
-      const path = initialView.path && detail.documents.includes(initialView.path) ? initialView.path : detail.documents[0];
-      if (!cancelled && path) await openDoc(result.id, path);
+      await refresh(result.id);
     };
     const initialize = () => {
       void start().catch(e => {
@@ -248,18 +276,11 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
     };
     initialize();
     const timer = setInterval(() => {
-      if (!currentId || cancelled) return;
-      void refresh(currentId).then(async result => {
-        if (!live.current.doc && result.documents[0]) { await openDoc(currentId!, result.documents[0]); return; }
-        if (live.current.doc && !live.current.dirty) {
-          const path = live.current.doc.path, request = documentRequest.current;
-          const latest = await api<Doc>(`work/${currentId}/document?path=${encodeURIComponent(path)}`);
-          if (!cancelled && request === documentRequest.current && live.current.doc?.path === path && !live.current.dirty) { setDoc(latest); setDraft(latest.content); }
-        }
-      }).catch(() => setLoadError(t('workRoom.waitingServer')));
+      if (!currentId || cancelled || !activeRef.current) return;
+      void refresh(currentId).catch(() => setLoadError(t('workRoom.waitingServer')));
     }, 2000);
     return () => { cancelled = true; ++documentRequest.current; clearInterval(timer); clearTimeout(retryTimer); };
-  }, [change.id, change.name, change.sourceId, initialWorkId, refresh, openDoc, initialView.path, t]);
+  }, [change.id, change.name, change.sourceId, initialWorkId, refresh, readApi, t]);
   useEffect(() => {
     if (!doc) return;
     try { draftStorage.setItem(`work-view:${change.id}`, JSON.stringify({ pane, tab, path: doc.path })); } catch { /* Keep this view open; explicit notification navigation checks persistence. */ }
@@ -371,6 +392,8 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
     {loadError && !needsRecovery && <div className="work-error" role="status">{loadError}</div>}
     {room?.error && !needsRecovery && <div className="work-error">{room.error}</div>}
     {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
+    {room && <WorkspacePreparation key={`workspace-preparation:${room.id}`} workId={room.id} reviewedVersion={room.reviewedVersion} onStatus={status => setGitManaged(status.experimentalEnabled && status.kind === 'git-worktree')} />}
+    {room && gitManaged && <WorkIntegration key={`integration:${room.id}`} workId={room.id} active={active} onOpenCandidate={(candidateId, executionPath) => onOpenSource?.({ id: room.id, candidateId, executionPath })} />}
     {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}
     {needsRecovery && room && <WorkRecovery status={room.recovery || { required: true, canReconnect: !!room.threadId, code: room.errorCode || 'connection-failed' }} busy={busy} error={room.error || error || loadError} onRecover={() => void recover()} />}
     {nativeResume && room?.threadId && (room.errorCode === 'thread-in-use' || room.sessionRecovery) && <SessionRecovery key={`${room.id}:${room.threadId}:${room.errorCode || ''}`} workId={room.id} threadId={room.threadId} recovery={room.sessionRecovery} conflicted={room.errorCode === 'thread-in-use'} busy={busy}
@@ -435,7 +458,7 @@ function WorkRoomContent({ change, onClose, onOpenSource, attentionTarget, navig
         {tab === 'results' && <div className="work-result-list"><h2>{t('workRoom.verification')}</h2>
           <WorkTestResults workCommands={room?.workVerificationCommands || []} fullCommands={room?.verificationCommands || []} results={room?.verifications || []} onFix={text => { setMessage(text); setPane('chat'); }} />
           <details><summary>{t('workRoom.addCommand')}</summary><select aria-label={t('tests.scope')} value={commandScope} onChange={event => setCommandScope(event.target.value as TestScope)}><option value="work">{t('tests.work')}</option><option value="full">{t('tests.full')}</option></select><input aria-label={t('workRoom.commandName')} placeholder={t('workRoom.commandName')} value={commandId} onChange={event => setCommandId(event.target.value)} /><input aria-label={t('workRoom.executable')} placeholder={t('workRoom.executableHint')} value={command} onChange={event => setCommand(event.target.value)} /><textarea aria-label={t('workRoom.args')} placeholder={t('workRoom.argsHint')} value={args} onChange={event => setArgs(event.target.value)} /><button disabled={busy || !room || !['idle', 'failed', 'interrupted'].includes(room.state) || ['completed', 'archived'].includes(room.phase)} onClick={() => room && void run(() => api(`work/${room.id}/verification-plan`, 'PUT', { scope: commandScope, commands: [...(commandScope === 'work' ? room.workVerificationCommands || [] : room.verificationCommands).filter(x => x.id !== commandId), { id: commandId, command, args: args.split('\n').filter(Boolean) }] }))}>{t('workRoom.saveCommand')}</button></details>
-          {room && <ChangeResults workId={room.changeName} files={room.changes} report={room.changeReport} busy={busy} applyDisabled={room.phase !== 'verification'} onApply={() => action('apply-changes')} onIsolate={!room.executionPath && ['implementation', 'verification'].includes(room.phase) ? () => action('isolate-workspace') : undefined} />}
+          {room && <ChangeResults workId={room.changeName} files={room.changes} report={room.changeReport} busy={busy} applyDisabled={gitManaged || room.phase !== 'verification'} onApply={gitManaged ? undefined : () => action('apply-changes')} onIsolate={!gitManaged && !room.executionPath && ['implementation', 'verification'].includes(room.phase) ? () => action('isolate-workspace') : undefined} />}
         </div>}
         {tab === 'openspec' && <div className="work-result-list"><p>{t('workRoom.specHint')}</p><select aria-label={t('workRoom.specFunction')} value={operation} onChange={event => { setOperation(event.target.value); setCli(null); }}>{Object.entries(operations).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>{['instructions', 'spec'].includes(operation) && <input aria-label={operation === 'spec' ? t('workRoom.specName') : t('workRoom.artifact')} value={artifact} onChange={event => setArtifact(event.target.value)} />}<button disabled={busy || !room} onClick={inspect}>{t('workRoom.inspect')}</button>{cli && <><strong>{cli.ok ? t('workRoom.inspected') : t('workRoom.inspectError')}</strong>{cliStatus?.artifacts && <><h2>{t('workRoom.dependencies')}</h2><table><thead><tr><th>{t('workRoom.documents')}</th><th>{t('workRoom.status')}</th><th>{t('workRoom.requires')}</th></tr></thead><tbody>{cliStatus.artifacts.map(value => <tr key={value.id}><td>{value.id}</td><td>{{done: t('common.written'), ready: t('workRoom.ready'), blocked: t('workRoom.blocked')}[value.status] || value.status}</td><td>{value.requires?.join(', ') || t('common.none')}</td></tr>)}</tbody></table><h2>{t('workRoom.nextSteps')}</h2>{cliStatus.nextSteps?.map(step => <p key={step}>{step}</p>)}</>}<details open={!cliStatus?.artifacts}><summary>{t('workRoom.raw')}</summary><pre>{cli.json ? JSON.stringify(cli.json, null, 2) : cli.stdout}{'\n'}{cli.stderr}</pre></details><button onClick={() => setMessage(`OpenSpec ${operationRequestLabels[operation]} 결과를 확인하고 같은 업무에서 필요한 수정을 해 주세요.\n${cli.stdout}\n${cli.stderr}`)}>{t('workRoom.prepareRequest')}</button></>}</div>}
       </section>

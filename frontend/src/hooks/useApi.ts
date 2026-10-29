@@ -1,3 +1,5 @@
+import { useReadRequests } from './useReadRequests';
+import { useCoalescedRefresh } from './useCoalescedRefresh';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Source, Change, ChangeDetail, Spec, SpecDetail, Idea } from '../types';
 import { subscribeChangeEvents, type ConnectionStatus } from './changeEvents';
@@ -23,14 +25,19 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return text ? JSON.parse(text) : {} as T;
 }
 
+function useReadJson() {
+  const read = useReadRequests();
+  return useCallback(<T,>(url: string) => read(signal => fetchJson<T>(url, { signal })), [read]);
+}
 export function useSources() {
+  const readJson = useReadJson();
   const [sources, setSources] = useState<Source[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCoalescedRefresh(async () => {
     try {
-      const data = await fetchJson<{ sources: Source[] }>(`${API_BASE}/sources`);
+      const data = await readJson<{ sources: Source[] }>(`${API_BASE}/sources`);
       setSources(data.sources);
       setError(null);
     } catch (e) {
@@ -38,7 +45,7 @@ export function useSources() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  });
 
   useEffect(() => {
     refetch();
@@ -48,23 +55,24 @@ export function useSources() {
 }
 
 export function useChanges() {
+  const readJson = useReadJson();
   const [changes, setChanges] = useState<Change[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const legacyTitles = useRef(new Map<string, string>());
 
-  const refetch = useCallback(async () => {
+  const refetch = useCoalescedRefresh(async () => {
     try {
-      const data = await fetchJson<{ changes: Change[] }>(`${API_BASE}/changes`);
+      const data = await readJson<{ changes: Change[] }>(`${API_BASE}/changes`);
       // Older running servers omit titles. Read existing source events without restarting their active Codex sessions.
       const untitled = data.changes.filter(change => !change.title && /^idea-\d/.test(change.name) && !legacyTitles.current.has(change.id));
       if (untitled.length) {
         try {
-          const { work } = await fetchJson<{ work: { id: string; sourceId: string; changeName: string }[] }>(`${API_BASE}/work`);
+          const { work } = await readJson<{ work: { id: string; sourceId: string; changeName: string }[] }>(`${API_BASE}/work`);
           await Promise.all(untitled.map(async change => {
             const linked = work.find(item => item.sourceId === change.sourceId && item.changeName === change.name); if (!linked) return;
             try {
-              const detail = await fetchJson<{ events: { type: string; data: { title?: string } }[] }>(`${API_BASE}/work/${linked.id}`);
+              const detail = await readJson<{ events: { type: string; data: { title?: string } }[] }>(`${API_BASE}/work/${linked.id}`);
               const title = detail.events.find(event => event.type === 'source-idea')?.data.title;
               if (title) legacyTitles.current.set(change.id, title);
             } catch { /* Keep the existing card even if historical metadata is unavailable. */ }
@@ -79,7 +87,7 @@ export function useChanges() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  });
 
   useEffect(() => {
     refetch();
@@ -125,19 +133,22 @@ export function useChange(id: string | null) {
 }
 
 export function useSpecs() {
+  const readJson = useReadJson();
   const [specs, setSpecs] = useState<Spec[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCoalescedRefresh(async () => {
     try {
-      const data = await fetchJson<{ specs: Spec[] }>(`${API_BASE}/specs`);
+      const data = await readJson<{ specs: Spec[] }>(`${API_BASE}/specs`);
       setSpecs(data.specs);
       setError(null);
+    } catch (e) {
+      setError(e as Error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  });
 
   useEffect(() => {
     refetch();
@@ -174,13 +185,14 @@ export function useSpec(id: string | null) {
 }
 
 export function useIdeas() {
+  const readJson = useReadJson();
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCoalescedRefresh(async () => {
     try {
-      const data = await fetchJson<{ ideas: Idea[] }>(`${API_BASE}/ideas`);
+      const data = await readJson<{ ideas: Idea[] }>(`${API_BASE}/ideas`);
       setIdeas(data.ideas);
       setError(null);
     } catch (e) {
@@ -188,7 +200,7 @@ export function useIdeas() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  });
 
   useEffect(() => {
     refetch();
@@ -225,18 +237,20 @@ export async function updateIdea(id: string, title: string, description: string)
   });
 }
 
-export function useSSE(onUpdate: () => void): { connectionStatus: ConnectionStatus } {
+export function useSSE(onUpdate: () => void, pollEnabled = true): { connectionStatus: ConnectionStatus } {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const onUpdateRef = useRef(onUpdate);
+  const pollEnabledRef = useRef(pollEnabled);
 
   // Keep the ref up to date
   useEffect(() => {
     onUpdateRef.current = onUpdate;
-  }, [onUpdate]);
+    pollEnabledRef.current = pollEnabled;
+  }, [onUpdate, pollEnabled]);
 
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    const refreshTimer = setInterval(() => onUpdateRef.current(), 5000);
+    const refreshTimer = setInterval(() => { if (pollEnabledRef.current) onUpdateRef.current(); }, 5000);
 
     const unsubscribe = subscribeChangeEvents(() => onUpdateRef.current(), status => {
       setConnectionStatus(status);

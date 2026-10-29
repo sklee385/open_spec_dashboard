@@ -72,6 +72,49 @@ it('restores a persisted project draft after reload and retains its original CAS
   await waitFor(() => expect(mock.mock.calls.some(([, init]) => init?.method === 'PUT' && JSON.parse(String(init.body)).version === 'v1')).toBe(true));
 });
 const original = '{ "z": 1, "a": 2 }\r\n';
+it('separates candidate drafts without changing legacy work draft keys', async () => {
+  mockApi(); let view!: ReturnType<typeof render>;
+  await act(async () => { view = render(<ProjectWorkspace sourceId="demo" workId="one" candidateId="candidate-a" />); });
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' })); fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'candidate A draft' } });
+  await act(async () => view.rerender(<ProjectWorkspace sourceId="demo" workId="one" candidateId="candidate-b" />));
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  expect(await screen.findByTestId('project-source')).not.toHaveTextContent('candidate A draft');
+  fireEvent.click(screen.getByRole('button', { name: '편집' })); fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'candidate B draft' } });
+  await act(async () => view.rerender(<ProjectWorkspace sourceId="demo" workId="one" />));
+  expect(JSON.parse(localStorage.getItem('project-draft:["demo","one","a.json","candidate-a"]')!)).toMatchObject({ content: 'candidate A draft' });
+  expect(JSON.parse(localStorage.getItem('project-draft:["demo","one","a.json","candidate-b"]')!)).toMatchObject({ content: 'candidate B draft' });
+  expect(localStorage.getItem('project-draft:["demo","one","a.json"]')).toBeNull();
+  await act(async () => view.unmount());
+});
+it('ignores late candidate replies after changing candidate identity', async () => {
+  const mock = mockApi(), implementation = mock.getMockImplementation()!; let finish: (value: unknown) => void = () => {};
+  mock.mockImplementation((url, init) => url.includes('/file?') && url.includes('candidateId=old') ? new Promise(resolve => { finish = resolve as typeof finish; }) : implementation(url, init));
+  const view = render(<ProjectWorkspace sourceId="demo" workId="one" candidateId="old" />); fireEvent.click(await screen.findByRole('button', { name: 'a.json' }));
+  view.rerender(<ProjectWorkspace sourceId="demo" workId="one" candidateId="new" />);
+  await act(async () => finish({ ok: true, json: async () => ({ path: 'late.txt', content: 'old candidate reply', version: 'old', editable: true }) }));
+  expect(screen.queryByText('old candidate reply')).toBeNull();
+});
+it('fetches compound candidate entry tokens before moving a file selected from the raw tree', async () => {
+  const mock = mockApi(), implementation = mock.getMockImplementation()!;
+  mock.mockImplementation(async (url, init) => url.includes('/entry?') ? { ok: true, json: async () => ({ path: 'a.json', kind: 'file', version: 'candidate+file', candidateVersion: 'candidate-cas' }) } : implementation(url, init));
+  render(<ProjectWorkspace sourceId="demo" workId="one" candidateId="candidate" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' })); fireEvent.click(await screen.findByRole('button', { name: '이름 변경·이동' }));
+  fireEvent.change(screen.getByLabelText('프로젝트 상대 경로'), { target: { value: 'moved.json' } }); fireEvent.click(screen.getByRole('button', { name: '확인' }));
+  await waitFor(() => expect(mock.mock.calls.some(([url, init]) => url.includes('/entries/move') && JSON.parse(String(init?.body)).candidateVersion === 'candidate-cas' && JSON.parse(String(init?.body)).version === 'candidate+file')).toBe(true));
+});
+it('keeps raw candidate editing available when attributes block Git status and preserves failed-save drafts', async () => {
+  const mock = mockApi(), implementation = mock.getMockImplementation()!;
+  mock.mockImplementation(async (url, init) => url.includes('/workspace') ? { ok: true, json: async () => ({ kind: 'integration-candidate', executionPath: 'C:/owned/candidate', overlaps: [], partial: true, partialReason: 'unsupported attributes', gitReadOnly: true, readOnly: false }) } : url.includes('/git/status') ? { ok: false, status: 409, json: async () => ({ message: 'unsupported attributes' }) } : url.includes('/file') && init?.method === 'PUT' ? { ok: false, status: 409, json: async () => ({ message: 'candidate changed' }) } : implementation(url, init));
+  render(<ProjectWorkspace sourceId="demo" workId="one" candidateId="candidate" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'a.json' })); fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByRole('textbox', { name: '파일 내용' }), { target: { value: 'repair attributes draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'b.txt' })); fireEvent.click(await screen.findByRole('button', { name: '저장 후 이동' }));
+  await screen.findByText('candidate changed'); expect(screen.getByRole('textbox', { name: '파일 내용' })).toHaveValue('repair attributes draft');
+  fireEvent(window, new Event('beforeunload'));
+  expect(localStorage.getItem('project-draft:["demo","one","a.json","candidate"]')).toContain('repair attributes draft');
+  expect(mock.mock.calls.some(([url]) => url.includes('/git/operations'))).toBe(false);
+});
 it('shows verified workspace metadata and partial overlap warnings even without Git', async () => {
   const mock = mockApi(), originalMock = mock.getMockImplementation()!;
   mock.mockImplementation(async (url, init) => url.includes('/workspace') ? { ok: true, json: async () => ({ kind: 'copy', workId: 'one', executionPath: 'C:/work/one', baseCommit: null, workspaceBaselineCommit: null, branch: null, partial: true, overlaps: [{ workId: 'two', title: '다른 업무', paths: ['shared.txt'] }] }) } : url.includes('/git/status') ? { ok: true, json: async () => ({ available: false, reason: 'not git' }) } : originalMock(url, init));
@@ -88,7 +131,8 @@ it('explains Git worktree result commits and candidate verification without the 
   render(<ProjectWorkspace sourceId="demo" workId="one" />);
   expect(await screen.findByText('baseline-commit')).toBeInTheDocument();
   expect(screen.getByText('base-commit')).toBeInTheDocument();
-  expect(screen.getByText(/결과를 커밋한 뒤 후보 검증과 명시적 확정/)).toBeInTheDocument();
+  expect(screen.getByText(/업무 화면에서 통합을 예약하고 선택 결과를 커밋한 뒤 후보를 준비·편집/)).toBeInTheDocument();
+  expect(screen.getByText(/후보 검증과 최종 원본 반영은 다음 단계에서 제공/)).toBeInTheDocument();
   expect(screen.queryByText(/원본에 반영한 뒤 프로젝트 원본에서 커밋/)).toBeNull();
 });
 it('does not replace a new scope with metadata arriving from an old scope', async () => {

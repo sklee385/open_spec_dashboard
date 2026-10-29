@@ -1,0 +1,26 @@
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
+import { useState } from 'react';
+import { render } from './test/render';
+import App from './App';
+vi.mock('./hooks/useApi', () => ({ useSSE: () => {}, useSources: () => ({ sources: [{ id: 'demo', name: 'Demo' }], refetch: vi.fn() }), useChanges: () => ({ changes: [], refetch: vi.fn() }), useSpecs: () => ({ refetch: vi.fn() }), useIdeas: () => ({ ideas: [], refetch: vi.fn() }) }));
+vi.mock('./hooks/useAiActivity', () => ({ useAiActivity: () => ({ state: 'idle', count: 0, byChange: new Map() }) }));
+vi.mock('./components/Header', () => ({ Header: () => null }));
+vi.mock('./components/KanbanBoard', () => ({ KanbanBoard: () => null }));
+vi.mock('./components/SpecsView', () => ({ SpecsView: () => null }));
+vi.mock('./components/SettingsModal', () => ({ SettingsModal: () => null }));
+vi.mock('./components/IdeaCapture', () => ({ IdeaCapture: () => null }));
+vi.mock('./components/WorkRoom', () => ({ WorkRoom: (p: { onOpenSource?: (work: { id: string; executionPath: string; candidateId: string }) => void }) => { const [draft, setDraft] = useState(''); return <section><input aria-label="대화 초안" value={draft} onChange={e => setDraft(e.target.value)} /><button onClick={() => p.onOpenSource?.({ id: 'work', executionPath: 'C:/candidate', candidateId: 'candidate' })}>후보 소스 열기</button></section>; } }));
+afterEach(() => { localStorage.clear(); vi.unstubAllGlobals(); });
+it('keeps candidate identity through App navigation, actual source API calls and draft persistence while retaining work chat', async () => {
+  localStorage.setItem('openspec-selected-source', 'demo'); localStorage.setItem('openspec-active-change', JSON.stringify({ id: 'demo/feature', sourceId: 'demo', name: 'feature', status: 'draft' }));
+  const fetcher = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/workspace') ? { kind: 'integration-candidate', executionPath: 'C:/candidate', branch: 'candidate', overlaps: [], gitReadOnly: true } : url.includes('/tree') ? { entries: [{ path: 'file.txt', name: 'file.txt', kind: 'file' }] } : url.includes('/file?') ? { path: 'file.txt', content: 'candidate source', version: 'compound', candidateVersion: 'cas', editable: true } : url.includes('/git/status') ? { available: false } : { work: [], items: [], entries: [], commits: [] } })); vi.stubGlobal('fetch', fetcher);
+  render(<App />); fireEvent.change(screen.getByLabelText('대화 초안'), { target: { value: 'keep work conversation draft' } }); fireEvent.click(screen.getByRole('button', { name: '후보 소스 열기' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'file.txt' })); fireEvent.click(await screen.findByRole('button', { name: '편집' }));
+  fireEvent.change(screen.getByLabelText('파일 내용'), { target: { value: 'candidate draft' } }); fireEvent(window, new Event('beforeunload'));
+  await waitFor(() => expect(localStorage.getItem('project-draft:["demo","work","file.txt","candidate"]')).toContain('candidate draft'));
+  expect(fetcher.mock.calls.filter(([url]) => url.startsWith('/api/projects/')).every(([url]) => new URL(url, 'http://test').searchParams.get('candidateId') === 'candidate')).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: '업무·AI·검증' })); fireEvent.click(await screen.findByRole('button', { name: '변경 버리기' }));
+  expect(await screen.findByLabelText('대화 초안')).toHaveValue('keep work conversation draft');
+  expect(localStorage.getItem('work-chat-draft:candidate')).toBeNull();
+});

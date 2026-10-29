@@ -315,9 +315,10 @@ it('SSE 재전송은 중복 조회하지 않고 연결 복구 상태를 표시�
   const mock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : work })); vi.stubGlobal('fetch', mock);
   const { unmount } = render(<WorkRoom change={change} onClose={() => {}} />); await screen.findByRole('textbox', { name: '문서 내용' });
   await waitFor(() => expect(Stream.current).toBeDefined());
-  const before = mock.mock.calls.length;
+  const workReads = () => mock.mock.calls.filter(([url]) => url === '/api/work/work-1').length;
+  const before = workReads();
   act(() => { Stream.current.callbacks['work-update']({ data: JSON.stringify({ seq: 10 }) }); Stream.current.callbacks['work-update']({ data: JSON.stringify({ seq: 10 }) }); });
-  await waitFor(() => expect(mock.mock.calls.length).toBe(before + 1));
+  await waitFor(() => expect(workReads()).toBe(before + 1));
   act(() => Stream.current.onerror?.()); expect(screen.getByText('세션 정보 · 재연결 중 · 저장된 업무 유지')).toBeInTheDocument();
   act(() => Stream.current.onopen?.()); expect(screen.getByText('세션 정보 · 실시간 연결됨')).toBeInTheDocument(); unmount(); expect(Stream.current.close).toHaveBeenCalled();
 });

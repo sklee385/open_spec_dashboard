@@ -39,5 +39,5 @@ export function readDocumentDraft(key: string): { content: string; version: stri
   return { content: value.content, version: value.version, baseContent: typeof value.baseContent === 'string' ? value.baseContent : undefined };
 }
 
-export const projectDraftKey = (source: string, work: string | null | undefined, path: string) => `project-draft:${JSON.stringify([source, work ?? null, path])}`;
+export const projectDraftKey = (source: string, work: string | null | undefined, path: string, candidate?: string | null) => `project-draft:${JSON.stringify(candidate ? [source, work ?? null, path, candidate] : [source, work ?? null, path])}`;
 export const workDraftKey = (id: string, path: string) => `work-draft:${JSON.stringify([id, path])}`;

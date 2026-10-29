@@ -20,3 +20,11 @@ it('실시간 이벤트 누락 시 주기 조회로 복구하고 해제 후 조�
   await act(async () => { await vi.advanceTimersByTimeAsync(5000); }); expect(update).toHaveBeenCalledTimes(1);
   unmount(); await vi.advanceTimersByTimeAsync(10000); expect(update).toHaveBeenCalledTimes(1);
 });
+it('숨긴 화면의 fallback만 멈추고 SSE 이벤트와 활성 복귀 후 조회를 유지한다', async () => {
+  vi.useFakeTimers();
+  class Stream { static current: Stream; callbacks: Record<string, () => void> = {}; constructor() { Stream.current = this; } addEventListener(name: string, callback: () => void) { this.callbacks[name] = callback; } close() {} }
+  vi.stubGlobal('EventSource', Stream); const update = vi.fn(); const view = renderHook(({ active }) => useSSE(update, active), { initialProps: { active: false } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(15000); }); expect(update).not.toHaveBeenCalled();
+  act(() => Stream.current.callbacks.update()); expect(update).toHaveBeenCalledTimes(1);
+  view.rerender({ active: true }); await act(async () => { await vi.advanceTimersByTimeAsync(5000); }); expect(update).toHaveBeenCalledTimes(2);
+});

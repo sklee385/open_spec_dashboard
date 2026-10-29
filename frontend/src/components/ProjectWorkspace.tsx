@@ -5,17 +5,18 @@ import { useProjectWorkspace } from '../hooks/useProjectWorkspace';
 import type { GitEntry, ProjectEntry } from '../types/project';
 import { FileDiff } from './FileDiff';
 import './ProjectWorkspace.css';
+import { CandidateEditing } from './CandidateEditing';
 
 export type ProjectWorkScope = { id: string; sourceId: string; changeName: string; title?: string; executionPath?: string; phase: string };
-export type ProjectWorkspaceProps = { sourceId: string | null; active?: boolean; onOpenWork?: () => void; onDirtyChange?: (dirty: boolean) => void; registerNavigationGuard?: (guard: () => Promise<boolean>) => void; workspaces?: ProjectWorkScope[]; workId?: string | null; onWorkScopeChange?: (id: string | null) => void };
+export type ProjectWorkspaceProps = { sourceId: string | null; active?: boolean; onOpenWork?: () => void; onDirtyChange?: (dirty: boolean) => void; registerNavigationGuard?: (guard: () => Promise<boolean>) => void; workspaces?: ProjectWorkScope[]; workId?: string | null; candidateId?: string | null; onWorkScopeChange?: (id: string | null) => void };
 type Management = 'file' | 'directory' | 'move' | 'delete';
 export function ProjectWorkspace(props: ProjectWorkspaceProps) {
-  return <ProjectWorkspaceContent key={JSON.stringify([props.sourceId, props.workId ?? null])} {...props} />;
+  return <ProjectWorkspaceContent key={JSON.stringify(props.candidateId ? [props.sourceId, props.workId ?? null, props.candidateId] : [props.sourceId, props.workId ?? null])} {...props} />;
 }
-function ProjectWorkspaceContent({ sourceId, active = true, onOpenWork, onDirtyChange, registerNavigationGuard, workspaces = [], workId = null, onWorkScopeChange }: ProjectWorkspaceProps) {
+function ProjectWorkspaceContent({ sourceId, active = true, onOpenWork, onDirtyChange, registerNavigationGuard, workspaces = [], workId = null, candidateId = null, onWorkScopeChange }: ProjectWorkspaceProps) {
   const { locale } = useI18n();
   const t = (key: keyof typeof enProjectCopy) => (locale === 'ko' ? koProjectCopy : enProjectCopy)[key];
-  const w = useProjectWorkspace(sourceId, active, workId);
+  const w = useProjectWorkspace(sourceId, active, workId, candidateId);
   const [panel, setPanel] = useState('file'), [selected, setSelected] = useState<ProjectEntry | null>(null), [management, setManagement] = useState<Management | null>(null), [path, setPath] = useState('');
   const [message, setMessage] = useState(''), [branch, setBranch] = useState(''), [remote, setRemote] = useState(''), [confirmation, setConfirmation] = useState<'push' | null>(null);
   const [leave, setLeave] = useState(false), [copied, setCopied] = useState(false);
@@ -45,7 +46,7 @@ function ProjectWorkspaceContent({ sourceId, active = true, onOpenWork, onDirtyC
   const status = w.status, entries = status?.entries ?? [];
   const locked = w.busy || w.operation?.status === 'running' || (w.operation?.status === 'uncertain' && !w.operation.reviewedAt);
   const cleanupRequired = !!status?.progress || entries.some(e => e.conflicted);
-  const gitLocked = locked || !!status?.blocked || cleanupRequired;
+  const gitLocked = locked || !!status?.blocked || cleanupRequired || !!candidateId || !!w.workspace?.gitReadOnly;
   const clean = !w.dirty && entries.length === 0 && !status?.hiddenChanges && !status?.progress;
   const staged = entries.filter(e => !e.conflicted && !e.untracked && !!e.index?.trim() && e.index !== '.');
   const unstaged = entries.filter(e => !e.conflicted && !e.untracked && !!e.worktree?.trim() && e.worktree !== '.');
@@ -63,6 +64,7 @@ function ProjectWorkspaceContent({ sourceId, active = true, onOpenWork, onDirtyC
       <dl><div><dt>{t('project.workspaceKind')}</dt><dd>{t(`project.kind.${w.workspace.kind}`)}</dd></div><div><dt>{t('project.executionPath')}</dt><dd>{w.workspace.executionPath}</dd></div><div><dt>{t('project.branch')}</dt><dd>{w.workspace.branch ?? t('project.unknown')}</dd></div>
         {w.workspace.kind === 'original' ? <div><dt>HEAD</dt><dd>{w.workspace.head ?? t('project.unknown')}</dd></div> : <><div><dt>{t('project.startingCommit')}</dt><dd>{w.workspace.baseCommit ?? t(w.workspace.kind === 'copy' ? 'project.snapshotBaseline' : 'project.unknown')}</dd></div><div><dt>{t('project.workspaceBaseline')}</dt><dd>{w.workspace.workspaceBaselineCommit ?? t(w.workspace.kind === 'copy' ? 'project.snapshotBaseline' : 'project.unknown')}</dd></div></>}
       </dl>
+      {w.workspace.partialReason && <p role="alert">{w.workspace.partialReason}</p>}
       {w.workspace.partial && <p role="alert">{t('project.overlapPartial')}</p>}
       <details open={w.workspace.overlaps.length > 0}><summary>{t('project.overlaps')} ({new Set(w.workspace.overlaps.flatMap(overlap => overlap.paths)).size})</summary><p>{t('project.overlapAdvisory')}</p>{w.workspace.overlaps.map(overlap => <div key={overlap.workId ?? 'original'}><strong>{overlap.workId ? overlap.title : t('project.originalScope')}</strong><ul>{overlap.paths.map(path => <li key={path}>{path}</li>)}</ul></div>)}{!w.workspace.partial && !w.workspace.overlaps.length && <p>{t('project.noOverlaps')}</p>}</details>
     </div>}
@@ -90,7 +92,7 @@ function ProjectWorkspaceContent({ sourceId, active = true, onOpenWork, onDirtyC
           {w.latest && <section className="project-conflict"><h3>{t('project.latest')}</h3><FileDiff path={w.file.path} before={w.latest.content} after={w.draft} /><pre>{w.latest.content}</pre><button onClick={() => void navigate(() => w.openFile(w.file!.path))}>{t('project.reload')}</button></section>}
         </> : <p>{t('project.pick')}</p>}
       </main>
-      <aside className="project-git" data-active={panel === 'git'} aria-label={t('project.git')}>
+      <aside className="project-git" data-active={panel === 'git'} aria-label={t('project.git')}>{candidateId && workId && <CandidateEditing workId={workId} candidateId={candidateId} dirty={w.dirty} onChanged={() => { void w.refresh(); void w.loadTree(); }} />}
         {!status ? <p>{t('project.loading')}</p> : !status.available ? <p>{status.reason}</p> : <>
           <h3>{t('project.branch')}: {status.branch ?? t('project.detached')}</h3><small>{status.head} · {status.upstream ?? t('project.noUpstream')} · ↑{status.ahead} ↓{status.behind}</small>
           {w.operation && <div role="status" className="project-operation">{t(`project.operation.${w.operation.status}`)} {w.operation.id}{w.operation.error && <p>{w.operation.error}</p>}{w.operation.status === 'uncertain' && <><p>{t('project.uncertain')}</p><button disabled={w.busy} onClick={() => void w.reconcile()}>{t('project.reconcile')}</button>{w.operation.evidence != null && <details open><summary>{t('project.evidence')}</summary><pre>{JSON.stringify(w.operation.evidence, null, 2)}</pre></details>}</>}</div>}

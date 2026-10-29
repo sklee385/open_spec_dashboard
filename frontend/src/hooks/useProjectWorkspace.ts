@@ -1,3 +1,4 @@
+import { flowGet } from '../lib/workspaceFlowApi';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { projectApi as unscopedProjectApi, ProjectApiError, projectQuery } from '../lib/projectApi';
 import type { GitStatus, GitOperation, GitDetail, GitDiff, OperationKind, ProjectEntry, ProjectFile, ProjectPage, GitCommit, GitReconciliation, ProjectWorkspaceMetadata } from '../types/project';
@@ -10,13 +11,13 @@ function persistOperation(resourceKey: string, value: GitOperation) {
   localStorage.setItem(`project-operation-record:${resourceKey}`, JSON.stringify(value));
 }
 
-export function useProjectWorkspace(sourceId: string | null, active = true, workId?: string | null) {
+export function useProjectWorkspace(sourceId: string | null, active = true, workId?: string | null, candidateId?: string | null) {
   const { t } = useI18n();
   const [draftNotice, setDraftNotice] = useState(''), [draftError, setDraftError] = useState('');
   const [workspace, setWorkspace] = useState<ProjectWorkspaceMetadata | null>(null), [workspaceUnavailable, setWorkspaceUnavailable] = useState(false);
-  const resourceKey = workId ? JSON.stringify([sourceId, workId]) : sourceId ?? '';
-  const viewKey = `project-view:${JSON.stringify([sourceId, workId ?? null])}`;
-  const projectApi = useCallback(<T>(id: string, endpoint: string, body?: unknown, method = 'POST') => unscopedProjectApi<T>(id, endpoint, body, method, workId), [workId]);
+  const resourceKey = candidateId ? JSON.stringify([sourceId, workId, candidateId]) : workId ? JSON.stringify([sourceId, workId]) : sourceId ?? '';
+  const viewKey = `project-view:${JSON.stringify(candidateId ? [sourceId, workId ?? null, candidateId] : [sourceId, workId ?? null])}`;
+  const projectApi = useCallback(<T>(id: string, endpoint: string, body?: unknown, method = 'POST') => unscopedProjectApi<T>(id, endpoint, body, method, workId, candidateId), [workId, candidateId]);
   const generation = useRef(0), source = useRef(sourceId), busyRef = useRef(false), fileRequest = useRef(0), treeRequest = useRef(0), statusInFlight = useRef<string | null>(null);
   const treeRequests = useRef(new Map<string, number>());
   const treeOptions = useRef(0);
@@ -29,7 +30,7 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
   const [detail, setDetail] = useState<GitDetail | null>(null), [diff, setDiff] = useState<GitDiff | null>(null), [historical, setHistorical] = useState<{ path: string; content: string | null; base?: string; reason?: string } | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [operation, setOperation] = useState<GitOperation | null>(null);
   const dirty = file !== null && (draft !== (file.content ?? '').replace(/\r\n?/g, '\n') || !!latest);
-  const persistence = useLocalDraft(sourceId && file ? projectDraftKey(sourceId, workId, file.path) : null, { content: draft, version: file?.version, baseContent: file?.content }, dirty, () => setDraftError(t('draft.failed')));
+  const persistence = useLocalDraft(sourceId && file ? projectDraftKey(sourceId, workId, file.path, candidateId) : null, { content: draft, version: file?.version, baseContent: file?.content }, dirty, () => setDraftError(t('draft.failed')));
   const fileView = useRef({ file, dirty, sourceId });
   useEffect(() => { fileView.current = { file, dirty, sourceId }; }, [file, dirty, sourceId]);
   const valid = useCallback((id: string, gen: number) => source.current === id && generation.current === gen, []);
@@ -52,7 +53,7 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     try {
       const [metadata, git] = await Promise.allSettled([projectApi<ProjectWorkspaceMetadata>(sourceId, '/workspace'), projectApi<GitStatus>(sourceId, '/git/status')]);
       if (valid(sourceId, gen)) {
-        const available = metadata.status === 'fulfilled' && ['original', 'copy', 'git-worktree'].includes(metadata.value.kind);
+        const available = metadata.status === 'fulfilled' && ['original', 'copy', 'git-worktree', 'integration-candidate'].includes(metadata.value.kind);
         setWorkspace(available && metadata.status === 'fulfilled' ? metadata.value : null); setWorkspaceUnavailable(metadata.status === 'rejected');
       }
       if (git.status === 'rejected') throw git.reason;
@@ -96,10 +97,10 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     void loadHistory();
     // Source identity owns this reset; other requests independently track their generation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceId, workId]);
+  }, [sourceId, workId, candidateId]);
   // Tree options synchronize the external directory resource from its root.
   // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
-  useEffect(() => { treeOptions.current++; setTreePages({}); void loadTree(''); }, [sourceId, workId, query, hidden]);
+  useEffect(() => { treeOptions.current++; setTreePages({}); void loadTree(''); }, [sourceId, workId, candidateId, query, hidden]);
   useEffect(() => {
     if (!active || !sourceId) return; let stopped = false; let timer: ReturnType<typeof setTimeout>;
     const poll = async () => { await refresh(); if (!stopped) await loadTree(directory, undefined, false); if (!stopped) timer = setTimeout(poll, 5000); };
@@ -116,7 +117,7 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     if (!sourceId) return; const gen = generation.current, request = ++fileRequest.current; setError('');
     try { const value = await projectApi<ProjectFile>(sourceId, `/file${projectQuery({ path })}`); if (valid(sourceId, gen) && request === fileRequest.current) {
       let restored: ReturnType<typeof readDocumentDraft> = null;
-      try { restored = readDocumentDraft(projectDraftKey(sourceId, workId, path)); } catch { setDraftError(t('draft.readFailed')); }
+      try { restored = readDocumentDraft(projectDraftKey(sourceId, workId, path, candidateId)); } catch { setDraftError(t('draft.readFailed')); }
       setFile(restored ? { ...value, version: restored.version, content: restored.baseContent ?? (restored.version === value.version ? value.content : '') } : value);
       setDraft(restored ? restored.content : (value.content ?? '').replace(/\r\n?/g, '\n')); setEditing(!!restored);
       setLatest(restored && restored.version !== value.version ? value : null);
@@ -128,11 +129,13 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     if (!sourceId) return;
     try {
       const saved = JSON.parse(draftStorage.getItem(viewKey) ?? 'null');
+      // Restore the persisted external document view for this resource.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (typeof saved?.path === 'string' && saved.path) void openFile(saved.path);
     } catch { setDraftError(t('draft.readFailed')); }
     // The resource identity alone owns restoration; openFile rejects stale requests.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceId, workId, viewKey]);
+  }, [sourceId, workId, candidateId, viewKey]);
   const save = async () => {
     if (!sourceId || !file || busyRef.current) return false;
     const gen = generation.current; busyRef.current = true; setBusy(true); setError('');
@@ -140,17 +143,26 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     const separators = file.content?.match(/\r\n|\r|\n/g) ?? [];
     let line = 0;
     const content = newline === 'crlf' || file.newline === '\r\n' ? draft.replace(/\r?\n/g, '\r\n') : newline === 'mixed' ? draft.replace(/\n/g, () => separators[line++] ?? '\n') : draft;
-    try { const result = await projectApi<ProjectFile>(sourceId, '/file', { path: file.path, content, version: file.version }, 'PUT'); if (!valid(sourceId, gen)) return false; persistence.cancel(); try { draftStorage.removeItem(projectDraftKey(sourceId, workId, file.path)); } catch { setDraftError(t('draft.failed')); } setDraftNotice(''); setFile({ ...file, ...result, content }); setLatest(null); void refresh(); void loadTree(); return true; }
+    try { const result = await projectApi<ProjectFile>(sourceId, '/file', { path: file.path, content, version: file.version, ...(candidateId ? { candidateVersion: file.candidateVersion } : {}) }, 'PUT'); if (!valid(sourceId, gen)) return false; persistence.cancel(); try { draftStorage.removeItem(projectDraftKey(sourceId, workId, file.path, candidateId)); } catch { setDraftError(t('draft.failed')); } setDraftNotice(''); setFile({ ...file, ...result, content }); setLatest(null); void refresh(); void loadTree(); return true; }
     catch (err) { if (valid(sourceId, gen)) { report(err); if (err instanceof ProjectApiError && err.status === 409) { const current = err.data.latest ?? err.data.current; if (current && typeof current === 'object') setLatest(current as ProjectFile); } } return false; }
     finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } }
   };
-  const discard = () => { if (sourceId && file) { try { draftStorage.removeItem(projectDraftKey(sourceId, workId, file.path)); } catch { setDraftError(t('draft.failed')); return false; } } persistence.cancel(); setDraftNotice(''); if (latest) setFile(latest); setDraft((latest?.content ?? file?.content ?? '').replace(/\r\n?/g, '\n')); setEditing(false); setLatest(null); return true; };
+  const discard = () => { if (sourceId && file) { try { draftStorage.removeItem(projectDraftKey(sourceId, workId, file.path, candidateId)); } catch { setDraftError(t('draft.failed')); return false; } } persistence.cancel(); setDraftNotice(''); if (latest) setFile(latest); setDraft((latest?.content ?? file?.content ?? '').replace(/\r\n?/g, '\n')); setEditing(false); setLatest(null); return true; };
   const mutate = async (endpoint: string, body: unknown, method = 'POST') => {
     if (!sourceId || busyRef.current) return false; const gen = generation.current; busyRef.current = true; setBusy(true); setError('');
-    try { await projectApi(sourceId, endpoint, body, method); if (!valid(sourceId, gen)) return false; if (endpoint === '/entries/move') { setTreePages({}); void loadTree(''); } else void loadTree(); void refresh(); return true; } catch (err) { if (valid(sourceId, gen)) report(err); return false; } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } }
+    try {
+      let payload = body;
+      if (candidateId && body && typeof body === 'object') {
+        const candidateVersion = 'candidateVersion' in body ? body.candidateVersion : endpoint === '/entries' ? (await flowGet<{ candidateVersion: string }>(`/api/work/${encodeURIComponent(workId!)}/integration/${encodeURIComponent(candidateId)}/edit/preview`)).candidateVersion : file?.candidateVersion;
+        if (!candidateVersion) throw new Error('Candidate version unavailable; refresh the file or parent directory');
+        payload = { ...body, candidateVersion };
+      }
+      if (!valid(sourceId, gen)) return false;
+      await projectApi(sourceId, endpoint, payload, method); if (!valid(sourceId, gen)) return false; if (endpoint === '/entries/move') { setTreePages({}); void loadTree(''); } else void loadTree(); void refresh(); return true;
+    } catch (err) { if (valid(sourceId, gen)) report(err); return false; } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } }
   };
   const run = async (kind: OperationKind, args: Record<string, unknown> = {}) => {
-    if (!sourceId || !status || busyRef.current || operation?.status === 'running' || (operation?.status === 'uncertain' && !operation.reviewedAt)) return;
+    if (candidateId || workspace?.gitReadOnly || !sourceId || !status || busyRef.current || operation?.status === 'running' || (operation?.status === 'uncertain' && !operation.reviewedAt)) return;
     const gen = generation.current; busyRef.current = true; setBusy(true); setError(''); const requestKey = crypto.randomUUID();
     try { persistOperation(resourceKey, { id: requestKey, kind, status: 'uncertain' }); const value = await projectApi<GitOperation>(sourceId, '/git/operations', { kind, ...args, token: status.token, requestKey }); if (!valid(sourceId, gen)) return; setOperation(value); persistOperation(resourceKey, value); void refresh(); void loadTree(); void loadHistory(); if (kind === 'commit' && value.status === 'succeeded' && (value.result?.hash || value.head)) void openDetail(value.result?.hash || value.head!); }
     catch (err) { if (valid(sourceId, gen)) { report(err); if (!(err instanceof ProjectApiError) || err.status >= 500 || err.status === 408) { const uncertain: GitOperation = { id: requestKey, kind, status: 'uncertain' }; setOperation(uncertain); persistOperation(resourceKey, uncertain); } else { localStorage.removeItem(`project-operation:${resourceKey}`); localStorage.removeItem(`project-operation-record:${resourceKey}`); } void refresh(); } }
@@ -162,9 +174,9 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
   const moveEntry = async (entry: ProjectEntry, target: string) => {
     if (!sourceId || busyRef.current) return false; const gen = generation.current;
     try {
-      const identity = entry.version ? entry : await projectApi<ProjectEntry>(sourceId, `/entry${projectQuery({ path: entry.path })}`);
+      const identity = entry.version && (!candidateId || entry.candidateVersion) ? entry : await projectApi<ProjectEntry>(sourceId, `/entry${projectQuery({ path: entry.path })}`);
       if (!valid(sourceId, gen)) return false;
-      return await mutate('/entries/move', { path: entry.path, target, version: identity.version });
+      return await mutate('/entries/move', { path: entry.path, target, version: identity.version, ...(candidateId ? { candidateVersion: identity.candidateVersion } : {}) });
     } catch (err) { if (valid(sourceId, gen)) report(err); return false; }
   };
   const reconcile = async () => { if (!sourceId || !operation || busyRef.current) return; const gen = generation.current; busyRef.current = true; setBusy(true); try { const response = await projectApi<GitReconciliation>(sourceId, `/git/operations/${encodeURIComponent(operation.id)}/reconcile`, { confirmed: true }); if (valid(sourceId, gen)) { const value = { ...response.operation, evidence: response.evidence }; setOperation(value); setStatus(response.status); persistOperation(resourceKey, value); } } catch (err) { if (valid(sourceId, gen)) report(err); } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } } };

@@ -3,8 +3,9 @@ export class ProjectApiError extends Error {
   data: Record<string, unknown>;
   constructor(status: number, data: Record<string, unknown>) { super(String(data.error ?? data.message ?? status)); this.status = status; this.data = data; }
 }
-export async function projectApi<T>(sourceId: string, endpoint: string, body?: unknown, method = 'POST', workId?: string | null): Promise<T> {
-  const scope = workId ? `${endpoint.includes('?') ? '&' : '?'}${new URLSearchParams({ workId })}` : '';
+export async function projectApi<T>(sourceId: string, endpoint: string, body?: unknown, method = 'POST', workId?: string | null, candidateId?: string | null): Promise<T> {
+  if (candidateId && !workId) throw new Error('Candidate requires work scope');
+  const scope = workId ? `${endpoint.includes('?') ? '&' : '?'}${new URLSearchParams({ workId, ...(candidateId ? { candidateId } : {}) })}` : '';
   const response = await fetch(`/api/projects/${encodeURIComponent(sourceId)}${endpoint}${scope}`, body === undefined ? undefined : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await response.json();
   if (!response.ok) throw new ProjectApiError(response.status, data);

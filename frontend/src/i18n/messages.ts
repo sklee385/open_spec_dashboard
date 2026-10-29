@@ -1,3 +1,4 @@
+import { enFlowCopy, koFlowCopy } from './flowMessages';
 import { intlLocale, type Locale } from './locale';
 import { enTestCopy, koTestCopy } from './testMessages';
 import { enCopy, koCopy } from './catalog';
@@ -9,6 +10,7 @@ import { enBrowserCopy, koBrowserCopy } from './browserMessages';
 import { enWorkspaceCopy, koWorkspaceCopy } from './workspaceMessages';
 
 const en = {
+  ...enFlowCopy,
   ...enWorkspaceCopy,
   ...enBrowserCopy,
   ...enTestCopy,
@@ -62,6 +64,7 @@ type MessageArgs<K extends keyof typeof en> = (typeof en)[K] extends (args: infe
 export type MessageKey = keyof typeof en;
 type Dictionary = { [K in MessageKey]: (typeof en)[K] extends string ? string : (typeof en)[K] };
 const ko: Dictionary = {
+  ...koFlowCopy,
   ...koWorkspaceCopy,
   ...koBrowserCopy,
   ...koTestCopy,
