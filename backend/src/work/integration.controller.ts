@@ -9,11 +9,14 @@ import { IntegrationEditing } from './integration-editing';
 import { MutationAdmission } from './mutation-admission';
 import { createHash } from 'node:crypto';
 import { IntegrationVerification } from './integration-verification';
+import { IntegrationApplyPreflight } from './integration-apply-preflight';
 @Controller('work/:id/integration')
 export class IntegrationController {
   private results: WorktreeResultCommit;
   private candidates: IntegrationPreparation;
-  constructor(@Inject(WorkService) private works: WorkService, @Inject(IntegrationService) private integration: IntegrationService, @Inject(DesktopLifecycle) lifecycle: DesktopLifecycle, @Inject(WorkspaceSettingsService) settings: WorkspaceSettingsService, @Inject(IntegrationEditing) private editing: IntegrationEditing, @Inject(IntegrationVerification) private verification: IntegrationVerification) { this.results = new WorktreeResultCommit(works.store, works, lifecycle); this.candidates = new IntegrationPreparation(works.store, works, settings, lifecycle); }
+  constructor(@Inject(WorkService) private works: WorkService, @Inject(IntegrationService) private integration: IntegrationService, @Inject(DesktopLifecycle) lifecycle: DesktopLifecycle, @Inject(WorkspaceSettingsService) settings: WorkspaceSettingsService, @Inject(IntegrationEditing) private editing: IntegrationEditing, @Inject(IntegrationVerification) private verification: IntegrationVerification, @Inject(IntegrationApplyPreflight) private preflight: IntegrationApplyPreflight) { this.results = new WorktreeResultCommit(works.store, works, lifecycle); this.candidates = new IntegrationPreparation(works.store, works, settings, lifecycle); }
+  @Get(':candidateId/apply/preview') applyPreview(@Param('id') id: string, @Param('candidateId') candidateId: string, @Query() query: Record<string, unknown>) { if (Object.keys(query).length) throw new BadRequestException('사전검사는 경로·명령 인자를 받지 않습니다'); return this.preflight.preview(id, candidateId); }
+  @Post(':candidateId/apply/preflight') @HttpCode(200) applyPreflight(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.preflight.confirm(id, candidateId, body); }
   @Get(':candidateId/verification/preview') verificationPreview(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.verification.preview(id, candidateId); }
   @Get(':candidateId/verification/results') verificationResults(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.verification.results(id, candidateId); }
   @Get(':candidateId/verification/status') verificationStatus(@Param('id') id: string, @Param('candidateId') candidateId: string) { return this.verification.results(id, candidateId); }

@@ -173,6 +173,17 @@ export class IntegrationVerification {
     const status = this.render(captured.work, captured.request, captured.version, undefined, captured.checkPublication);
     return { ...status, candidateVersion: captured.version, commands: captured.commands, results: status.runs, executionPath: captured.request.executionPath, basis: captured.basis };
   }
+  /** Fresh, read-only evidence for final integration checks. Never publishes ready/stale state. */
+  async captureReadyProof(workId: string, candidateId: string) {
+    const captured = await this.capture(workId, candidateId, true), records = this.rows(workId, candidateId), latest = records.at(-1);
+    if (captured.work.browserScenario || !latest || latest.status !== 'passed' || latest.processTerminated !== true || latest.candidateVersion !== captured.version || records.some(row => row.status === 'running' || row.processTerminated !== true)) throw new ConflictException('최신 후보의 필수 검증 통과 근거가 필요합니다');
+    const recordsVersion = hash(records);
+    const assertUnchanged = () => {
+      if (!captured.checkPublication() || hash(this.rows(workId, candidateId)) !== recordsVersion) throw new ConflictException('후보 또는 필수 검증 기준이 변경되었습니다');
+    };
+    assertUnchanged();
+    return { ...captured, verificationRefs: [latest.id as string], recordsVersion, assertUnchanged };
+  }
   private parse(body: any): RunInput {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['requestKey', 'confirmed', 'candidateVersion'].includes(key)) || typeof body.requestKey !== 'string' || !/^[a-zA-Z0-9:_-]{1,160}$/.test(body.requestKey) || body.confirmed !== true || typeof body.candidateVersion !== 'string' || !/^[a-f0-9]{64}$/.test(body.candidateVersion)) throw new BadRequestException('요청 키·후보 버전·명시 확인이 필요합니다');
     return { requestKey: body.requestKey, confirmed: true, candidateVersion: body.candidateVersion };

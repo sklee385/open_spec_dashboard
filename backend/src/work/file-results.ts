@@ -77,15 +77,21 @@ export class FileResults {
     const files = collectFiles(root, work.workspace ? path => workspaceExcluded(work, path) : undefined, !!work.workspace);
     if (work.workspace?.kind === 'git-worktree') {
       const modes = new Map<string, string>();
-      for (const entry of readGitSync(root, ['ls-files', '--stage', '-z']).split('\0')) {
+      const index = readGitSync(root, ['-c', 'core.fsmonitor=false', 'ls-files', '--stage', '-z']);
+      for (const entry of index.split('\0')) {
         const match = /^(\d{6}) [a-f0-9]+ (\d)\t([\s\S]+)$/.exec(entry);
         if (!match) continue;
         if (!workspaceExcluded(work, match[3]) && (match[2] !== '0' || !['100644', '100755'].includes(match[1]))) throw new ConflictException('미병합 index 또는 지원하지 않는 Git 파일 형식입니다. 경계를 확인해 주세요.');
         modes.set(match[3], match[1]);
       }
-      const changed = readGitSync(root, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--raw', '-z', work.workspace.workspaceBaselineCommit!, '--']).split('\0');
-      for (let index = 0; index < changed.length; index++) { const match = /^:\d{6} (\d{6}) /.exec(changed[index]); if (match) modes.set(changed[++index], match[1]); }
-      for (const [path, file] of Object.entries(files)) file.mode = modes.get(path) ?? (lstatSync(join(root, path)).mode & 0o111 ? '100755' : '100644');
+      // Only mode is needed here. Git diff can execute clean filters while reading
+      // worktree bytes, even with external diff/textconv disabled.
+      const filemode = readGitSync(root, ['-c', 'core.fsmonitor=false', 'config', '--bool', '--default=true', '--get', 'core.filemode']).trim() !== 'false';
+      for (const [path, file] of Object.entries(files)) {
+        const diskMode = lstatSync(join(root, path)).mode & 0o111 ? '100755' : '100644';
+        file.mode = filemode ? diskMode : modes.get(path) ?? diskMode;
+      }
+      if (readGitSync(root, ['-c', 'core.fsmonitor=false', 'ls-files', '--stage', '-z']) !== index) throw new ConflictException('업무 Git 결과 수집 중 index 또는 mode가 변경되었습니다. 다시 조회해 주세요.');
     }
     return files;
   }

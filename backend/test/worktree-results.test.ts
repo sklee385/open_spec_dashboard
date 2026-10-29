@@ -66,10 +66,10 @@ it('수집 중 내용이 같고 MM 상태가 유지돼도 mode가 달라지면 �
   const original = gitRunner.readGitSync; let snapshots = 0;
   const spy = vi.spyOn(gitRunner, 'readGitSync').mockImplementation((root, args) => {
     const result = original(root, args);
-    if (root === a.executionPath && args[0] === 'ls-files' && args.includes('--stage') && ++snapshots === 2) git(root, 'update-index', '--chmod=-x', '--', 'code.txt');
+    if (root === a.executionPath && args.includes('ls-files') && args.includes('--stage') && ++snapshots === 2) git(root, 'update-index', '--chmod=-x', '--', 'code.txt');
     return result;
   });
-  try { expect(new FileResults(store).report(a)).toMatchObject({ source: 'unavailable', error: expect.stringContaining('수집 중') }); }
+  try { expect(new FileResults(store).report(a)).toMatchObject({ source: 'unavailable', error: expect.stringContaining('수집 중') }); expect(snapshots).toBeGreaterThanOrEqual(2); }
   finally { spy.mockRestore(); }
 });
 it('로컬 준비 목록은 소스 본문·Git diff/status 응답에서도 제외한다', async () => {

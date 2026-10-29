@@ -52,7 +52,7 @@ export class IntegrationEditing {
   private plan(request: IntegrationRequest): OperationRequest {
     return { kind: 'management', root: request.executionPath, commonDir: request.commonDir, spaces: [request.executionPath, request.workExecutionPath], refs: [`refs/heads/${candidateBranch(request)}`, `refs/heads/${request.targetBranch}`, `refs/heads/${this.works.get(request.workId).workspace?.branch}`] };
   }
-  private async attributes(request: IntegrationRequest, paths: string[]) {
+  private async attributes(request: Pick<IntegrationRequest, 'executionPath'>, paths: string[]) {
     const values = new Map<string, Record<string, string>>();
     for (let offset = 0; offset < paths.length;) {
       const batch: string[] = []; let size = 0;
@@ -68,11 +68,15 @@ export class IntegrationEditing {
   }
   async assertGitRead(sourceId: string, workId: string, candidateId: string) {
     const selected = this.resolver.resolve(sourceId, workId, candidateId), request = selected.candidate!;
-    try {
-      const paths = [...new Set((await this.run(selected.root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])).toString().split('\0').filter(Boolean))];
-      await this.attributes(request, paths);
-    } catch (error) { if (error instanceof GitError) throw new CandidateGitReadBlocked('후보 Git 속성 검사를 확인할 수 없어 변환을 실행하지 않습니다'); throw error; }
+    await this.assertRootGitRead(selected.root);
     if (hash(this.resolver.resolve(sourceId, workId, candidateId).candidate) !== hash(request)) throw new ConflictException('후보 Git 조회 중 소유 상태가 변경되었습니다');
+  }
+  /** The caller must first pin and verify ownership of this root. No status/clean conversion precedes this guard. */
+  async assertRootGitRead(root: string) {
+    try {
+      const paths = [...new Set((await this.run(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])).toString().split('\0').filter(Boolean))];
+      await this.attributes({ executionPath: root }, paths);
+    } catch (error) { if (error instanceof GitError) throw new CandidateGitReadBlocked('후보 Git 속성 검사를 확인할 수 없어 변환을 실행하지 않습니다'); throw error; }
   }
   private async state(workId: string, candidateId: string, gitChecks = false, proof?: EditingBasisProof) {
     const { request, work } = this.request(workId, candidateId), root = request.executionPath;

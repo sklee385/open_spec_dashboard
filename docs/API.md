@@ -204,3 +204,9 @@ Git 업무의 계획 버전은 기존 검토 hash를 보존하면서 가져온 .
 프로세스는 대기 worker를 소유 Job에 넣은 뒤 명령을 전달한다. worker 시작 환경에서 Node preload 옵션을 제거하여 보호 준비 전에 후보 코드를 실행하지 않는다. 확인된 소유 종료와 결과 저장을 마치기 전 점유를 풀지 않는다. 종료는 확인됐으나 기록 저장이 실패한 경우에도 동일 live owner의 실제 종료 증거를 명시 복구로 영속화한 뒤에만 점유를 해제한다. 재시작으로 근거를 잃은 종료 불명 실행은 PID나 시간 경과만으로 해제하지 않는다.
 
 CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우저 검증이 있으면 업무의 브라우저 통과로 대체할 수 없으며, 후보 전용 브라우저·환경·빌드 출처 검증을 연결하기 전에는 `ready`로 게시하지 않는다. npm 의존성 준비와 바이너리/빌드 출처의 실제 패키지 검증은 후속 환경·결합 검증 범위다.
+
+### 원본 반영 사전 검사 (개발·검증 중)
+
+`GET /api/work/:id/integration/:candidateId/apply/preview`는 최신 후보 검증과 원본 상태를 확인하여 `{candidateId, preflightPassed:true, applied:false, expectedVersion}`을 반환한다. `POST .../apply/preflight`는 `{confirmed:true, expectedVersion}`을 받아 같은 검사를 다시 수행한다. 기준이 바뀌면 409로 거부하며, 이 두 API는 실제 반영·적용 의도 예약·업무 완료를 수행하지 않는다.
+
+원본의 대상 브랜치와 HEAD, 전체 index·추적 파일·미추적 파일·assume-unchanged/skip-worktree, 진행 중인 Git 작업과 lock, worktree 등록 및 다른 공간의 대상 브랜치 checkout을 검사한다. 후보 CLI와 필수 브라우저 검증 근거도 현재 후보·계획·실행 환경에 맞아야 한다. 비겹침 파일의 변경도 자동 정리하지 않고 거부한다. 이 개발 단계의 검사는 배포 완료나 원본 반영 기능의 완성을 뜻하지 않는다.
