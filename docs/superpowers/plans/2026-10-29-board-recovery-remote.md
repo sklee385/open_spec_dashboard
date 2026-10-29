@@ -47,8 +47,8 @@ Files: package.json, package-lock.json, docs/DESKTOP.md, docs/PORTABLE.md, relea
 - [x] 구현을 설계와 대조하고 별도 코드 리뷰로 실행 종료 증거·오래된 알림·중복 명령·인증을 확인한다.
 - [x] 모든 backend/frontend/desktop 테스트와 빌드를 실행한다. Codex 내장 브라우저로 격리 fixture 업무 UI를 확인한다. 운영 13003 서버를 재시작하지 않는다.
 - [x] 포터블 패키지에 CLI와 신규 모듈이 포함되는지 확인하고 버전을 0.1.14으로 올린다.
-- [ ] 이번 변경 파일만 상세 한국어 메시지로 커밋하고 push/tag한다. 기존 사용자 OpenSpec 문서 변경은 제외한다.
-- [ ] GitHub 릴리스 빌드·패키지 검증·게시 성공과 업데이트 manifest를 확인한다. 실제 모바일 검증이 불가능하면 명확히 보고한다.
+- [x] 이번 변경 파일만 상세 한국어 메시지로 커밋하고 push/tag한다. 기존 사용자 OpenSpec 문서 변경은 제외한다.
+- [x] GitHub 릴리스 빌드·패키지 검증·게시 성공과 업데이트 manifest를 확인한다. 실제 모바일 검증이 불가능하면 명확히 보고한다.
 
 ## 검증 기록
 
@@ -57,3 +57,13 @@ Files: package.json, package-lock.json, docs/DESKTOP.md, docs/PORTABLE.md, relea
 Codex 내장 브라우저에서 별도 fixture 업무의 외부 점유 오류 → 새 세션 준비 완료와 모바일 연결 안내를 확인했다. 설치된 Codex 바이너리와 실제 CodexService로 별도 CODEX_HOME의 합성 완료 대화를 복구하여 새 대화 ID·동일 작업 폴더·인계 자료 보존·동일 요청 중복 방지·자동 turn 미실행을 확인했다. 사용자 인증을 복사하거나 실제 대화를 변경하지 않았다. 실제 휴대전화 페어링 및 모바일 왕복은 검증하지 않았다.
 
 추가 native 호환성 검사에서 첫 턴이 없는 새 대화는 저장 확정 전 연결이 종료되면 재개할 수 없음을 확인했다. v0.1.13 배포는 게시 전에 취소했으며 태그와 실행 이력을 보존했다. v0.1.14는 대화 이름 저장 API로 모델 실행 없이 대화를 영속화하고, 실제 서비스 종료·재생성 후 동일 새 세션 재개를 확인했다. 이름 저장 실패는 생성 ID와 uncertain 상태를 보존하여 중복 생성하지 않는다.
+
+## 공개 배포 확인
+
+- 공개 버전: [v0.1.14](https://github.com/sklee385/open_spec_dashboard/releases/tag/v0.1.14), 2026-10-29 게시, 최신 정식 릴리스 확인.
+- 소스 커밋: `2883f663a6849b291656515cbe1d2fbc8627057c` (기능 구현 `76398f4` 포함).
+- [배포 실행 40845515507](https://github.com/sklee385/open_spec_dashboard/actions/runs/40845515507): build/release 성공. desktop 201개, frontend 283개, backend 377개 통과·환경 조건 2개 생략, 총 861개 통과.
+- 실제 Electron 렌더러 격리·트레이·화면 충돌 복구·진단 창·안전 모드·강제 종료 후 SQLite 및 초안 복원·ASAR 무설치 업데이트와 후보 v0.1.14 재시작 검사 통과.
+- 인증 없는 공개 다운로드로 설치 파일 380,472,756바이트, ZIP 478,041,425바이트, blockmap 394,804바이트를 재검증했다. GitHub 자산 SHA-256, 설치 파일 및 ZIP의 업데이트 정보 SHA-512, latest.yml/portable.json의 버전·파일·크기·해시가 일치했다.
+- ZIP SHA-512: `XEUNJjZnp9Q53hSt5IUaa4HEE7apqEEBOmfHPjA1yWthIcdo075uOHF+yGzGfr+jXRa+NitEUlVL/0buAObb9Q==`.
+- 사용자 실행 앱의 설치 경로를 교체하거나 운영 세션을 재시작하지 않았다. 실제 모바일 페어링·원격 왕복은 별도 검증 대상이다.
