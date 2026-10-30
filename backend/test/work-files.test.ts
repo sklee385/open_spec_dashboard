@@ -93,8 +93,8 @@ it('복사 실패는 기준을 저장하지 않으며 잔여 확인 전 새 경�
   expect(() => execution.prepare(work)).toThrow(/복구/);
 });
 it('파일 읽기 실패를 빈 변경으로 확정하지 않는다', async () => {
-  await prepare(); const path = join(execution.executionPath(work), 'existing.txt'), read = (await vi.importActual<typeof import('node:fs')>('node:fs')).readFileSync;
-  vi.mocked(fs.readFileSync).mockImplementation(((file: any, ...args: any[]) => { if (String(file) === path) throw new Error('read failure'); return (read as any)(file, ...args); }) as any);
+  await prepare(); const path = join(execution.executionPath(work), 'existing.txt'), actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  vi.spyOn(fs, 'openSync').mockImplementation(((file: any, ...args: any[]) => { if (String(file) === path) throw new Error('read failure'); return (actual.openSync as any)(file, ...args); }) as any);
   expect(() => execution.snapshot(work)).toThrow('read failure'); expect(report()).toMatchObject({ source: 'unavailable', error: 'read failure' });
 });
 it('남은 반영 임시 파일은 저널로 소유권을 확인하고 재사용한다', async () => {
@@ -144,7 +144,8 @@ it('부분 반영 실패 뒤 재시작하여 저널로 나머지 경로를 안�
   execution.apply(work); expect(readFileSync(join(source, 'z.txt'), 'utf8')).toBe('Z'); expect(report().application).toBe('applied');
 });
 it('수집 도중 파일이 바뀌면 결과를 확정하지 않는다', async () => {
-  await prepare(); const path = join(execution.executionPath(work), 'existing.txt'), read = (await vi.importActual<typeof import('node:fs')>('node:fs')).readFileSync;
-  vi.spyOn(fs, 'readFileSync').mockImplementation(((file: any, ...args: any[]) => { const result = (read as any)(file, ...args); if (String(file) === path) writeFileSync(path, 'changed during read'); return result; }) as any);
-  expect(() => execution.snapshot(work)).toThrow(/수집 중 변경/);
+  await prepare(); const path = join(execution.executionPath(work), 'existing.txt'), actual = await vi.importActual<typeof import('node:fs')>('node:fs');let watched: number | undefined, changed = false;
+  vi.spyOn(fs,'openSync').mockImplementation(((file:any,...args:any[])=>{const descriptor=(actual.openSync as any)(file,...args);if(String(file)===path)watched=descriptor;return descriptor;}) as any);
+  vi.spyOn(fs,'readSync').mockImplementation(((descriptor:any,...args:any[])=>{const count=(actual.readSync as any)(descriptor,...args);if(!changed&&descriptor===watched&&count>0){changed=true;writeFileSync(path,'changed during read');}return count;}) as any);
+  expect(() => execution.snapshot(work)).toThrow(/수집 중 변경|읽는 중|크기.*변경/);expect(changed).toBe(true);
 });

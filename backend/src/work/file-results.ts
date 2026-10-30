@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, openSync, fstatSync, closeSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, openSync, fstatSync, closeSync, opendirSync, readSync, type Dirent } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { within } from '../files';
@@ -27,10 +27,16 @@ const rawRevision = (files: Snapshot) => digest(JSON.stringify(Object.entries(fi
 const workspaceExcluded = (work: Work, path: string) => path.split('/').some(part => excludedNames.includes(process.platform === 'win32' ? part.toLowerCase() : part)) || workspaceResourcePath(work, path);
 export function collectFiles(root: string, exclude: (path: string) => boolean = () => false, strictOwnership = false): Snapshot {
   const scan = () => {
-    const files: Snapshot = {};
+    const files: Snapshot = Object.create(null), started = Date.now();
     const data = resolve(process.env.DATA_DIR || '../.data');
+    let entries = 1, total = 0;
+    const checkTime = () => { if (Date.now() - started > 2000) throw new ConflictException('소스 파일 검사 시간 한도를 초과했습니다. 범위를 정리한 뒤 다시 확인해 주세요'); };
     const visit = (dir: string, prefix = '') => {
-      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const directory = opendirSync(dir), children: Dirent[] = [];
+      try { let entry: Dirent | null; while ((entry = directory.readSync())) { if (++entries > 10000) throw new ConflictException('소스 파일 수 한도를 초과했습니다'); checkTime(); children.push(entry); } }
+      finally { directory.closeSync(); }
+      for (const entry of children.sort((a, b) => a.name.localeCompare(b.name))) {
+        checkTime();
         const absolute = join(dir, entry.name), path = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (excludedNames.includes(entry.name) || absolute === data || entry.name.endsWith('.tsbuildinfo') || exclude(path)) continue;
         if (entry.isSymbolicLink()) { if (strictOwnership) throw new ConflictException('링크가 포함된 업무 소스는 실제 결과를 확인할 수 없습니다. 독립 파일로 복구해 주세요.'); continue; }
@@ -39,19 +45,27 @@ export function collectFiles(root: string, exclude: (path: string) => boolean = 
           visit(absolute, path); continue;
         }
         if (!entry.isFile()) continue;
-        const before = strictOwnership ? lstatSync(absolute) : statSync(absolute); let bytes: Buffer;
-        if (strictOwnership) {
-          if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) throw new ConflictException('공유 링크 소스의 소유를 확인할 수 없습니다.');
-          const descriptor = openSync(absolute, 'r');
-          try { const opened = fstatSync(descriptor); if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino) throw new ConflictException('소스 소유가 읽기 전에 변경되었습니다.'); bytes = readFileSync(descriptor); }
-          finally { closeSync(descriptor); }
-        } else bytes = readFileSync(absolute);
-        const after = strictOwnership ? lstatSync(absolute) : statSync(absolute);
-        if (before.mtimeMs !== after.mtimeMs || before.size !== after.size || before.ino !== after.ino || strictOwnership && (after.isSymbolicLink() || after.nlink !== 1 || after.dev !== before.dev || after.mode !== before.mode)) throw new ConflictException('파일 수집 중 변경되었습니다. 다시 시도해 주세요');
-        const availability = bytes.length >= 200000 ? 'size-limit' : bytes.includes(0) ? 'binary' : 'text';
-        const content = availability === 'text' ? bytes.toString('utf8') : null;
-        const normalized = /(^|\/)tasks\.md$/.test(path) && content !== null ? content.replace(/- \[[xX ]\]/g, '- [ ]') : bytes;
-        files[path] = { hash: digest(normalized), rawHash: digest(bytes), content, availability };
+        const before = lstatSync(absolute);
+        if (!before.isFile() || before.isSymbolicLink() || strictOwnership && before.nlink !== 1) throw new ConflictException('소스 파일의 실제 소유를 확인할 수 없습니다');
+        if (before.size > 128 * 1024 ** 2 || (total += before.size) > 128 * 1024 ** 2) throw new ConflictException('소스 파일 읽기 한도를 초과했습니다. 원본을 보존합니다');
+        const descriptor = openSync(absolute, 'r'), raw = createHash('sha256'), parts: Buffer[] = [];
+        let size = 0;
+        try {
+          const opened = fstatSync(descriptor);
+          if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size || strictOwnership && opened.nlink !== 1) throw new ConflictException('소스 소유가 읽기 전에 변경되었습니다');
+          const buffer = Buffer.allocUnsafe(65536); let count: number;
+          while ((count = readSync(descriptor, buffer, 0, buffer.length, null)) > 0) {
+            checkTime(); size += count; if (size > before.size) throw new ConflictException('소스 파일이 읽는 중 커졌습니다');
+            const chunk = buffer.subarray(0, count); raw.update(chunk); if (before.size < 200000) parts.push(Buffer.from(chunk));
+          }
+          if (size !== before.size) throw new ConflictException('소스 파일 크기가 읽는 중 변경되었습니다');
+        } finally { closeSync(descriptor); }
+        const after = lstatSync(absolute);
+        if (!after.isFile() || after.isSymbolicLink() || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || before.size !== after.size || before.ino !== after.ino || before.dev !== after.dev || strictOwnership && (after.nlink !== 1 || after.mode !== before.mode)) throw new ConflictException('파일 수집 중 변경되었습니다. 다시 시도해 주세요');
+        const bytes = size < 200000 ? Buffer.concat(parts, size) : null, rawHash = raw.digest('hex');
+        const availability: Availability = bytes === null ? 'size-limit' : bytes.includes(0) ? 'binary' : 'text';
+        const content = availability === 'text' ? bytes!.toString('utf8') : null;
+        files[path] = { hash: /(^|\/)tasks\.md$/.test(path) && content !== null ? digest(content.replace(/- \[[xX ]\]/g, '- [ ]')) : rawHash, rawHash, content, availability };
       }
     };
     visit(root); return files;
@@ -62,15 +76,18 @@ export function collectFiles(root: string, exclude: (path: string) => boolean = 
 }
 
 export function differences(before: Snapshot, after: Snapshot) {
-  return [...new Set([...Object.keys(before), ...Object.keys(after)])].sort().filter(path => before[path]?.hash !== after[path]?.hash || before[path]?.mode !== after[path]?.mode).map(path => ({
-    path, status: !before[path] ? 'added' : !after[path] ? 'removed' : 'modified',
-    before: before[path]?.content ?? null, after: after[path]?.content ?? null,
-    beforeAvailability: before[path] ? before[path].availability || (before[path].content === null ? 'unknown' : 'text') : 'absent',
-    afterAvailability: after[path] ? after[path].availability || (after[path].content === null ? 'unknown' : 'text') : 'absent',
-    beforeHash: before[path]?.rawHash ?? null, afterHash: after[path]?.rawHash ?? null,
-    ...(before[path]?.mode || after[path]?.mode ? { beforeMode: before[path]?.mode ?? null, afterMode: after[path]?.mode ?? null } : {}),
-  }));
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].sort().flatMap(path => {
+    const previous = Object.hasOwn(before, path) ? before[path] : undefined, current = Object.hasOwn(after, path) ? after[path] : undefined;
+    if (previous?.hash === current?.hash && previous?.mode === current?.mode) return [];
+    return [{ path, status: !previous ? 'added' : !current ? 'removed' : 'modified', before: previous?.content ?? null, after: current?.content ?? null,
+      beforeAvailability: previous ? previous.availability || (previous.content === null ? 'unknown' : 'text') : 'absent',
+      afterAvailability: current ? current.availability || (current.content === null ? 'unknown' : 'text') : 'absent',
+      beforeHash: previous?.rawHash ?? null, afterHash: current?.rawHash ?? null,
+      ...(previous?.mode || current?.mode ? { beforeMode: previous?.mode ?? null, afterMode: current?.mode ?? null } : {}),
+    }];
+  });
 }
+
 
 export class FileResults {
   constructor(private store: WorkStore, private spaces = new WorkspaceService(store)) {}
