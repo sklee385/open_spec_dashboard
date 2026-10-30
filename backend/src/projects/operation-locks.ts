@@ -3,9 +3,12 @@ import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { Work, WorkStore } from '../work/store';
 import { gitCommonDirectory, gitHeadRef, resolveGitRef } from './git-metadata';
+import { createHash } from 'node:crypto';
 export type OperationScope = 'documents' | 'workspace' | 'index' | 'management' | 'integration';
 export interface OperationRequest { kind: OperationScope; root: string; changeName?: string; spaces?: string[]; refs?: string[]; commonDir?: string; }
 export interface OperationResource { key: string; kind: 'integration' | 'management' | 'space' | 'document' | 'ref'; root: string; commonDir: string; ref?: string; order: number; }
+/** Internal recovery capability: only one exact, independently proven terminated intent. */
+export interface RecoveryIntent { workId: string; id: string; owner: string; runGeneration: string; digest: string; }
 const active = new Set(['connecting', 'creating-thread', 'running', 'waiting-input', 'waiting-approval', 'recovery-required']);
 const canonical = (path: string) => { let value: string; try { value = realpathSync(path); } catch { value = resolve(path); } return process.platform === 'win32' ? value.toLowerCase() : value; };
 const overlaps = (a: string, b: string) => { const inside = (x: string, y: string) => { const rel = relative(x, y); return !rel || !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`); }; return inside(a, b) || inside(b, a); };
@@ -87,9 +90,10 @@ export class ScopedOperationLocks {
       }
     }
   }
-  private storedWork(resources: OperationResource[]) {
+  private storedWork(resources: OperationResource[], recovery?: RecoveryIntent) {
     for (const work of this.store.list()) {
       for (const row of this.store.records(work.id, 'workspace-git-intent').filter(row => ['running', 'uncertain'].includes(row.status))) {
+        if (recovery && recovery.workId === work.id && recovery.id === row.id && recovery.owner === row.owner && recovery.runGeneration === row.runGeneration && recovery.digest === createHash('sha256').update(JSON.stringify(row)).digest('hex')) continue;
         const recorded = this.plan({ kind: row.scope, root: row.root, commonDir: row.commonDir, refs: row.refs ?? [], spaces: row.affectedRoots }, true);
         if (resources.some(resource => recorded.some(saved => conflict(resource, saved)))) throw new ConflictException('영향 공간의 Git 프로세스 또는 결과가 미확인입니다. 실제 상태를 복구해 주세요.');
       }
@@ -99,20 +103,20 @@ export class ScopedOperationLocks {
       }
     }
   }
-  assertRecovery(request: OperationRequest) { const resources = this.plan(request); this.persisted(resources); this.storedWork(resources); }
-  assert(request: OperationRequest, owner?: string, checkActive = true, ownWorkId?: string) {
+  assertRecovery(request: OperationRequest, recovery?: RecoveryIntent) { const resources = this.plan(request); this.persisted(resources); this.storedWork(resources, recovery); }
+  assert(request: OperationRequest, owner?: string, checkActive = true, ownWorkId?: string, recovery?: RecoveryIntent) {
     const resources = this.plan(request), sameOwner = [...this.held.values()].filter(held => owner && held.owner === owner).flatMap(held => held.resources).sort(sorted);
     if (sameOwner.length && resources.some(resource => sorted(resource, sameOwner.at(-1)!) < 0)) throw new ConflictException('통합→관리→정렬 공간의 잠금 취득 순서를 지켜 주세요.');
     if (this.legacyBlocked(resources) || [...this.held.values()].some(held => resources.some(resource => held.resources.some(existing => conflict(resource, existing))))) throw new ConflictException('해당 공간 또는 공유 관리/ref 작업이 진행 중입니다.');
     this.persisted(resources);
-    this.storedWork(resources);
+    this.storedWork(resources, recovery);
     for (const work of this.store.list()) {
       if (work.id !== ownWorkId && !['completed', 'archived'].includes(work.phase) && checkActive && this.busy(work) && resources.some(resource => this.observed(this.workRequest(work)).some(existing => conflict(resource, existing)))) throw new ConflictException({ message: '같은 업무 공간의 실행·질문·승인·검증을 마친 뒤 요청해 주세요.', workId: work.id });
     }
     return resources;
   }
-  acquire(request: OperationRequest, owner?: string, ownWorkId?: string) {
-    const resources = this.assert(request, owner, true, ownWorkId), token = Symbol('scoped-operation'); this.held.set(token, { owner, resources });
+  acquire(request: OperationRequest, owner?: string, ownWorkId?: string, recovery?: RecoveryIntent) {
+    const resources = this.assert(request, owner, true, ownWorkId, recovery), token = Symbol('scoped-operation'); this.held.set(token, { owner, resources });
     let released = false; return () => { if (!released) { released = true; this.held.delete(token); } };
   }
   conflictsWithLegacy(root: string, common?: string) {

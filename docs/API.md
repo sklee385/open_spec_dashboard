@@ -218,3 +218,12 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 새 요청은 저장소의 통합 범위를 잠그고 실행 의도를 기록한 뒤 Windows의 원본 HEAD 보호와 소유 프로세스 등록을 마쳐야 Git을 시작한다. 마지막 기준을 다시 검사하고 ff-only로 반영하며 자동 stash·원격 push·브랜치 전환·ignored 파일 덮어쓰기를 하지 않는다. 선택되는 원본/후보 속성 변환을 검사하고 프로젝트 hook·FSMonitor·자동 maintenance를 실행하지 않는다. 해당 HEAD 보호를 지원하지 않는 환경에서는 반영을 시작하지 않는다.
 
 영수증의 `status`는 `running|applied|failed|uncertain`, `applied`는 적용 확인 여부다. `appliedCommit`과 `observedHead`는 처리 시점에 확인한 커밋이며 이후 원본의 실시간 상태를 뜻하지 않는다. HTTP 200만으로 적용 성공을 판단하지 않는다. 명령 오류나 결과 저장 실패 뒤에도 실제 HEAD·index·파일과 업무/후보 보존을 확인하고, 불일치는 영수증과 점유 근거를 유지한다. 결과가 불명확하다고 새 키로 자동 반영하거나 원본을 자동 되돌리지 않는다. 반영과 업무 완료·보관은 별도 동작이다.
+
+### 반영 상태 재확인과 후보 취소 (개발·검증 중)
+
+- `GET /api/work/:id/integration/:candidateId/apply/status`: Git이나 전체 파일 검사를 실행하지 않고 `{candidateId, receipt, receipts, live, observation}`을 반환한다. `live.state`는 `active|unknown|settled`이며 기본 `observation.state`는 `not-checked`다. 과거 관측은 `observation.last`로 구분한다.
+- `GET .../apply/status?inspect=1`: 현재 원본의 브랜치·HEAD·index·파일·등록과 업무/후보의 소유·현재 파일을 명시적으로 관측한다. 저장된 영수증·후보 상태는 변경하지 않는다. 관측과 실행 종료 여부를 구분하며, 종료 불명인 실행의 Git 상태가 맞아도 현재 판정은 `uncertain`이다. 주기 조회에는 기본 API를 사용한다.
+- `POST .../apply/reconcile`: 정확히 `{requestKey, confirmed:true}`를 받는다. 기존 반영 키·현재 후보 세대·같은 소유 실행의 실제 Job 종료 근거를 확인하고 현재 Git 상태를 새로 관측한 뒤 기록을 갱신한다. Git 반영 명령을 실행하지 않는다. 관측 도중 파일·등록·소유·intent가 바뀌면 거부하며, 다른 실행의 점유는 해제하지 않는다.
+- `POST /api/work/:id/integration/:candidateId/cancel`: 정확히 `{confirmed:true}`를 받는다. 후보를 논리 취소하고 파일·커밋·대화·검증 기록은 보존한다. 실행·질문·준비 작업·종료 불명 점유가 있으면 거부한다. 이미 취소한 후보는 같은 결과를 반환하고, 이미 반영한 후보는 `{cancelled:false, alreadyApplied:true, appliedCommit}`으로 반환한다. 역병합·공간 삭제를 수행하지 않는다.
+
+`reconcile`은 종료가 확인되고 원본이 저장된 후보 커밋과 정확히 일치할 때 과거 반영을 확정한다. 그 뒤 생긴 업무/후보의 새 파일 편집은 복원하지 않으며 `observation.sideChanged:true`로 구분한다. 이는 새 편집의 검증 통과나 업무 완료가 아니다. 일반 새 반영은 기존 기준과 파일 보존 검사를 계속 요구하며, 원본이 dirty이거나 알 수 없는 상태이면 불명 기록을 유지한다. 저장된 PID·구형 종료 표시·시간 경과만으로 점유를 해제하거나 프로세스를 채택·종료하지 않는다.

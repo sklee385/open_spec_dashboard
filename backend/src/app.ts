@@ -35,13 +35,14 @@ import { IntegrationEditing } from './work/integration-editing';
 import { IntegrationVerification } from './work/integration-verification';
 import { IntegrationApplyPreflight } from './work/integration-apply-preflight';
 import { IntegrationApply } from './work/integration-apply';
+import { IntegrationApplyRecovery } from './work/integration-apply-recovery';
 
 @Controller()
 class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService, IntegrationEditing, IntegrationVerification, IntegrationApplyPreflight, IntegrationApply] })
+@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService, IntegrationEditing, IntegrationVerification, IntegrationApplyPreflight, IntegrationApply, IntegrationApplyRecovery] })
 class AppModule {}
 
 export async function createApplication() {

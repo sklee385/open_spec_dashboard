@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { browserDirectory } from './browser-runtime';
 import { stopOwnedProcess } from './browser-process';
 
-export async function guardBrowserProcess(child: ChildProcess, head?: { file: string; ref: string }): Promise<{ done: Promise<void> }> {
+export async function guardBrowserProcess(child: ChildProcess, head?: { file: string; ref: string }): Promise<{ done: Promise<void>; pid?: number }> {
   if (process.platform !== 'win32') throw new Error('백그라운드 브라우저 검증은 현재 Windows에서 지원합니다');
   if (!child.pid) throw new Error('검증 실행기의 프로세스 ID가 없습니다');
   const helper = spawn(join(browserDirectory(), 'guard/BrowserGuard.exe'), [String(child.pid), String(process.pid), ...(head ? [head.file, head.ref] : [])], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -20,5 +20,5 @@ export async function guardBrowserProcess(child: ChildProcess, head?: { file: st
   void done.catch(() => {});
   helper.stdout.on('data', bytes => { output += bytes.toString(); if (!ready && (head ? output.includes('READY HEAD-PIN-V1') : /(^|\n)READY\r?\n/.test(output))) { ready = true; readyResolve(); } if (output.length > 1000) output = output.slice(-1000); });
   const timer = setTimeout(() => { if (head) { void stopOwnedProcess(child).catch(() => {}); } else helper.kill(); readyReject(new Error('Windows 프로세스 소유권 준비 시간이 초과됐습니다')); }, 15000);
-  try { await readiness; return { done }; } finally { clearTimeout(timer); }
+  try { await readiness; return { done, pid: helper.pid }; } finally { clearTimeout(timer); }
 }

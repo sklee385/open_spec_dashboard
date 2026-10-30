@@ -12,6 +12,7 @@ import { GitError, runGit } from '../projects/git-runner';
 import { collectFiles } from './file-results';
 import { inspectWorkspacePath } from './workspace-paths';
 import { workspaceResourcePath } from './workspace-file-policy';
+import { applyProtocol, liveApply, registerApply, terminatedApply, type LiveApply } from './integration-apply-state';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const host = randomUUID();
@@ -25,8 +26,9 @@ export class IntegrationApply {
   constructor(@Inject(WorkStore) private store: WorkStore, @Inject(IntegrationApplyPreflight) private preflight: IntegrationApplyPreflight,
     @Inject(DesktopLifecycle) private lifecycle: DesktopLifecycle) {
     desktopHealth(store).register('integration-apply', work => {
+      if (liveApply(store, work.id)) return 'active';
       const rows = store.records(work.id, 'integration-apply');
-      if (rows.some(row => row.status === 'running' || row.status === 'uncertain' && row.processTerminated !== true)) return 'unknown';
+      if (rows.some(row => ['running', 'uncertain'].includes(row.status) && !terminatedApply(row, store.records(work.id, 'workspace-git-intent').find(intent => intent.id === row.intentId)))) return 'unknown';
       return undefined;
     });
   }
@@ -40,15 +42,31 @@ export class IntegrationApply {
     return row;
   }
   private save(row: any) { this.store.record(row.id, row.workId, 'integration-apply', row); }
+  private durableTuple(row: any) {
+    return hash([
+      this.store.records(row.workId, 'integration-apply').find(item => item.id === row.id),
+      this.store.records(row.workId, 'workspace-git-intent').find(item => item.id === row.intentId),
+      this.store.integrationRequests().find(item => item.id === row.requestId),
+    ]);
+  }
   private read(root: string, args: string[]) { return runGit(root, ['-c', 'core.fsmonitor=false', ...args]).then(value => value.toString()); }
-  private async sides(request: IntegrationRequest) {
+  private async sides(request: IntegrationRequest, captureFiles?: (version: string) => void) {
     const work = this.store.get(request.workId)!;
-    return hash(await Promise.all([request.workExecutionPath, request.executionPath].map(async root => {
+    const values = await Promise.all([request.workExecutionPath, request.executionPath].map(async root => {
       inspectWorkspacePath(root, []);
       const [head, branch, index] = await Promise.all([this.read(root, ['rev-parse', 'HEAD']), this.read(root, ['symbolic-ref', 'HEAD']), this.read(root, ['ls-files', '--stage', '-z'])]);
       const files = collectFiles(root, path => workspaceResourcePath(work, path), true);
       return [root, realpathSync(root), head, branch, index, files, Object.keys(files).map(path => [path, lstatSync(join(root, path)).mode & 0o777])];
-    })));
+    }));
+    captureFiles?.(hash(values.map(parts => [parts[0], parts[1], parts[5], parts[6]])));
+    return hash(values);
+  }
+  private sideFiles(request: IntegrationRequest) {
+    const work = this.store.get(request.workId)!;
+    return hash([request.workExecutionPath, request.executionPath].map(root => {
+      inspectWorkspacePath(root, []); const files = collectFiles(root, path => workspaceResourcePath(work, path), true);
+      return [root, realpathSync(root), files, Object.keys(files).map(path => [path, lstatSync(join(root, path)).mode & 0o777])];
+    }));
   }
   private hooks() {
     const data = resolve(process.env.DATA_DIR || '../.data'); inspectWorkspacePath(data, []); mkdirSync(data, { recursive: true });
@@ -64,13 +82,14 @@ export class IntegrationApply {
     const id = `integration-apply:${hash([workId, candidateId, input.requestKey])}`, fingerprint = hash([workId, candidateId, input]);
     const active = this.active.get(id);
     if (active) { if (active.fingerprint !== fingerprint) throw new ConflictException('같은 적용 키에 다른 내용을 사용할 수 없습니다'); return active.promise; }
-    const promise = new MutationAdmission(this.store, workId, 'integration-apply', input.requestKey, fingerprint, () => !!this.replay(workId, candidateId, input)).run(admission => this.execute(workId, candidateId, input, id, fingerprint, admission));
+    const admission = new MutationAdmission(this.store, workId, 'integration-apply', input.requestKey, fingerprint, () => !!this.replay(workId, candidateId, input)), registered = registerApply(this.store, workId, candidateId, id, host);
+    const promise = admission.run(admission => this.execute(workId, candidateId, input, id, fingerprint, admission, registered.entry));
     this.active.set(id, { fingerprint, promise });
     try { return await promise; } catch (error) { const saved = this.replay(workId, candidateId, input); if (saved) return saved; throw error; }
-    finally { this.active.delete(id); }
+    finally { this.active.delete(id); registered.release(); }
   }
-  private async execute(workId: string, candidateId: string, input: Input, id: string, fingerprint: string, admission: MutationAdmission) {
-    let release: (() => void) | undefined, settle: (() => void) | undefined, hooks: ReturnType<IntegrationApply['hooks']> | undefined, row: any, proof: Proof | undefined, sideVersion: string | undefined;
+  private async execute(workId: string, candidateId: string, input: Input, id: string, fingerprint: string, admission: MutationAdmission, live: LiveApply) {
+    let release: (() => void) | undefined, settle: (() => void) | undefined, hooks: ReturnType<IntegrationApply['hooks']> | undefined, row: any, proof: Proof | undefined, sideVersion: string | undefined, expectedTuple: string | undefined;
     const now = () => new Date().toISOString();
     try {
       const replay = this.replay(workId, candidateId, input); if (replay) return replay;
@@ -83,23 +102,31 @@ export class IntegrationApply {
       release = projectCoordinator(this.store).acquireOperation(proof.plan);
       const sourceAttributes = await this.preflight.captureSourceAttributes(proof.request);
       sideVersion = await this.sides(proof.request); hooks = this.hooks();
-      const fixed = proof, intentId = `${id}:git`, intent: any = { scope: fixed.plan.kind, root: fixed.plan.root, commonDir: fixed.plan.commonDir, refs: fixed.plan.refs, affectedRoots: fixed.plan.spaces, stage: 'integration-apply', status: 'running', owner: host, ownerProcessId: process.pid, runGeneration: randomUUID(), processTerminated: false };
-      this.store.transaction(() => {
+      const fixed = proof, intentId = `${id}:git`, intent: any = { scope: fixed.plan.kind, root: fixed.plan.root, commonDir: fixed.plan.commonDir, refs: fixed.plan.refs, affectedRoots: fixed.plan.spaces, stage: 'integration-apply', status: 'running', executionProtocol: applyProtocol, owner: host, ownerProcessId: process.pid, runGeneration: randomUUID(), processTerminated: false };
+      live.runGeneration = intent.runGeneration;
+      expectedTuple = this.store.transaction(() => {
         if (this.replay(workId, candidateId, input)) throw new ConflictException('이미 저장된 적용 요청입니다');
         projectCoordinator(this.store).assertRecovery(fixed.plan); fixed.assertUnchanged(); sourceAttributes.assertUnchanged(); hooks!.check();
-        row = { id, workId, candidateId, requestKey: input.requestKey, fingerprint, expectedVersion: input.expectedVersion, sourceAttributeVersion: sourceAttributes.version, targetBranch: fixed.request.targetBranch, targetHead: fixed.request.targetHead, candidateCommit: fixed.request.candidateCommit, candidateEpoch: fixed.request.candidateMutationVersion ?? null, verificationRefs: fixed.verificationRefs, requestId: fixed.request.id, intentId, sideVersion, owner: host, ownerProcessId: process.pid, runGeneration: intent.runGeneration, status: 'running', applied: false, processTerminated: false, createdAt: now() };
+        row = { id, workId, candidateId, requestKey: input.requestKey, fingerprint, expectedVersion: input.expectedVersion, sourceAttributeVersion: sourceAttributes.version, targetBranch: fixed.request.targetBranch, targetHead: fixed.request.targetHead, candidateCommit: fixed.request.candidateCommit, candidateEpoch: fixed.request.candidateMutationVersion ?? null, verificationRefs: fixed.verificationRefs, requestId: fixed.request.id, intentId, sideVersion, executionProtocol: applyProtocol, owner: host, ownerProcessId: process.pid, runGeneration: intent.runGeneration, status: 'running', applied: false, processTerminated: false, createdAt: now() };
         admission.admit(); this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent);
+        return this.durableTuple(row);
       });
       try {
         await runGit(fixed.request.projectPath, ['--git-dir='+fixed.sourceGitDir, '--work-tree='+fixed.request.projectPath, '-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${hooks.path}`, '-c', 'merge.autostash=false', '-c', 'rebase.autostash=false', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'merge.verifySignatures=false', 'merge', '--ff-only', '--no-autostash', '--no-overwrite-ignore', '--no-edit', '--no-stat', '--no-log', fixed.request.candidateCommit!], {
-          onSpawn: pid => { row.processId = intent.processId = pid; row.processKind = 'waiting-git-worker'; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); }); },
+          onSpawn: pid => { row.processId = intent.processId = pid; row.processKind = 'waiting-git-worker'; expectedTuple = this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); return this.durableTuple(row); }); },
+          onTermination: evidence => {
+            const witness = { ...evidence, owner: host, runGeneration: intent.runGeneration, attemptId: id, intentId };
+            row.terminationProof = intent.terminationProof = witness; row.processTerminated = intent.processTerminated = true;
+            expectedTuple = this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); return this.durableTuple(row); });
+          },
           headPin: { file: join(fixed.sourceGitDir, 'HEAD'), ref: `refs/heads/${fixed.request.targetBranch}`, beforeDispatch: () => {
             // Native HEAD pin and Job assignment already exist. Capture again would
             // conflict with our scoped lock; this is the final synchronous proof fence.
-            this.store.transaction(() => {
+            expectedTuple = this.store.transaction(() => {
               fixed.assertUnchanged(); sourceAttributes.assertUnchanged(); hooks!.check();
               row.commandStarted = true; this.save(row);
               this.store.record(fixed.request.id, workId, 'integration-request', { ...fixed.request, status: 'applying', applyAttemptId: id, updatedAt: now() });
+              return this.durableTuple(row);
             });
           } },
         });
@@ -119,12 +146,20 @@ export class IntegrationApply {
       if (proof && !row.observedHead) try { row.observedHead = (await this.read(proof.request.projectPath, ['rev-parse', 'HEAD'])).trim(); } catch {}
       try {
         this.store.transaction(() => {
-          this.save(row); const intent = this.store.records(workId, 'workspace-git-intent').find(item => item.id === row.intentId);
-          if (intent) this.store.record(row.intentId, workId, 'workspace-git-intent', { ...intent, status: 'uncertain', processTerminated: row.processTerminated, terminationUnconfirmed: row.processTerminated !== true });
-          if (proof) this.store.record(proof.request.id, workId, 'integration-request', { ...this.store.integrationRequests().find(item => item.id === proof!.request.id)!, status: 'uncertain', error: row.error, updatedAt: now() });
+          // The expected tuple was captured inside our own write transaction and
+          // adopted only after commit. Never absorb a newer observation as ours.
+          if (!expectedTuple || this.durableTuple(row) !== expectedTuple) return;
+          const receipt = this.store.records(workId, 'integration-apply').find(item => item.id === row.id), intent = this.store.records(workId, 'workspace-git-intent').find(item => item.id === row.intentId), current = this.store.integrationRequests().find(item => item.id === row.requestId);
+          if (!receipt || !intent || !current || !proof || receipt.fingerprint !== row.fingerprint || receipt.owner !== row.owner || receipt.runGeneration !== row.runGeneration || !['running', 'uncertain'].includes(receipt.status) || intent.owner !== row.owner || intent.runGeneration !== row.runGeneration || !['running', 'uncertain'].includes(intent.status)) return;
+          const owned = current.status === 'applying' && (current as any).applyAttemptId === row.id;
+          const notDispatched = row.commandStarted !== true && hash(current) === hash(proof.request);
+          if ((!owned && !notDispatched) || current.candidateCommit !== row.candidateCommit || (current.candidateMutationVersion ?? null) !== row.candidateEpoch) return;
+          this.save(row);
+          this.store.record(row.intentId, workId, 'workspace-git-intent', { ...intent, status: 'uncertain', processTerminated: row.processTerminated, terminationUnconfirmed: row.processTerminated !== true });
+          this.store.record(current.id, workId, 'integration-request', { ...current, status: 'uncertain', error: row.error, updatedAt: now() });
         });
       } catch { /* The original admitted intent remains the fence if this acknowledgement fails too. */ }
-      return this.replay(workId, candidateId, input) ?? row;
+      const current = this.replay(workId, candidateId, input); if (!current) throw error; return current;
     } finally {
       if (hooks && row?.processTerminated !== false) try { hooks.remove(); } catch { /* Preserve a changed host directory; never delete recursively. */ }
       try { release?.(); } finally { settle?.(); }
@@ -133,15 +168,42 @@ export class IntegrationApply {
   private async observe(row: any, proof: Proof, sides: string) {
     row.status = 'uncertain'; row.applied = false; row.endedAt = new Date().toISOString();
     try {
+      const metadata = this.preflight.captureMetadata(proof.request); let files = '';
       row.observedHead = (await this.read(proof.request.projectPath, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
-      if (row.processTerminated !== true || await this.sides(proof.request) !== sides) return;
+      if (row.processTerminated !== true || await this.sides(proof.request, version => { files = version; }) !== sides) return;
       if (row.observedHead === proof.request.candidateCommit) {
         const observed = await this.preflight.inspectOriginal(proof.request, proof.request.candidateCommit!);
+        this.observationFence(proof.request, metadata, observed, files)();
         row.status = 'applied'; row.applied = true; row.appliedCommit = observed.head; row.originalVersion = observed.version;
       } else if (row.observedHead === proof.request.targetHead) {
-        await this.preflight.inspectOriginal(proof.request, proof.request.targetHead); row.status = 'failed';
+        const observed = await this.preflight.inspectOriginal(proof.request, proof.request.targetHead);
+        this.observationFence(proof.request, metadata, observed, files)(); row.status = 'failed';
       }
     } catch (error: any) { row.observationError = error.message; }
+  }
+  private observationFence(request: IntegrationRequest, metadata: { assertUnchanged: () => void }, original: { assertUnchanged: () => void }, files: string) {
+    return () => {
+      metadata.assertUnchanged(); original.assertUnchanged();
+      if (this.sideFiles(request) !== files) throw new ConflictException('실제 관측 뒤 업무 또는 후보 파일·mode가 변경되었습니다');
+    };
+  }
+  /** Fresh read-only observation for explicit status/recovery; never executes ff. */
+  async inspectAttempt(row: any, request: IntegrationRequest) {
+    const fact: any = { state: row ? 'uncertain' : 'not-run', checkedAt: new Date().toISOString() };
+    if (!row) return { observation: fact, assertUnchanged: () => {} };
+    try {
+      const metadata = this.preflight.captureMetadata(request); let files = '';
+      fact.head = (await this.read(request.projectPath, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
+      fact.branch = (await this.read(request.projectPath, ['symbolic-ref', '--quiet', 'HEAD'])).trim();
+      fact.targetRefHead = (await this.read(request.projectPath, ['rev-parse', '--verify', `refs/heads/${request.targetBranch}^{commit}`])).trim();
+      if (fact.head !== row.candidateCommit && fact.head !== row.targetHead) { fact.reason = '원본 HEAD가 저장된 적용 전후 어느 상태와도 일치하지 않습니다'; return { observation: fact, assertUnchanged: () => {} }; }
+      // Historical application facts do not require restoring later local edits.
+      // Fence the current files instead; normal apply keeps its original strict baseline.
+      fact.sideChanged = await this.sides(request, version => { files = version; }) !== row.sideVersion;
+      const proof = await this.preflight.inspectOriginal(request, fact.head);
+      fact.state = fact.head === row.candidateCommit ? 'applied' : 'failed'; fact.version = proof.version;
+      return { observation: fact, assertUnchanged: this.observationFence(request, metadata, proof, files) };
+    } catch (error: any) { fact.reason = error.message; return { observation: fact, assertUnchanged: () => {} }; }
   }
   private publish(row: any, request: IntegrationRequest, intent: any) {
     this.store.transaction(() => {

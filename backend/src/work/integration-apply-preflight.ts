@@ -4,7 +4,7 @@ import { closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, re
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { IntegrationVerification } from './integration-verification';
 import { IntegrationEditing } from './integration-editing';
-import { assertCandidateProgress, candidateBranch } from './integration-candidate';
+import { assertCandidateProgress, candidateBranch, candidateLocation, verifyCandidateRegistration } from './integration-candidate';
 import { inspectWorkspacePath } from './workspace-paths';
 import { assertWorktreePointer } from './worktree-registration';
 import { projectCoordinator } from '../projects/coordinator';
@@ -12,6 +12,9 @@ import { readGitBufferSync, readGitSync, runGit } from '../projects/git-runner';
 import { resolveGitRef } from '../projects/git-metadata';
 import type { OperationRequest } from '../projects/operation-locks';
 import { WorkStore, type IntegrationRequest } from './store';
+import { WorkService } from './work.service';
+import { WorkspaceSettingsService } from './workspace-settings.service';
+import { WorkspaceService } from './workspace.service';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 type OriginalPolicy = { format: string; autocrlf: string; filemode: string; attributes: Map<string, Record<string, string>>; index: Map<string, { mode: string; blob: string }>; cachedSizes: Map<string, number> };
@@ -24,7 +27,8 @@ const parseListing = (text: string) => text.split('\0\0').filter(Boolean).map(gr
 @Injectable()
 export class IntegrationApplyPreflight {
   constructor(@Inject(WorkStore) private store: WorkStore, @Inject(IntegrationVerification) private verification: IntegrationVerification,
-    @Inject(IntegrationEditing) private editing: IntegrationEditing) {}
+    @Inject(IntegrationEditing) private editing: IntegrationEditing, @Inject(WorkService) private works: WorkService,
+    @Inject(WorkspaceSettingsService) private settings: WorkspaceSettingsService) {}
   private read(root: string, args: string[]) { return runGit(root, ['-c', 'core.fsmonitor=false', ...args]).then(value => value.toString()).catch(() => { throw new ConflictException('원본 Git 상태를 확인할 수 없습니다'); }); }
   private plan(request: IntegrationRequest, workBranch: string): OperationRequest {
     return { kind: 'integration', root: request.projectPath, commonDir: request.commonDir, spaces: [request.workExecutionPath, request.executionPath], refs: [`refs/heads/${request.targetBranch}`, `refs/heads/${workBranch}`, `refs/heads/${candidateBranch(request)}`] };
@@ -207,11 +211,37 @@ export class IntegrationApplyPreflight {
     return { request, plan, expectedVersion, verificationRefs: proof.verificationRefs, sourceGitDir: this.gitDirectory(request.projectPath, request.commonDir), assertUnchanged };
   }
   /** Post-command observation; does not reuse a proof whose original HEAD intentionally changed. */
+  captureMetadata(request: IntegrationRequest) {
+    const version = hash(this.metadata(request));
+    return { assertUnchanged: () => { if (hash(this.metadata(request)) !== version) throw new ConflictException('실제 관측 중 Git HEAD·index·진행 기준이 변경되었습니다'); } };
+  }
   async inspectOriginal(request: IntegrationRequest, expectedHead: string) {
     const expected = { ...request, targetHead: expectedHead }, before = this.metadata(expected);
     const first = await this.original(expected), second = await this.original(expected);
     if (first.version !== second.version || hash(before) !== hash(this.metadata(expected))) throw new ConflictException('반영 뒤 원본 상태가 수집 중 변경되었습니다');
-    return { head: expectedHead, version: first.version };
+    const assertUnchanged = () => {
+      const registrations = parseListing(readGitSync(expected.projectPath, ['-c', 'core.fsmonitor=false', 'worktree', 'list', '--porcelain', '-z'])).map(({ HEAD, ...row }) => row).sort((a, b) => String(a.worktree).localeCompare(String(b.worktree)));
+      if (hash(registrations) !== hash(first.registrations)) throw new ConflictException('원본 실제 관측 뒤 worktree 등록이 변경되었습니다');
+      if (hash(before) !== hash(this.metadata(expected)) || hash(this.originalFiles(expected.projectPath, first.tracked)) !== hash(first.files) || this.attributes(expected.projectPath, first.tracked).version !== first.attributesVersion || readGitSync(expected.projectPath, ['-c', 'core.fsmonitor=false', 'config', '--list', '--show-origin', '-z']) !== first.config || readGitSync(expected.projectPath, ['-c', 'core.fsmonitor=false', 'ls-files', '--others', '--exclude-standard', '-z'])) throw new ConflictException('원본 실제 상태 확인 뒤 파일·Git 기준이 변경되었습니다');
+    };
+    assertUnchanged();
+    return { head: expectedHead, version: first.version, assertUnchanged };
+  }
+  /** Historical/applying/queued access without pretending the candidate is ready to apply. */
+  inspectOwnership(workId: string, candidateId: string, queued = false) {
+    const work = this.works.get(workId), request = this.store.integrationRequests().find(row => row.workId === workId && row.candidateId === candidateId);
+    if (!request || request.projectPath !== work.projectPath || request.workspaceId !== work.workspace?.workspaceId || request.workExecutionPath !== work.executionPath || request.commonDir !== work.workspace?.commonDir || request.projectId !== work.workspace?.projectId) throw new ConflictException('후보의 저장된 업무 소유가 변경되었습니다');
+    const source = this.works.legacy.sources().find(row => row.id === work.sourceId && row.valid);
+    if (!source || !same(realpathSync(dirname(source.path)), request.projectPath)) throw new ConflictException('고정 원본 프로젝트 등록이 변경되었습니다');
+    new WorkspaceService(this.store, { protectedPaths: () => this.settings.protectedPaths() }).path(work);
+    const location = candidateLocation(request, this.settings.protectedPaths());
+    if (queued && request.status === 'queued') {
+      if (existsSync(location.container) || readGitSync(request.projectPath, ['-c', 'core.fsmonitor=false', 'for-each-ref', '--format=%(refname)', `refs/heads/${location.branch}`]).trim()) throw new ConflictException('예약 밖 후보 잔여물의 소유를 먼저 확인해 주세요');
+    } else {
+      const registration = verifyCandidateRegistration(request, this.settings.protectedPaths());
+      if (registration.head !== (request.status === 'conflicted' ? request.targetHead : request.candidateCommit)) throw new ConflictException('후보 commit 소유가 변경되었습니다');
+    }
+    return { work, request, plan: this.plan(request, work.workspace!.branch!) };
   }
   /** Checkout evaluates new paths in the original's config/info/global attribute context. */
   async captureSourceAttributes(request: IntegrationRequest) {

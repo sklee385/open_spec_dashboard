@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { Work, WorkStore } from '../work/store';
 import { gitCommonDirectory } from './git-metadata';
-import { ScopedOperationLocks, type OperationRequest } from './operation-locks';
+import { ScopedOperationLocks, type OperationRequest, type RecoveryIntent } from './operation-locks';
 import { pathsOverlap } from '../work/workspace-paths';
 
 const coordinators = new WeakMap<WorkStore, ProjectOperationCoordinator>();
@@ -36,12 +36,13 @@ export class ProjectOperationCoordinator {
   }
   operationPlan(request: OperationRequest) { return this.scoped.plan(request); }
   acquireOperation(request: OperationRequest, owner?: string) { return this.scoped.acquire(request, owner); }
+  acquireRecovery(request: OperationRequest, recovery: RecoveryIntent) { return this.scoped.acquire(request, undefined, undefined, recovery); }
   acquirePreparation(work: Work, request: OperationRequest) {
     if (this.store.get(work.id)?.workspace?.status !== 'preparing') throw new ConflictException('준비 중인 고정 공간만 관리할 수 있습니다.');
     return this.scoped.acquire(request, undefined, work.id);
   }
   assertOperationCanStart(request: OperationRequest) { this.scoped.assert(request); }
-  assertRecovery(request: OperationRequest) { this.scoped.assertRecovery(request); }
+  assertRecovery(request: OperationRequest, recovery?: RecoveryIntent) { this.scoped.assertRecovery(request, recovery); }
   workOperation(work: Work, phase = work.phase): OperationRequest {
     const root = work.executionPath ?? work.workspace?.executionPath ?? work.projectPath;
     return ['implementation', 'verification'].includes(phase) ? { kind: 'workspace', root, commonDir: work.workspace?.commonDir } : { kind: 'documents', root, changeName: work.changeName };

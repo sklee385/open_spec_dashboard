@@ -11,11 +11,15 @@ import { createHash } from 'node:crypto';
 import { IntegrationVerification } from './integration-verification';
 import { IntegrationApplyPreflight } from './integration-apply-preflight';
 import { IntegrationApply } from './integration-apply';
+import { IntegrationApplyRecovery } from './integration-apply-recovery';
 @Controller('work/:id/integration')
 export class IntegrationController {
   private results: WorktreeResultCommit;
   private candidates: IntegrationPreparation;
-  constructor(@Inject(WorkService) private works: WorkService, @Inject(IntegrationService) private integration: IntegrationService, @Inject(DesktopLifecycle) lifecycle: DesktopLifecycle, @Inject(WorkspaceSettingsService) settings: WorkspaceSettingsService, @Inject(IntegrationEditing) private editing: IntegrationEditing, @Inject(IntegrationVerification) private verification: IntegrationVerification, @Inject(IntegrationApplyPreflight) private preflight: IntegrationApplyPreflight, @Inject(IntegrationApply) private applying: IntegrationApply) { this.results = new WorktreeResultCommit(works.store, works, lifecycle); this.candidates = new IntegrationPreparation(works.store, works, settings, lifecycle); }
+  constructor(@Inject(WorkService) private works: WorkService, @Inject(IntegrationService) private integration: IntegrationService, @Inject(DesktopLifecycle) lifecycle: DesktopLifecycle, @Inject(WorkspaceSettingsService) settings: WorkspaceSettingsService, @Inject(IntegrationEditing) private editing: IntegrationEditing, @Inject(IntegrationVerification) private verification: IntegrationVerification, @Inject(IntegrationApplyPreflight) private preflight: IntegrationApplyPreflight, @Inject(IntegrationApply) private applying: IntegrationApply, @Inject(IntegrationApplyRecovery) private recovery: IntegrationApplyRecovery) { this.results = new WorktreeResultCommit(works.store, works, lifecycle); this.candidates = new IntegrationPreparation(works.store, works, settings, lifecycle); }
+  @Get(':candidateId/apply/status') applyStatus(@Param('id') id: string, @Param('candidateId') candidateId: string, @Query() query: Record<string, unknown>) { return this.recovery.status(id, candidateId, query); }
+  @Post(':candidateId/apply/reconcile') @HttpCode(200) applyReconcile(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.recovery.reconcile(id, candidateId, body); }
+  @Post(':candidateId/cancel') @HttpCode(200) candidateCancel(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.recovery.cancel(id, candidateId, body); }
   @Post(':candidateId/apply') @HttpCode(200) apply(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.applying.apply(id, candidateId, body); }
   @Get(':candidateId/apply/preview') applyPreview(@Param('id') id: string, @Param('candidateId') candidateId: string, @Query() query: Record<string, unknown>) { if (Object.keys(query).length) throw new BadRequestException('사전검사는 경로·명령 인자를 받지 않습니다'); return this.preflight.preview(id, candidateId); }
   @Post(':candidateId/apply/preflight') @HttpCode(200) applyPreflight(@Param('id') id: string, @Param('candidateId') candidateId: string, @Body() body: unknown) { return this.preflight.confirm(id, candidateId, body); }

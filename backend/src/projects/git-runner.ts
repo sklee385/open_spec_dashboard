@@ -14,6 +14,7 @@ export interface RunnerOptions {
     onSpawn?: (pid: number) => void | Promise<void>;
     /** Internal-only: the caller pins this path/ref from its owned source checkpoint. */
     headPin?: { file: string; ref: string; beforeDispatch: () => void | Promise<void> };
+    onTermination?: (evidence: { protocol: 'head-pin-job-v1'; state: 'job-quiescent' | 'not-dispatched'; workerPid: number | null; guardPid?: number; at: string }) => void | Promise<void>;
 }
 export function gitEnvironment() {
     const env = { ...process.env };
@@ -138,21 +139,28 @@ async function runHeadPinnedGit(root: string, args: string[], options: RunnerOpt
     child.stdout!.on('data', bytes => output(out, bytes)); child.stderr!.on('data', bytes => output(err, bytes)); child.stdin!.on('error', () => { failure ||= 'Git 대기 실행기 전송을 확인하지 못했습니다'; stop(); });
     const timer = setTimeout(() => { failure = 'Git 실행 시간 제한을 초과했습니다'; stop(); }, options.timeoutMs ?? 30000);
     const guard = guardBrowserProcess(child, { file: options.headPin!.file, ref: options.headPin!.ref }); void guard.catch(() => {});
+    let owned: Awaited<typeof guard> | undefined, quiescent = false, reported = false;
+    const report = async () => {
+        if (reported || dispatched && !quiescent) return;
+        reported = true;
+        await options.onTermination?.({ protocol: 'head-pin-job-v1', state: quiescent ? 'job-quiescent' : 'not-dispatched', workerPid: child.pid ?? null, ...(owned?.pid ? { guardPid: owned.pid } : {}), at: new Date().toISOString() });
+    };
     try {
         if (!child.pid) throw new GitError('Git 대기 실행기 PID가 없습니다', 409);
         await options.onSpawn?.(child.pid);
-        const owned = await guard;
+        owned = await guard;
         await options.headPin!.beforeDispatch();
         if (closedFlag || failure) throw new GitError(failure || 'Git 대기 실행기가 종료되었습니다', 409);
         dispatched = true; child.stdin!.end(JSON.stringify({ args: ['--no-optional-locks', '--literal-pathspecs', ...args], env }));
-        await closed; await owned.done;
+        await closed; await owned.done; quiescent = true; await report();
         if (failure) throw new GitError(failure, 409, true, false);
         if (code !== 0 && !optional) throw new GitError(scrub(Buffer.concat(err).toString()) || 'Git 작업에 실패했습니다', 400);
         return code === 0 ? Buffer.concat(out) : Buffer.alloc(0);
     } catch (error: any) {
         stop(); await closed;
         let terminated = !dispatched;
-        try { await (await guard).done; terminated = true; } catch { /* Never release a dispatched Git Job based only on worker close. */ }
+        try { owned ??= await guard; await owned.done; quiescent = true; terminated = true; } catch { /* Never release a dispatched Git Job based only on worker close. */ }
+        if (terminated) try { await report(); } catch { /* The caller may still persist its in-memory witness with the result. */ }
         if (error instanceof GitError && terminated) { error.terminationUnconfirmed = false; throw error; }
         throw new GitError(error instanceof Error ? error.message : 'Git 소유 실행을 확인할 수 없습니다', 409, dispatched, !terminated);
     } finally { clearTimeout(timer); }
