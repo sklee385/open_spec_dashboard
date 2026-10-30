@@ -10,6 +10,7 @@ import { ProjectResolver } from '../projects/resolver';
 import { LegacyService } from '../legacy/legacy.service';
 import { inspectWorkspacePath } from '../work/workspace-paths';
 import { VerificationEnvironments } from './verification-environment';
+import { BrowserFreshness, browserDigest, browserEvidenceValid } from './browser-freshness';
 import { FileResults } from '../work/file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { unresolvedQuestion } from '../codex/questions';
@@ -24,7 +25,7 @@ import { desktopHealth } from '../desktop/health';
 import { VerificationSnapshots, type VerificationSnapshot } from './verification-snapshot';
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-type Active = { workId: string; child?: ChildProcess; cancelled: boolean; abort: AbortController; done: Promise<void> };
+type Active = { workId: string; row: any; candidateId?: string; child?: ChildProcess; cancelled: boolean; abort: AbortController; done: Promise<void> };
 @Injectable()
 export class BrowserService implements OnModuleDestroy, OnModuleInit {
   readonly mailbox: BrowserMailbox;
@@ -32,7 +33,6 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
   private closing = false;
   private readonly snapshots: VerificationSnapshots;
   private contexts = new Map<string, (id: string) => unknown>();
-  private identities = new Map<string, Promise<any>>();
   private environments?: VerificationEnvironments;
   private ownedLegacy?: LegacyService;
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Optional() @Inject(ProjectResolver) private resolver?: ProjectResolver) {
@@ -54,20 +54,32 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const { environment } = await this.targetEnvironments().capture({ sourceId: work.sourceId, workId: work.id });
     return { revision: environment.sourceRevision, targetVersion: environment.targetVersion, ...this.context(this.work(work.id)) };
   }
-  activity(id: string) { this.work(id); return { running: this.active?.workId === id, busy: !!this.active }; }
-  async status(id: string, independent = false) {
-    this.work(id);
-    let current: Awaited<ReturnType<BrowserService['identity']>> | undefined;
-    const rows = this.store.records(id, 'browser-verification').slice(-10);
-    if (rows.length) {
-      let pending = independent ? this.identity(this.work(id)) : this.identities.get(id);
-      if (!pending) { pending = this.identity(this.work(id)); this.identities.set(id, pending); void pending.finally(() => { if (this.identities.get(id) === pending) this.identities.delete(id); }).catch(() => {}); }
-      try { current = await pending; } catch { /* Historical/unavailable work is never fresh. */ }
-    }
-    const context = this.context(this.work(id));
-    // Live connection ownership matters during execution, not after a normal turn completes.
-    const results = this.store.records(id, 'browser-verification').slice(-10).map(row => ({ ...row, fresh: !!current && !row.candidateId && current.targetVersion === row.targetVersion && current.revision === row.revision && Object.keys(context).filter(key => key !== 'executionContext').every(key => (current as any)[key] === (context as any)[key] && row[key] === (context as any)[key]) }));
-    return { scenario: this.work(id).browserScenario ?? null, ...this.activity(id), results };
+  activity(id: string, candidateId?: string) {
+    this.work(id); const active = this.active;
+    return { running: active?.workId === id && (active.candidateId ?? null) === (candidateId ?? null), busy: !!active,
+      live: active?.workId === id ? { id: active.row.id, workId: id, candidateId: active.candidateId ?? null, targetKind: active.row.targetKind, environmentId: active.row.environmentId ?? null, status: 'running' } : null };
+  }
+  private rows(id: string, candidateId?: string): any[] {
+    const namespace = candidateId === undefined ? "json_extract(data,'$.candidateId') IS NULL" : "json_extract(data,'$.candidateId') = ?";
+    const statement = this.store.db.prepare(`SELECT id,data FROM records WHERE work_id=? AND kind='browser-verification' AND ${namespace} ORDER BY rowid DESC LIMIT 10`);
+    return (statement.all(id, ...(candidateId === undefined ? [] : [candidateId])) as { id: string; data: string }[]).reverse().map(row => ({ ...JSON.parse(row.data), id: row.id, workId: id }));
+  }
+  evidenceVersion(id: string, candidateId?: string) { return browserDigest(this.rows(id, candidateId)); }
+  async capturePassedProof(id: string, candidateId?: string) {
+    this.work(id); const rows = this.rows(id, candidateId), latest = rows.at(-1), recordsVersion = browserDigest(rows);
+    if (!browserEvidenceValid(latest)) throw new ConflictException('대상별 최신 브라우저 빌드·환경·종료 통과 근거가 필요합니다');
+    const current = await new BrowserFreshness(this.store, this.targetResolver()).capture(id, candidateId);
+    if (latest.freshnessEvidence.semanticVersion !== current.version) throw new ConflictException('브라우저 검증 뒤 실제 입력·계획·설정 또는 후보 기준이 변경되었습니다');
+    const assertUnchanged = () => { current.assertUnchanged(); if (this.evidenceVersion(id, candidateId) !== recordsVersion) throw new ConflictException('브라우저 관측 뒤 새 결과가 기록되었습니다'); };
+    assertUnchanged(); return { row: latest, current, recordsVersion, assertUnchanged };
+  }
+  async status(id: string, inspect = false, candidateId?: string) {
+    const work = this.work(id), rows = this.rows(id, candidateId);
+    let observation: any = { state: 'not-checked' }, proof: Awaited<ReturnType<BrowserService['capturePassedProof']>> | undefined;
+    if (inspect) try { proof = await this.capturePassedProof(id, candidateId); if (browserDigest(rows) !== proof.recordsVersion) throw new ConflictException('조회 중 브라우저 결과가 변경되었습니다'); proof.assertUnchanged(); observation = { state: 'fresh', checkedAt: new Date().toISOString() }; }
+    catch (error: any) { proof = undefined; observation = { state: rows.length ? 'stale' : 'not-run', checkedAt: new Date().toISOString(), reason: error.message }; }
+    const results = rows.map(row => ({ ...row, fresh: !!proof && row.id === proof.row.id, freshnessState: inspect ? proof && row.id === proof.row.id ? 'fresh' : 'stale' : 'not-checked' }));
+    return { scenario: work.browserScenario ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', candidateId: candidateId ?? null, ...this.activity(id, candidateId), observation, results };
   }
   save(id: string, input: unknown) {
     const work = this.work(id);
@@ -80,8 +92,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (!work.browserScenario) return;
     // A completion/apply gate must start its own scan after the request, never
     // borrow a polling scan which may have read the source before this request.
-    const latest = (await this.status(work.id, true)).results.at(-1);
-    if (!latest?.fresh || latest.status !== 'passed') throw new ConflictException('현재 코드와 시나리오의 브라우저 검증을 통과해야 합니다');
+    const proof = await this.capturePassedProof(work.id); proof.assertUnchanged();
   }
   run(id: string, owner: 'user' | 'tool' = 'user', candidateId?: string) {
     desktopHealth(this.store).assertExecutionAllowed();
@@ -97,12 +108,13 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, candidateId: candidateId ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
     let resolveDone!: () => void;
     // Reserve synchronously, before any async copy. Cancellation works while preparing.
-    const active: Active = this.active = { workId: id, cancelled: false, abort: new AbortController(), done: new Promise<void>(resolve => { resolveDone = resolve; }) };
+    const active: Active = this.active = { workId: id, row, candidateId, cancelled: false, abort: new AbortController(), done: new Promise<void>(resolve => { resolveDone = resolve; }) };
     this.store.record(row.id, id, 'browser-verification', row);
     if (owner === 'user') { work.state = 'running'; work.phase = 'verification'; this.store.save(work); }
     this.store.event(id, 'browser-started', { id: row.id });
     const started = Date.now(); let snapshot: VerificationSnapshot | undefined, guard: ReturnType<typeof guardBrowserProcess> | undefined, result: BrowserOutcome | undefined, finished = false;
     let environmentProof: Awaited<ReturnType<VerificationEnvironments['capture']>> | undefined;
+    let initialBasis: Awaited<ReturnType<BrowserFreshness['capture']>> | undefined, childTerminated = false;
     const finish = async () => {
       if (finished) return; finished = true; clearTimeout(timer);
       let cleaned = true;
@@ -124,6 +136,15 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         const directory = environmentProof.environment.evidencePath; inspectWorkspacePath(directory, []);
         const path = join(directory, `${row.id}.jpg`); await writeFile(path, Buffer.from(final.image.slice('data:image/jpeg;base64,'.length), 'base64'), { flag: 'wx' }); final.evidencePath = path;
       } catch { final.status = 'blocked'; final.error = '호스트 증거 경로에 화면을 보존하지 못했습니다'; }
+      final.processTerminated = cleaned && (!active.child || childTerminated);
+      if (final.status === 'passed') try {
+        if (!guard || !childTerminated || !final.processTerminated || !initialBasis) throw new Error('부모 실행기의 실제 종료 확인이 없습니다');
+        const current = await new BrowserFreshness(this.store, this.targetResolver()).capture(id, candidateId);
+        if (current.version !== initialBasis.version) throw new Error('검증 중 실제 입력 또는 후보 기준이 변경되었습니다');
+        final.freshnessEvidence = { version: 1, runId: row.id, environmentId: row.environmentId, rawSourceRevision: row.environment.sourceRevision, executedCommit: row.environment.commit, buildId: result!.buildAttestation!.buildId, basis: initialBasis.basis, semanticVersion: initialBasis.version };
+        if (!browserEvidenceValid(final)) throw new Error('실제 빌드·환경 근거의 연결을 확인할 수 없습니다');
+      } catch (error: any) { final.status = 'stale'; final.error = error.message; delete final.freshnessEvidence; }
+      if (active.cancelled) { final.status = 'interrupted'; delete final.freshnessEvidence; }
       this.store.record(row.id, id, 'browser-verification', final);
       if (owner === 'user') { const latest = this.work(id); if (latest.state === 'running' && latest.threadId === row.threadId && (latest.turnId ?? null) === row.turnId && this.context(latest).executionContext === row.executionContext) { latest.state = active.cancelled ? 'interrupted' : 'idle'; this.store.save(latest); } }
       if (this.active === active) this.active = undefined;
@@ -135,6 +156,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
       try {
         environmentProof = await this.targetEnvironments().capture({ sourceId: work.sourceId, workId: id, ...(candidateId ? { candidateId } : {}) });
         const environment = environmentProof.environment;
+        initialBasis = await new BrowserFreshness(this.store, this.targetResolver()).capture(id, candidateId);
         if (environment.executionPath !== root) throw new ConflictException('검증 대상 경로가 변경됐습니다');
         snapshot = await this.snapshots.prepare(this.work(id), root, active.abort.signal, environment); await environmentProof.assertCurrent();
         Object.assign(row, { environmentId: environment.environmentId, environment, targetVersion: environment.targetVersion, build: environment.build }); row.snapshotRoot = snapshot.root; row.revision = snapshot.revision; row.snapshotStatus = 'ready';
@@ -151,7 +173,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
           if (message?.step) { row.steps.push(message.step); this.store.record(row.id, id, 'browser-verification', row); this.store.event(id, 'browser-step', message.step); }
           if (message?.result) result = message.result;
         });
-        child.once('error', () => { void finish(); }); child.once('exit', () => { void finish(); });
+        child.once('error', () => { void finish(); }); child.once('exit', () => { childTerminated = true; void finish(); });
         child.stdout?.resume(); child.stderr?.resume();
         await guard;
         active.abort.signal.throwIfAborted();

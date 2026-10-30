@@ -104,6 +104,25 @@ export class VerificationSnapshots {
     if (first !== revision(await manifest(root, limits))) fail('소스 상태 확인 중 파일이 변경되었습니다');
     return first;
   }
+  /** Separate from raw copy equality. Only exact attested outputs and an explicit
+   * planning-checkbox independence declaration affect this semantic projection. */
+  async semanticRevision(root: string, outputs: string[], checkboxMetadata?: string, signal?: AbortSignal) {
+    const limits = budget(signal), before = await manifest(root, limits), parents = new Set<string>();
+    for (const output of outputs) { let parent = dirname(output).replace(/\\/g, '/'); while (parent !== '.') { parents.add(parent); parent = dirname(parent).replace(/\\/g, '/'); } }
+    const files = before.filter(entry => !outputs.includes(entry.path) && !(entry.kind === 'directory' && parents.has(entry.path))).map(entry => ({ ...entry }));
+    const metadata = files.find(entry => entry.path === checkboxMetadata);
+    if (metadata?.kind === 'file') {
+      if (metadata.size > 2 * 1024 ** 2) fail('계획 metadata 크기 한도를 초과했습니다');
+      const fd = await open(join(root, metadata.path), 'r'); const chunks: Buffer[] = []; let bytes = 0;
+      try { while (true) { checkpoint(limits); const chunk = Buffer.allocUnsafe(8192), read = await fd.read(chunk, 0, chunk.length, null); if (!read.bytesRead) break; bytes += read.bytesRead; if (bytes > 2 * 1024 ** 2) fail('계획 metadata 크기 한도를 초과했습니다'); chunks.push(chunk.subarray(0, read.bytesRead)); } }
+      finally { await fd.close(); }
+      const raw = Buffer.concat(chunks, bytes); if (createHash('sha256').update(raw).digest('hex') !== metadata.hash) fail('의미 기준을 읽는 동안 계획이 변경되었습니다');
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(raw).replace(/^(\s*[-*+]\s+)\[[ xX]\](?=\s)/gm, '$1[ ]');
+      metadata.hash = createHash('sha256').update(text).digest('hex'); metadata.size = Buffer.byteLength(text);
+    }
+    if (revision(await manifest(root, limits)) !== revision(before)) fail('의미 기준을 읽는 동안 실제 소스가 변경되었습니다');
+    return revision(files);
+  }
   async prepare(work: Work, sourceRoot: string, signal?: AbortSignal, environment?: VerificationEnvironment): Promise<VerificationSnapshot> {
     const limits = budget(signal); sourceRoot = await directory(sourceRoot); checkpoint(limits);
     const data = resolve(process.env.DATA_DIR || '../.data');

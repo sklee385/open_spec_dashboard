@@ -1,11 +1,13 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Put } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Inject, Param, Post, Put, Query } from '@nestjs/common';
 import { BrowserService } from './browser.service';
 
-@Controller('work/:id/browser')
+@Controller('work/:id')
 export class BrowserController {
   constructor(@Inject(BrowserService) private readonly browser: BrowserService) {}
-  @Get() status(@Param('id') id: string) { return this.browser.status(id); }
-  @Put('scenario') save(@Param('id') id: string, @Body() body: unknown) { return this.browser.save(id, body); }
-  @Post('run') @HttpCode(200) run(@Param('id') id: string) { return this.browser.run(id); }
-  @Post('cancel') @HttpCode(200) cancel(@Param('id') id: string) { return this.browser.cancel(id); }
+  private inspect(query: Record<string, unknown>) { if (Object.keys(query).some(key => key !== 'inspect') || query.inspect !== undefined && query.inspect !== '1') throw new BadRequestException('실제 브라우저 상태 검사는 inspect=1만 사용할 수 있습니다'); return query.inspect === '1'; }
+  @Get('browser') status(@Param('id') id: string, @Query() query: Record<string, unknown> = {}) { return this.browser.status(id, this.inspect(query)); }
+  @Get('integration/:candidateId/browser') candidateStatus(@Param('id') id: string, @Param('candidateId') candidateId: string, @Query() query: Record<string, unknown> = {}) { return this.browser.status(id, this.inspect(query), candidateId); }
+  @Put('browser/scenario') save(@Param('id') id: string, @Body() body: unknown) { return this.browser.save(id, body); }
+  @Post('browser/run') @HttpCode(200) run(@Param('id') id: string) { return this.browser.run(id); }
+  @Post('browser/cancel') @HttpCode(200) cancel(@Param('id') id: string) { return this.browser.cancel(id); }
 }

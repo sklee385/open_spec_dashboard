@@ -7,7 +7,7 @@ import { localOrigin, localPath, parseScenario } from './browser-policy';
 import type { VerificationSnapshot, VerificationOutput } from './verification-snapshot';
 
 type Endpoint = { path: string; urlPath: string };
-export interface BrowserBuildContract { version: 1; build: { command: 'node' | 'npm'; args: string[]; cwd?: string }; artifacts: Endpoint[]; identity: Endpoint; }
+export interface BrowserBuildContract { version: 1; build: { command: 'node' | 'npm'; args: string[]; cwd?: string }; artifacts: Endpoint[]; identity: Endpoint; freshness?: { tasksCheckboxes: 'independent-plan-metadata-v1' }; }
 type BuildContext = { environmentId: string; sourceRevision: string; workId?: string; dataPath?: string; evidencePath?: string };
 export interface PreparedBrowserBuild { snapshot: VerificationSnapshot; context: BuildContext; contract: BrowserBuildContract; contractVersion: string; expectedRoot: string; }
 export interface BrowserBuildAttestation {
@@ -29,13 +29,28 @@ function endpoint(value: any): Endpoint {
   return { path: value.path, urlPath: value.urlPath };
 }
 function parse(value: any): BrowserBuildContract {
-  keys(value, ['version', 'build', 'artifacts', 'identity']); if (value.version !== 1 || !Array.isArray(value.artifacts) || !value.artifacts.length || value.artifacts.length > 32) fail('빌드 출처 계약 버전·산출물을 확인해 주세요');
+  keys(value, ['version', 'build', 'artifacts', 'identity', 'freshness']); if (value.version !== 1 || !Array.isArray(value.artifacts) || !value.artifacts.length || value.artifacts.length > 32) fail('빌드 출처 계약 버전·산출물을 확인해 주세요');
+  if (value.freshness !== undefined) { keys(value.freshness, ['tasksCheckboxes']); if (value.freshness.tasksCheckboxes !== 'independent-plan-metadata-v1') fail('계획 metadata 독립성 선언을 확인해 주세요'); }
   keys(value.build, ['command', 'args', 'cwd']);
   const command = parseScenario({ name: 'build', server: { ...value.build, url: 'http://127.0.0.1:19000' }, steps: [{ op: 'expectURL', path: '/' }] }).server;
   if (command.command === 'npm' && command.args.length !== 2) fail('빌드 npm 명령은 등록된 run 스크립트만 허용합니다');
   const artifacts = value.artifacts.map(endpoint), identity = endpoint(value.identity), all = [...artifacts, identity];
   if (new Set(all.map(item => key(item.path))).size !== all.length || new Set(all.map(item => item.urlPath)).size !== all.length) fail('identity와 산출물 경로·URL이 충돌합니다');
-  return { version: 1, build: { command: command.command, args: command.args, ...(command.cwd === undefined ? {} : { cwd: command.cwd }) }, artifacts, identity };
+  return { version: 1, build: { command: command.command, args: command.args, ...(command.cwd === undefined ? {} : { cwd: command.cwd }) }, artifacts, identity, ...(value.freshness ? { freshness: { tasksCheckboxes: 'independent-plan-metadata-v1' as const } } : {}) };
+}
+export async function readBrowserBuildContract(root: string) { const file = await readOwned(root, 'openspec/browser-build.json', 65536); return { contract: parse(JSON.parse(file.bytes.toString('utf8'))), version: file.sha256 }; }
+
+/** Historical evidence is structural, not a new build or a running-server probe. */
+export function validBrowserBuild(attestation: any, environment: any): attestation is BrowserBuildAttestation {
+  try {
+    if (!attestation || attestation.version !== 1 || attestation.environmentId !== environment?.environmentId || attestation.sourceRevision !== environment.sourceRevision || attestation.snapshot?.revision !== environment.sourceRevision || !/^[a-f0-9]{64}$/.test(attestation.contractVersion) || !Array.isArray(attestation.artifacts) || !attestation.artifacts.length || attestation.artifacts.length > 32) return false;
+    const files = [...attestation.artifacts, attestation.identity];
+    for (const file of files) { endpoint({ path: file.path, urlPath: file.urlPath }); if (!/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 8 * 1024 ** 2 || !Number.isSafeInteger(file.mode)) return false; }
+    if (new Set(files.map(file => key(file.path))).size !== files.length || new Set(files.map(file => file.urlPath)).size !== files.length) return false;
+    if (attestation.buildId !== hash(JSON.stringify([attestation.environmentId, attestation.sourceRevision, attestation.contractVersion, attestation.artifacts]))) return false;
+    const identity = Buffer.from(JSON.stringify({ version: 1, environmentId: attestation.environmentId, buildId: attestation.buildId, sourceRevision: attestation.sourceRevision, contractVersion: attestation.contractVersion, artifacts: attestation.artifacts.map(({ urlPath, sha256, bytes }: any) => ({ urlPath, sha256, bytes })) }));
+    return hash(identity) === attestation.identity.sha256 && identity.length === attestation.identity.bytes && JSON.stringify(attestation.outputs) === JSON.stringify(files.map(file => ({ path: file.path, hash: file.sha256, size: file.bytes, mode: file.mode })));
+  } catch { return false; }
 }
 async function owned(snapshot: VerificationSnapshot, expectedRoot: string) {
   const data = resolve(process.env.OPENSPEC_VERIFICATION_DATA_ROOT || process.env.DATA_DIR || '../.data');

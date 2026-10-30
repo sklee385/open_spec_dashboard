@@ -155,34 +155,41 @@ export class IntegrationVerification {
     if (!running) try { const captured = await this.capture(workId, candidateId, false); version = captured.version; check = captured.checkPublication; } catch (failure: any) { error = failure.message; }
     return this.render(work, request, version, error, check);
   }
-  private render(work: Work, request: IntegrationRequest, version?: string, error?: string, check?: () => boolean) {
+  private async render(work: Work, request: IntegrationRequest, version?: string, error?: string, check?: () => boolean) {
     const workId = work.id, candidateId = request.candidateId;
     const running = this.rows(workId, candidateId).some(row => row.status === 'running');
     const records = this.rows(workId, candidateId), runs = records.map(row => ({ ...row, fresh: !!version && row.candidateVersion === version && row.processTerminated === true }));
     const latest = runs.at(-1); let cliPassed = latest?.status === 'passed' && latest.fresh === true;
-    // Group 7 supplies candidate-specific browser evidence; work browser passes never substitute.
-    const browserRequired = !!work.browserScenario; let ready = !!cliPassed && !browserRequired;
+    const browserRequired = !!work.browserScenario, browser = this.works.browser;
+    const browserVersion = browserRequired ? browser?.evidenceVersion(workId, candidateId) : undefined;
+    let browserProof: Awaited<ReturnType<typeof browser.capturePassedProof>> | undefined, browserStatus = browserRequired ? 'not-run-for-candidate' : 'not-required';
+    if (browserRequired && cliPassed) try { browserProof = await browser.capturePassedProof(workId, candidateId); browserStatus = 'passed'; } catch (failure: any) { browserStatus = 'stale-or-unverified'; error = failure.message; }
+    let ready = !!cliPassed && (!browserRequired || !!browserProof);
+    const publication = check ? () => { if (!check() || browserRequired && browser.evidenceVersion(workId, candidateId) !== browserVersion) return false; try { browserProof?.assertUnchanged(); return true; } catch { return false; } } : undefined;
+    const verificationRefs = ready ? [latest.id, ...(browserProof ? [browserProof.row.id] : [])] : [];
     let accepted = true;
-    if (!running) try { accepted = this.publish(work, request, ready, ready ? [latest.id] : [], records, check); } catch { accepted = false; }
+    if (!running) try { accepted = this.publish(work, request, ready, verificationRefs, records, publication); } catch { accepted = false; }
     if (!accepted) { ready = cliPassed = false; for (const row of runs) row.fresh = false; error = '검증 조회 뒤 후보 세대·소스·정책 또는 새 검증 근거가 변경되었습니다'; }
-    return { candidateId, targetKind: 'integration-candidate', runs, ready, cliPassed: !!cliPassed, browserRequired, browserStatus: browserRequired ? 'not-run-for-candidate' : 'not-required', ...(error ? { error } : {}) };
+    return { candidateId, targetKind: 'integration-candidate', runs, ready, cliPassed: !!cliPassed, browserRequired, browserStatus, browserRunId: browserProof?.row.id ?? null, ...(error ? { error } : {}) };
   }
   async preview(workId: string, candidateId: string) {
     const captured = await this.capture(workId, candidateId, true);
     projectCoordinator(this.store).assertRecovery(this.plan(captured.request));
-    const status = this.render(captured.work, captured.request, captured.version, undefined, captured.checkPublication);
+    const status = await this.render(captured.work, captured.request, captured.version, undefined, captured.checkPublication);
     return { ...status, candidateVersion: captured.version, commands: captured.commands, results: status.runs, executionPath: captured.request.executionPath, basis: captured.basis };
   }
   /** Fresh, read-only evidence for final integration checks. Never publishes ready/stale state. */
   async captureReadyProof(workId: string, candidateId: string) {
     const captured = await this.capture(workId, candidateId, true), records = this.rows(workId, candidateId), latest = records.at(-1);
-    if (captured.work.browserScenario || !latest || latest.status !== 'passed' || latest.processTerminated !== true || latest.candidateVersion !== captured.version || records.some(row => row.status === 'running' || row.processTerminated !== true)) throw new ConflictException('최신 후보의 필수 검증 통과 근거가 필요합니다');
+    if (!latest || latest.status !== 'passed' || latest.processTerminated !== true || latest.candidateVersion !== captured.version || records.some(row => row.status === 'running' || row.processTerminated !== true)) throw new ConflictException('최신 후보의 필수 검증 통과 근거가 필요합니다');
+    const browserProof = captured.work.browserScenario ? await this.works.browser.capturePassedProof(workId, candidateId) : undefined;
     const recordsVersion = hash(records);
     const assertUnchanged = () => {
       if (!captured.checkPublication() || hash(this.rows(workId, candidateId)) !== recordsVersion) throw new ConflictException('후보 또는 필수 검증 기준이 변경되었습니다');
+      browserProof?.assertUnchanged();
     };
     assertUnchanged();
-    return { ...captured, verificationRefs: [latest.id as string], recordsVersion, assertUnchanged };
+    return { ...captured, verificationRefs: [latest.id as string, ...(browserProof ? [browserProof.row.id as string] : [])], recordsVersion, assertUnchanged };
   }
   private parse(body: any): RunInput {
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['requestKey', 'confirmed', 'candidateVersion'].includes(key)) || typeof body.requestKey !== 'string' || !/^[a-zA-Z0-9:_-]{1,160}$/.test(body.requestKey) || body.confirmed !== true || typeof body.candidateVersion !== 'string' || !/^[a-f0-9]{64}$/.test(body.candidateVersion)) throw new BadRequestException('요청 키·후보 버전·명시 확인이 필요합니다');
@@ -254,7 +261,7 @@ export class IntegrationVerification {
         this.save(row); const intent = this.store.records(row.workId, 'workspace-git-intent').find(item => item.id === row.intentId)!;
         this.store.record(row.intentId, row.workId, 'workspace-git-intent', { ...intent, processId: row.processId, status: row.processTerminated ? row.status : 'uncertain', terminationUnconfirmed: !row.processTerminated });
       }); durable = true;
-      if (row.processTerminated) this.render(completed?.work ?? captured.work, completed?.request ?? captured.request, completed?.version, undefined, completed?.checkPublication);
+      if (row.processTerminated) await this.render(completed?.work ?? captured.work, completed?.request ?? captured.request, completed?.version, undefined, completed?.checkPublication);
     } catch { /* Durable running intent survives lost publication; never start another command. */ }
     finally {
       if (row.processTerminated && durable) { this.active.delete(row.id); try { release(); } finally { settle(); } }
