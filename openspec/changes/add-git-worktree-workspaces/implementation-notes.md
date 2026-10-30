@@ -395,3 +395,24 @@ $env:TMP = $env:TEMP
 - 최초synthetic3 실행은default1초fixture준비대기안에fork까지도달하지않아undefined spy3실패(10.47초)였으며제품RED로계산하지않았다. safe row진단에서preparing을확인하고유한15초준비/ownabort후정상teardown으로고쳤다. 그뒤실제다른Store의running→interrupted RED1(4.65초), 사본점유미거부·guard무응답done미종결 RED2(9.09초)를확인했다. 구현후3/3 GREEN(11.96초), fallback LiveBrowser union의TS2339 3곳은typeannotation만수정해build0을확인했다.
 - 추가DB실패done/lateexit-closeIPC/영속PID·boolean비추정/늦은actualack명시복구4개가통과했다(12.48초). 실제Job종료뒤속성검사와Gitstatus사이cleanhelper marker가실행되는RED1(26.41초)을확인해6.2의boundedraw index/blob/bytes규칙을git-clean-files로추출·공유하고IV의status를제거했다. 영향actualCLI2개가통과했다(69.85초). C소유v2guard8704바이트컴파일0뒤실제Work+candidate1개가통과했다(52.96초): positive worker/guard PID, Jobactive0,childclose,settledslot과새빌드증거를확인했다. 실제Nest DI/API1개(2.16초)와최종backendbuild0도확인했다.
 - 위7.6근거는선택된각실행이며전체테스트나실제OScrash/PIDbirth/executable검증을의미하지않는다. 사용자브라우저복구버튼7.7·Git완료8.5·설치/무설치9.3·실제IAB9.5는미완료다. 7.6만완료하여41/54로기록하고운영설치·재시작·외부배포는하지않았다.
+## 2026-10-30 후속 구현과 검증(현재48/54)
+
+- d9e1dd8: 브라우저 HTTP 요청 키·정확한 종료 재확인 및 UI 응답 유실 복구. HTTP6, 화면/영수증12+추가 경계1, 실제 실패 Chromium1(23.99초), 변경 없는 정상 Work/candidate V2 근거 재사용. 모의 HTTP BrowserService·fetch UI와 실제 Chromium/Job 근거를 구분한다.
+- 6eefd75: 실제 적용 검증 참조 고정·Git blob 완료 보존·캡처 후 변경 rollback·원본 보관 결과/dirty/명시 재확인. 실제 정상 Git 완료33.42초, 최종 fence34.10초, 보관 실패38.87초/이동 자동확정 방지18ms, copy 실제 HTTP/CLI682ms, Git 실제 CLI 보관38.16초, UI 버튼1 통과. raw rename mock EPERM과 한 번의 worker unexpected exit는 성공 근거가 아니다. 설치 CLI의 검증된 Windows 이동 처리를 실제로 실행해 확인했다.
+- 023c6da: 관리 Git 공간 정리 preview/확인 토큰/현재 상태 재검사/영속 의도/정상 remove/같은 키 재조회. 실제 경로 교체3278ms, 정상 정리·후속 변경·도중 사용자 파일 보존3건, 종료 미확인 구형 상태/슬롯 거부2844ms 및 HTTP 입력 경계 통과. Work+candidate 정리 후 실제 보관/재확인49.42초. 실제 생성기의 disabled-hooks 누락은 폴더 읽기로 원인을 확인한 뒤 빈 소유 폴더만 정리하도록 수정했다. copy/미관리 공간은 삭제하지 않고 차단한다.
+- 9dba12c: 이전 루트·공유/공간 용량·부분 집계, 개별 정리 UI, 현재 정책/해시/확인에 따른 완료 화면 사본 만료. 실제 설정/SQLite/HTTP1, 모의 UI3+공통 영수증7, 수정 프런트 lint, 양쪽 build 통과. 만료 대상은 완료 캡처 BLOB이며 원래 실행 증거·검증 기록·장기 diff는 보존한다.
+
+### 9.1 실제 A/B 순차 통합
+
+`worktree-combined-flow.test.ts` 실제1건 통과(216.868초, 전체223.57초). 물리 Git/호스트 WorktreeManager로 준비하고 ready 기준만 trusted fixture로 설정했다. 두 소유 Node actor PID297872/221712가 함께 준비된 뒤 분리 공간에 쓰고, 실제 Work 명령을 병렬 실행했다. HTTP 예약→결과 커밋→실제 후보 준비→후보 명령/Job 종료→원본 ff를 실행했다. B 충돌은 파일 CAS 저장→선택 stage/commit→새 후보 명령 검증 후에만 반영했고 검증 전 apply preview409를 확인했다. AI 모델 호출/설치 앱 E2E를 실행했다는 뜻이 아니다.
+
+- 원본 시작:83693d7061e09ee58865c2ab97234f3052282f7a
+- A result:ca8b50f691bde36f1fe23bb80f51d55d551ba35d / candidate·applied:e531e73583421018722b2983af1ad6e023b2d623
+- B result:b93df67b960ee20394f1f0353676f9d2496e4f1b / 후보23e7d7e7-25cd-4b5e-9f51-5ee829bb105a는 code.txt 충돌 확인
+- B 해결/최종 applied:a04809079f7866f44b150d559c6d6713b83c6447
+- 최종 code.txt=A+B, A/B 업무 파일은 각각A/B 유지. keep.txt SHA256=18d2c441ca5c2d28052d96c33fff0a2778cc78bdf02d195de0e7f840f5bee7a8. 동일 apply 재요청 후 업무별 적용 영수증1건, thread-a/thread-b 보존.
+- 상세 소유 임시 증거:C:/Windows/Temp/ab-a4cTzH/ab-evidence.json. 임시 파일 수명과 별도로 위 해시·출력 및 커밋된 검사를 보존한다.
+
+### 중단 기한과 미완료
+
+사용자가2026-10-30 18:00 KST(09:00 UTC) 중단을 명시했다. 17:50부터 새 장시간 구현·검사를 피하고 실행 결과와 변경을 보존한다. 원본 D 설정/소유권·a16fa882 분기·운영 앱/서비스는 바꾸지 않고, 이 작업 소유 QA fixture만 정상 종료한다. OS 종료/재부팅과18:00 이후 자동 재개는 하지 않는다. 정밀 PID birth/executable/kernelhandle·실제 OS crash/복합 자원 장애, 설치/무설치 패키지, IAB 실제 사용자 동선과 운영 반영은 아직 성공으로 보고하지 않는다. 전체 테스트는 명시 요청 없어 실행하지 않았고 관련 검증 근거를 재사용했다.
