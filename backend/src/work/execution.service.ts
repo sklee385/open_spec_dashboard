@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { LegacyService } from '../legacy/legacy.service';
 import { Work, WorkStore } from './store';
 import { localRuntimeDirectory, runtimeCommand, runtimeEnvironment } from '../runtime';
-import { collectFiles, FileResults, Snapshot, snapshotRevision } from './file-results';
+import { collectFiles, FileResults, Snapshot, snapshotRevision, type GitCompletionCapture } from './file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { relatedTestCommands, type TestScope } from './test-commands';
 import { desktopHealth } from '../desktop/health';
@@ -27,7 +27,7 @@ export class ExecutionService implements OnModuleDestroy {
     const release = projectCoordinator(this.store).acquireOperation({ kind: 'integration', root: work.projectPath, spaces: [this.executionPath(work)] });
     try { return this.files.apply(work); } finally { release(); }
   }
-  freeze(work: Work, files?: Snapshot) { work.completedCommands = this.commands(work); return this.files.freeze(work, files); }
+  freeze(work: Work, files?: Snapshot, git?: GitCompletionCapture) { work.completedCommands = this.commands(work); return this.files.freeze(work, files, git); }
   private children = new Map<string, ChildProcess>();
   private batches = new Map<string, { scope: TestScope; remaining: string[] }>();
   private closing = false;

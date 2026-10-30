@@ -346,3 +346,13 @@ it('OpenSpec 오류를 구분하고 같은 대화로 수정 요청을 준비한�
   expect(await screen.findByText('오류·미지원 또는 검증 실패')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '이 결과로 AI 수정 요청 준비' })); expect((screen.getByRole('textbox', { name: 'AI와 문답' }) as HTMLTextAreaElement).value).toContain('시나리오가 없습니다');
 });
+
+it('완료 업무의 보관 버튼은 자동 실행 없이 사용자 확인을 API에 전달한다', async () => {
+  const mock = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, phase: 'completed' } })); vi.stubGlobal('fetch', mock);
+  render(<WorkRoom change={change} onClose={() => {}} />);
+  const archive = await screen.findByRole('button', { name: 'OpenSpec 보관' });
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST' && JSON.parse(String(init.body)).action === 'archive')).toBe(false);
+  fireEvent.click(archive);
+  await waitFor(() => expect(mock.mock.calls.some(([url, init]) => url.endsWith('/action') && JSON.parse(String(init?.body)).action === 'archive')).toBe(true));
+  expect(JSON.parse(String(mock.mock.calls.find(([url]) => url.endsWith('/action'))![1]?.body))).toEqual({ action: 'archive', confirmed: true });
+});

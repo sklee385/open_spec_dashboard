@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { within } from '../files';
 import { Work, WorkStore } from './store';
-import { CompletedResults } from './completed-results';
+import { CompletedResults, type CompletedIntegration } from './completed-results';
 import { WorkspaceService } from './workspace.service';
 import type { WorkspaceSettingsService } from './workspace-settings.service';
 import { readGitSync } from '../projects/git-runner';
@@ -61,7 +61,7 @@ export function collectFiles(root: string, exclude: (path: string) => boolean = 
   return first;
 }
 
-function differences(before: Snapshot, after: Snapshot) {
+export function differences(before: Snapshot, after: Snapshot) {
   return [...new Set([...Object.keys(before), ...Object.keys(after)])].sort().filter(path => before[path]?.hash !== after[path]?.hash || before[path]?.mode !== after[path]?.mode).map(path => ({
     path, status: !before[path] ? 'added' : !after[path] ? 'removed' : 'modified',
     before: before[path]?.content ?? null, after: after[path]?.content ?? null,
@@ -262,7 +262,18 @@ export class FileResults {
     this.store.record(`${work.id}:application`, work.id, 'application', { ...journal, status: 'applied', sourcePlanRevision: this.planRevision(work.projectPath, work.changeName), conflicts: [], updatedAt: new Date().toISOString() });
     return this.report(work);
   }
-  freeze(work: Work, files = this.snapshot(work, this.path(work))) {
+  freeze(work: Work, files?: Snapshot, git?: GitCompletionCapture) {
+    if (work.workspace?.kind === 'git-worktree') {
+      if (!git) throw new ConflictException('Git 완료는 실제 반영과 고정 검증 근거 확인이 필요합니다');
+      this.store.transaction(() => {
+        git.assertUnchanged(); const retained = new CompletedResults(this.store).capture(work, git.report, git.refs, git.integration);
+        git.assertUnchanged();
+        this.store.record(`${work.id}:completed-changes`, work.id, 'completed-changes', { report: retained });
+        this.store.save({ ...work, phase: 'completed' });
+      });
+      work.phase = 'completed'; return git.report;
+    }
+    files ??= this.snapshot(work, this.path(work));
     const application = this.store.records(work.id, 'application')[0], revision = snapshotRevision(files);
     if (application?.status !== 'applied' || application.revision !== revision || application.rawRevision !== rawRevision(files)) throw new ConflictException('최신 결과를 원본에 별도로 반영해 주세요');
     for (const entry of application.entries) {
@@ -281,3 +292,4 @@ export class FileResults {
     work.phase = 'completed'; return report;
   }
 }
+export type GitCompletionCapture = { report: any; refs: { id: string; kind: 'verification' | 'candidate-verification' | 'browser-verification' }[]; integration: CompletedIntegration; assertUnchanged: () => void };

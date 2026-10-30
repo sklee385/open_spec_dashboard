@@ -169,7 +169,7 @@ export class WorkService {
     const legacy = hash(this.documents(work).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
     return bindReviewedPlan(work, this.execution.queryPath(work), legacy);
   }
-  async action(id: string, body: any) {
+  async action(id: string, body: any, gitComplete?: (work: Work, operation: 'complete' | 'archive') => Promise<Work>) {
     const work = this.get(id);
     if (body?.action === 'archive' && work.phase === 'archived') return work;
     if (['isolate-workspace', 'apply-changes', 'archive'].includes(body?.action)) projectCoordinator(this.store).assertWorkCanStart(work);
@@ -207,6 +207,10 @@ export class WorkService {
       if (body.confirmed !== true || work.state !== 'idle' || work.phase !== 'verification' || !work.reviewedVersion || work.reviewedVersion !== this.planVersion(work)) throw new ConflictException('최신 계획 검토·검증 결과·사용자 확인이 필요합니다');
       const tasks = this.document(id, 'tasks.md').content.match(/^\s*-\s+\[([^\]]*)\]/gm) || [];
       if (!tasks.length || tasks.some(task => !/\[\s*[xX]\s*\]/.test(task)) || this.store.records(id, 'question').some(unresolvedQuestion)) throw new ConflictException('작업 또는 질문이 남아 있습니다');
+      if (work.workspace?.kind === 'git-worktree') {
+        if (!gitComplete) throw new ConflictException('Git 완료의 적용 근거 확인 경로가 필요합니다');
+        return gitComplete(work, 'complete');
+      }
       const snapshot = this.execution.snapshot(work);
       const expectedWork = JSON.stringify(work);
       await this.requireVerifications(work, snapshotRevision(snapshot));
@@ -218,6 +222,9 @@ export class WorkService {
     }
     if (body?.action === 'archive') {
       if (work.phase !== 'completed') throw new ConflictException('완료 확인 후 보관할 수 있습니다');
+      if (body.confirmed !== true) throw new ConflictException('원본 보관을 명시적으로 확인해 주세요');
+      if (gitComplete) return gitComplete(work, 'archive');
+      if (work.workspace?.kind === 'git-worktree') throw new ConflictException('Git 보관의 실제 상태 확인 경로가 필요합니다');
       const release = projectCoordinator(this.store).acquireOperation({ kind: 'integration', root: work.projectPath });
       try {
       const result = await this.openspec.run(work.projectPath, ['archive', work.changeName, '--yes']);

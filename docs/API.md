@@ -255,3 +255,11 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 브라우저 사용자 실행의 `requestKey`는 업무 안에서 유일하며 같은 키 재요청은 기존 `{id,status:"accepted",runStatus,requestKey,candidateId,targetKind}`를 반환한다. 다른 후보에 키를 재사용하면409다. accepted는 실행 수락 확인이며 검증 통과·종료를 뜻하지 않는다. UI는 같은 키/업무/대상의 사용자 실행 기록을 관측해 응답 유실을 복구하고 늦은 응답을 무시한다. 자동 재실행·새 키 재발행은 하지 않는다.
 
 `POST /api/work/:id/browser/reconcile` 및 `POST /api/work/:id/integration/:candidateId/browser/reconcile`는 정확한 `{runId:UUID,confirmed:true}`만 받는다. 같은 업무·대상 실행의 실제 종료 근거를 확인한 뒤 정리하며, 근거가 없으면409로 점유를 유지한다. 이미 종료 확인된 동일 실행의 재요청은 저장 결과만 반환하며 새 실행을 해제하지 않는다. PID·force·임의 경로는 받지 않는다.
+
+### Git 업무 완료와 원본 보관(개발 변경)
+
+`POST /api/work/:id/action`의 `complete`와 `archive`는 `confirmed:true`가 필요하다. Git 완료는 최신 applied 영수증과 적용 당시 검증 참조의 고정 digest, 실제 종료 근거, 현재 원본·업무·후보의 보존을 다시 확인한다. copy application journal을 만들거나 이미 성공한 적용을 반복하지 않는다. 완료 자료 캡처 중 파일이 바뀌면 캡처·완료 상태 저장을 함께 rollback하고 새 편집과 applied 이력을 보존한다. 구형 applied에 고정 완료 근거가 없으면 이력은 유지하며 완료를409로 막는다.
+
+원본 보관은 integration 범위로 직렬화하고 실행 전에 archive-attempt와 소유 intent를 저장한다. 명령 결과·실제 문서 이동·보관 후 raw Git 상태를 별도 보존한다. 실패는 완료 상태와 반영 근거를 유지하고409를 반환한다. 성공 명령이 원본을 dirty로 남기면 needs-review이며 완료 상태를 유지한다. 사용자가 원본 변경을 정리한 뒤 같은 archive 동작으로 명시 재확인하면 CLI 재실행 없이 문서 이동과 clean 기준을 다시 검사해 archived로 확정한다. 종료 또는 저장 결과가 미확인이면 자동 재실행하지 않는다. 파일 이동만으로 Git 업무 완료·보관을 자동 확정하지 않는다. 비Git copy의 원본 Git 검사는 not-applicable로 표시하고 기존 외부 보관 이력 조회는 유지한다.
+
+2026-10-30 개발 검증은 실제 Git/HTTP/SQLite 완료1건, 완료 캡처 후 편집 거부1건, 보관 실패·파일이동 자동확정 방지2건, 기존 copy 실제 HTTP/OpenSpec 보관1건, 실제 Git/OpenSpec 보관 dirty→명시 재확인1건 및 보관 버튼 모의 UI1건의 통과 근거를 사용했다. Git 후보의 선행 CLI 검증 일부는 fixture 참조이므로 전체 사용자 동선 E2E 성공을 뜻하지 않는다. raw rename mock의 Windows EPERM 및 한 차례 worker 예기치 않은 종료는 성공 근거에서 제외했다. 설치된 실제 CLI의 Windows 처리 경로로 보관1회를 확인했고 watcher/ACL/운영 앱은 바꾸지 않았다. 최종 backend build 통과. 설치본·Codex 내장 브라우저 실제 동선과 OS crash/PID 정밀 증명은 별도 미완료다.

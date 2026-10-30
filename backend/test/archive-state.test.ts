@@ -42,6 +42,12 @@ it('실행 중인 업무는 파일 이동만으로 보관 상태로 덮어쓰지
   const { service } = fixture('running');
   expect(service.get('work').phase).toBe('planning');
 });
+it('Git 업무는 파일 이동만으로 완료나 보관을 자동 확정하지 않는다', () => {
+  const { service, work } = fixture();
+  store.save({ ...work, workspace: { kind: 'git-worktree' } as any });
+  expect(service.get('work').phase).toBe('planning'); expect(service.list()[0].phase).toBe('planning');
+  expect(store.events('work').filter(event => event.type === 'archive-reconciled')).toEqual([]);
+});
 it('동일 이름의 활성 변경이 있으면 과거 보관 기록으로 전환하지 않는다', () => {
   const { service, source } = fixture();
   mkdirSync(join(source.path, 'changes/feature'));

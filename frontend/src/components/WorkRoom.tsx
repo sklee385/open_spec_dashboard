@@ -347,7 +347,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     if (value === 'guided-review' && (activeOperations.current > 0 || guidedReviewBlocked || guidedReviewUnsupported)) return;
     if (dirty) { setError(t('workRoom.saveOrDiscard')); return; }
     void run(async () => {
-      await api(`work/${room.id}/action`, 'POST', { action: value, confirmed: ['complete', 'apply-changes', 'isolate-workspace'].includes(value) });
+      await api(`work/${room.id}/action`, 'POST', { action: value, confirmed: ['complete', 'apply-changes', 'isolate-workspace', 'archive'].includes(value) });
       if (value === 'guided-review') setPane('chat');
     });
   };

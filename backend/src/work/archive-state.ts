@@ -9,6 +9,7 @@ import type { Work, WorkStore } from './store';
 /** Repair a completed filesystem move, without claiming tests or application passed. */
 export function reconcileArchive(store: WorkStore, work: Work, sourceRoot: string): Work {
   if (work.phase === 'archived' || !['idle', 'failed', 'interrupted'].includes(work.state) || work.errorCode === 'termination-unconfirmed') return work;
+  if (work.workspace?.kind === 'git-worktree' || store.records(work.id, 'archive-attempt').some(row => row.status !== 'archived')) return work;
   if (existsSync(within(sourceRoot, `changes/${work.changeName}`))) return work;
   if (store.records(work.id, 'question').some(unresolvedQuestion)) return work;
   if (['verification', 'browser-verification'].some(kind => store.records(work.id, kind).some(row => row.status === 'running'))) return work;

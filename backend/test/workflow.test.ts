@@ -187,14 +187,21 @@ describe('업무·문서 영속성과 실행 조건', () => {
   });
   it('CLI 성공 응답만으로 보관 완료를 처리하지 않는다', async () => {
     const spy = vi.spyOn(app.get(OpenSpecService), 'run').mockResolvedValueOnce({ ok: true, code: 0, stdout: 'ok', stderr: '' });
-    expect((await request(`work/${work.id}/action`, 'POST', { action: 'archive' })).status).toBe(409);
+    expect((await request(`work/${work.id}/action`, 'POST', { action: 'archive', confirmed: true })).status).toBe(409);
     expect((await request(`work/${work.id}`)).data.phase).toBe('completed'); spy.mockRestore();
   });
   it('실제 보관 후 기준 명세와 보관 문서를 읽을 수 있다', async () => {
+    // This affected archive case can run alone without replaying the AI workflow.
+    if (!work) {
+      work = (await request('work', 'POST', { sourceId: 'demo', changeName: 'feature', requestKey: 'create-feature' })).data;
+      const saved = app.get(WorkStore).get(work.id)!; saved.phase = 'completed'; saved.state = 'idle'; app.get(WorkStore).save(saved);
+      await writeFile(join(root, 'openspec/changes/feature/tasks.md'), '- [x] 구현\n');
+    }
     const current = app.get(WorkStore).get(work.id)!; current.ideaIds = ['demo/archived-idea']; app.get(WorkStore).save(current);
     await mkdir(join(root, 'openspec', 'changes', 'feature', 'source-ideas')); await writeFile(join(root, 'openspec', 'changes', 'feature', 'source-ideas', 'archived-idea.md'), '# 원본 아이디어\n');
     await writeFile(join(root, 'openspec', 'changes', 'feature', 'specs', 'feature', 'spec.md'), '## ADDED Requirements\n\n### Requirement: Example feature\nThe system SHALL return a value.\n\n#### Scenario: Value returned\n- **WHEN** a value is requested\n- **THEN** a value is returned\n');
-    expect((await request(`work/${work.id}/action`, 'POST', { action: 'archive' })).status).toBe(200);
+    expect((await request(`work/${work.id}/action`, 'POST', { action: 'archive', confirmed: true })).status).toBe(200);
+    expect(app.get(WorkStore).records(work.id, 'archive-attempt').at(-1)).toMatchObject({ status: 'archived', result: { ok: true }, postCheck: { state: 'not-applicable', nextIntegrationBlocked: false } });
     const archived = await request(`work/${work.id}`); expect(archived.status).toBe(200); expect(archived.data.phase).toBe('archived');
     expect((await request(`work/${work.id}/document?path=design.md`)).status).toBe(200);
     expect(await readFile(join(root, 'openspec', 'specs', 'feature', 'spec.md'), 'utf8')).toContain('Example feature');

@@ -16,6 +16,8 @@ import * as runner from '../src/projects/git-runner';
 import { DesktopLifecycle } from '../src/desktop/lifecycle';
 import { IntegrationApply } from '../src/work/integration-apply';
 import { IntegrationService } from '../src/work/integration.service';
+import { CompletedResults } from '../src/work/completed-results';
+import { OpenSpecService } from '../src/openspec/openspec.service';
 import { projectCoordinator } from '../src/projects/coordinator';
 import { fileURLToPath } from 'node:url';
 vi.setConfig({ testTimeout: 60000, hookTimeout: 30000 });
@@ -83,6 +85,67 @@ const applying = () => store.records(work.id, 'integration-apply');
 const ff = (args: string[]) => args.includes('merge') && args.includes('--ff-only');
 
 async function applied() { await ready(); const body = await input(); const response = await api(`${reserved.candidateId}/apply`, body); expect(response.data.status).toBe('applied'); return response.data; }
+async function completeReady(trace: (stage: string) => void = () => {}) {
+  trace('prepare');
+  writeFileSync(join(work.executionPath!, 'openspec/changes/a/tasks.md'), '- [x] fixture\n');
+  git(work.executionPath!, 'add', '--', 'openspec/changes/a/tasks.md'); git(work.executionPath!, 'commit', '-m', 'finish tasks');
+  work.reviewedVersion = works.planVersion(work); work.verificationCommands = [{ id: 'fixture', command: process.execPath, args: ['-e', 'process.exit(0)'] }]; store.save(work);
+  await seed(); trace('seeded'); reserved.workVerificationRefs = ['verified-'+work.id]; store.record(reserved.id, work.id, 'integration-request', reserved); await certify(); trace('certified');
+  const body = await input(); trace('dispatch-apply'); const response = await api(`${reserved.candidateId}/apply`, body); expect(response.data.status).toBe('applied'); trace('applied');
+  return response.data;
+}
+async function workAction(action: string) {
+  const response = await fetch(`${base}/api/work/${work.id}/action`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, confirmed: true }) });
+  return { status: response.status, data: await response.json() };
+}
+it('Git 완료는 copy journal 없이 적용 당시 검증과 실제 반영 blob을 보존한다', async () => {
+  await completeReady();
+  const before = preserved(), run = vi.spyOn(runner, 'runGit');
+  const completed = await fetch(`${base}/api/work/${work.id}/action`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'complete', confirmed: true }) });
+  expect({ status: completed.status, data: await completed.json() }).toMatchObject({ status: 200, data: { phase: 'completed' } });
+  expect(store.records(work.id, 'application')).toEqual([]); expect(preserved()).toEqual(before); expect(run.mock.calls.some(([, args]) => ff(args))).toBe(false);
+  const retained = new CompletedResults(store), header = retained.header(work.id);
+  expect(header.integration).toMatchObject({ candidateId: reserved.candidateId, targetHead: reserved.targetHead, appliedCommit: reserved.candidateCommit, resultCommit: reserved.resultCommit });
+  const files = retained.files(work.id, header.retained.captureId).files;
+  const result = files.find((file: any) => file.path === 'result-a.txt');
+  expect(retained.file(work.id, header.retained.captureId, result.ordinal)).toMatchObject({ before: null, after: 'result-a' });
+  expect(files.some((file: any) => file.path === 'target-a.txt')).toBe(false);
+  expect(retained.verifications(work.id, header.retained.captureId).results.map((row: any) => row.id)).toEqual(expect.arrayContaining(['verified-a', 'candidate-pass-a']));
+});
+it('Git 보관 실패는 반영·완료 캡처를 보존하고 별도 결과와 clean 관측을 남긴다', async () => {
+  await completeReady(); expect((await workAction('complete')).status).toBe(200);
+  const capture = new CompletedResults(store).header(work.id), openspec = vi.spyOn(app.get(OpenSpecService), 'run').mockResolvedValue({ ok: false, code: 1, stdout: '', stderr: 'archive fixture failure' });
+  expect((await workAction('archive')).status).toBe(409);
+  expect(store.get(work.id)?.phase).toBe('completed'); expect(applying()[0].status).toBe('applied');
+  expect(new CompletedResults(store).header(work.id).retained.captureId).toBe(capture.retained.captureId);
+  expect(store.records(work.id, 'archive-attempt').at(-1)).toMatchObject({ status: 'failed', result: { ok: false }, postCheck: { state: 'clean' } }); expect(openspec).toHaveBeenCalledTimes(1);
+});
+it('Git 보관 dirty는 완료로 남고 사용자 정리 뒤 명시 재확인만 CLI 재실행 없이 보관을 확정한다', async () => {
+  const trace = (stage: string) => console.error('[archive-dirty-fixture]', JSON.stringify({ stage, at: Date.now(), pid: process.pid }));
+  writeFileSync(join(work.executionPath!, 'openspec/changes/a/specs/demo/spec.md'), '## ADDED Requirements\n\n### Requirement: Archive fixture\nThe system SHALL preserve completed results.\n\n#### Scenario: Result preserved\n- **WHEN** an applied result is archived\n- **THEN** its completion evidence is retained\n');
+  git(work.executionPath!, 'add', '--', 'openspec/changes/a/specs/demo/spec.md'); git(work.executionPath!, 'commit', '-m', 'valid archive delta fixture');
+  await completeReady(trace); expect((await workAction('complete')).status).toBe(200); trace('completed');
+  // Use the real CLI: its verified Windows EPERM fallback is part of archive behavior.
+  const openspec = vi.spyOn(app.get(OpenSpecService), 'run');
+  expect((await workAction('archive')).status).toBe(409); trace('archive-needs-review');
+  const receipt = store.records(work.id, 'archive-attempt').at(-1);
+  expect(receipt?.result, JSON.stringify({ status: receipt?.status, result: receipt?.result, postCheck: receipt?.postCheck })).toMatchObject({ ok: true, code: 0 });
+  expect(works.get(work.id).phase).toBe('completed'); expect(works.list().find(row => row.id === work.id)?.phase).toBe('completed');
+  expect(receipt).toMatchObject({ status: 'needs-review', archiveName: expect.stringMatching(/^\d{4}-\d{2}-\d{2}-a$/), postCheck: { state: 'dirty', nextIntegrationBlocked: true } });
+  git(source, 'add', '--all'); git(source, 'commit', '-m', 'explicit fixture archive review'); trace('user-committed');
+  expect(await workAction('archive')).toMatchObject({ status: 200, data: { phase: 'archived', archiveName: receipt.archiveName } });
+  trace('reconfirmed');
+  expect(openspec).toHaveBeenCalledTimes(1); expect(applying()).toHaveLength(1); expect(applying()[0].status).toBe('applied');
+  expect(store.records(work.id, 'archive-attempt').at(-1)).toMatchObject({ status: 'archived', postCheck: { state: 'clean', nextIntegrationBlocked: false } });
+});
+it('Git 완료 캡처 반환 뒤 새 파일 변경은 최종 fence에서 거부하고 보존 캡처를 rollback한다', async () => {
+  await completeReady(); const capture = CompletedResults.prototype.capture;
+  vi.spyOn(CompletedResults.prototype, 'capture').mockImplementation(function(this: CompletedResults, ...args: Parameters<CompletedResults['capture']>) {
+    const result = capture.apply(this, args); writeFileSync(join(work.executionPath!, 'result-a.txt'), 'new edit during completion capture'); return result;
+  });
+  expect((await workAction('complete')).status).toBe(409); expect(store.get(work.id)?.phase).toBe('verification');
+  expect(new CompletedResults(store).header(work.id)).toBeNull(); expect(readFileSync(join(work.executionPath!, 'result-a.txt'), 'utf8')).toBe('new edit during completion capture'); expect(applying()[0].status).toBe('applied');
+});
 async function lost() {
   await ready(); const body = await input(), record = store.record.bind(store); let failed = false;
   const spy = vi.spyOn(store, 'record').mockImplementation((id, workId, kind, data: any) => { if (!failed && kind === 'integration-apply' && data.status === 'applied') { failed = true; throw new Error('lost result acknowledgement'); } return record(id, workId, kind, data); });

@@ -37,13 +37,14 @@ import { IntegrationVerification } from './work/integration-verification';
 import { IntegrationApplyPreflight } from './work/integration-apply-preflight';
 import { IntegrationApply } from './work/integration-apply';
 import { IntegrationApplyRecovery } from './work/integration-apply-recovery';
+import { GitCompletionService } from './work/git-completion';
 
 @Controller()
 class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController, CompletedResultsController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService, IntegrationEditing, IntegrationVerification, IntegrationApplyPreflight, IntegrationApply, IntegrationApplyRecovery] })
+@Module({ controllers: [HealthController, LegacyController, WorkController, CompletedResultsController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService, IntegrationEditing, IntegrationVerification, IntegrationApplyPreflight, IntegrationApply, IntegrationApplyRecovery, GitCompletionService] })
 class AppModule {}
 
 export async function createApplication() {

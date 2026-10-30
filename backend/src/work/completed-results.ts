@@ -7,7 +7,7 @@ import { managedPrivatePath } from './workspace-file-policy';
 import { inspectWorkspacePath } from './workspace-paths';
 
 type Ref = { id: string; kind: 'verification' | 'candidate-verification' | 'browser-verification' };
-export type CompletedIntegration = { candidateId?: string; targetBranch?: string; appliedCommit?: string; resultCommit?: string };
+export type CompletedIntegration = { candidateId?: string; targetBranch?: string; targetHead?: string; appliedCommit?: string; resultCommit?: string; attemptId?: string };
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
 const canon = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);

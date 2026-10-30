@@ -13,6 +13,7 @@ import { collectFiles } from './file-results';
 import { inspectWorkspacePath } from './workspace-paths';
 import { workspaceResourcePath } from './workspace-file-policy';
 import { applyProtocol, liveApply, registerApply, terminatedApply, type LiveApply } from './integration-apply-state';
+import { captureCompletionProof } from './git-completion-proof';
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const host = randomUUID();
@@ -108,6 +109,7 @@ export class IntegrationApply {
         if (this.replay(workId, candidateId, input)) throw new ConflictException('이미 저장된 적용 요청입니다');
         projectCoordinator(this.store).assertRecovery(fixed.plan); fixed.assertUnchanged(); sourceAttributes.assertUnchanged(); hooks!.check();
         row = { id, workId, candidateId, requestKey: input.requestKey, fingerprint, expectedVersion: input.expectedVersion, sourceAttributeVersion: sourceAttributes.version, targetBranch: fixed.request.targetBranch, targetHead: fixed.request.targetHead, candidateCommit: fixed.request.candidateCommit, candidateEpoch: fixed.request.candidateMutationVersion ?? null, verificationRefs: fixed.verificationRefs, requestId: fixed.request.id, intentId, sideVersion, executionProtocol: applyProtocol, owner: host, ownerProcessId: process.pid, runGeneration: intent.runGeneration, status: 'running', applied: false, processTerminated: false, createdAt: now() };
+        row.completionProof = captureCompletionProof(this.store, this.store.get(workId)!, fixed.request, fixed.verificationRefs);
         admission.admit(); this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent);
         return this.durableTuple(row);
       });
