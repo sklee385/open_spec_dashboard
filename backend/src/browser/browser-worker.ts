@@ -15,7 +15,7 @@ process.on('message', async (message: any) => {
   started = true;
   const timer = setTimeout(() => controller.abort(), 120000);
   try {
-    const result = await runScenario(message.scenario as Scenario, message.root, controller.signal, step => { if (process.connected) process.send?.({ step }); });
+    const result = await runScenario(message.scenario as Scenario, message.root, controller.signal, step => { if (process.connected) process.send?.({ step }); }, { snapshot: message.snapshot, environment: message.environment });
     // Playwright's driver may retain handles after closing the browser. This
     // worker has finished cleanup; exiting makes the independent Job guard
     // close every remaining owned handle before the host releases its lock.

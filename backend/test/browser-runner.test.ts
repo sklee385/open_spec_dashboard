@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { createServer as httpServer } from 'node:http';
-import { runScenario } from '../src/browser/browser-runner';
+import { runBrowserFixture as runScenario, browserBuildFixture } from './fixtures/browser-build-fixture';
 import type { Scenario } from '../src/browser/browser-policy';
 
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'browser-real-'));
   copyFileSync(resolve('test/fixtures/browser-server.cjs'), join(root, 'server.cjs'));
+  browserBuildFixture(root);
   const server = createServer(); await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as any).port; await new Promise<void>(r => server.close(() => r()));
   const scenario: Scenario = { name: '실제 저장', server: { command: 'node', args: ['server.cjs'], url: `http://127.0.0.1:${port}` }, steps: [

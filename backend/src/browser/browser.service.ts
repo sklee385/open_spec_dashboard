@@ -1,10 +1,15 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
 import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { WorkStore, type Work } from '../work/store';
+import { ProjectResolver } from '../projects/resolver';
+import { LegacyService } from '../legacy/legacy.service';
+import { inspectWorkspacePath } from '../work/workspace-paths';
+import { VerificationEnvironments } from './verification-environment';
 import { FileResults } from '../work/file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { unresolvedQuestion } from '../codex/questions';
@@ -28,7 +33,9 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
   private readonly snapshots: VerificationSnapshots;
   private contexts = new Map<string, (id: string) => unknown>();
   private identities = new Map<string, Promise<any>>();
-  constructor(@Inject(WorkStore) readonly store: WorkStore) {
+  private environments?: VerificationEnvironments;
+  private ownedLegacy?: LegacyService;
+  constructor(@Inject(WorkStore) readonly store: WorkStore, @Optional() @Inject(ProjectResolver) private resolver?: ProjectResolver) {
     this.snapshots = new VerificationSnapshots(store);
     desktopHealth(store).register('browser', work => this.active?.workId === work.id ? 'active' : store.records(work.id, 'browser-verification').some(row => row.cleanupStatus === 'uncertain') ? 'unknown' : undefined);
     this.mailbox = new BrowserMailbox(store, (id, input) => this.tool(id, input));
@@ -40,12 +47,12 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
   setExecutionContextProvider(name: string, provider: (id: string) => unknown) { this.contexts.set(name, provider); }
   onModuleInit() { for (const work of this.store.list().filter(work => work.browserScenario)) try { this.mailbox.prepare(work); } catch { /* Unavailable work stays unavailable. */ } this.mailbox.start(); }
   private work(id: string) { const work = this.store.get(id); if (!work) throw new NotFoundException('업무를 찾을 수 없습니다'); return work; }
+  private targetResolver() { return this.resolver ??= new ProjectResolver(this.ownedLegacy ??= new LegacyService(), this.store); }
+  private targetEnvironments() { return this.environments ??= new VerificationEnvironments(this.store, this.targetResolver()); }
   private context(work: Work) { return { scenarioVersion: digest(work.browserScenario), sourceMutationVersion: work.sourceMutationVersion ?? null, threadId: work.threadId, turnId: work.turnId ?? null, executionContext: digest([...this.contexts].map(([name, provider]) => [name, provider(work.id)])) }; }
   async identity(work: Work) {
-    const root = new FileResults(this.store).path(work), revision = await this.snapshots.revision(root);
-    const latest = this.work(work.id);
-    if (new FileResults(this.store).path(latest) !== root) throw new ConflictException('검증 중 업무 실행 경로가 변경됐습니다');
-    return { revision, ...this.context(latest) };
+    const { environment } = await this.targetEnvironments().capture({ sourceId: work.sourceId, workId: work.id });
+    return { revision: environment.sourceRevision, targetVersion: environment.targetVersion, ...this.context(this.work(work.id)) };
   }
   activity(id: string) { this.work(id); return { running: this.active?.workId === id, busy: !!this.active }; }
   async status(id: string, independent = false) {
@@ -59,13 +66,13 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     }
     const context = this.context(this.work(id));
     // Live connection ownership matters during execution, not after a normal turn completes.
-    const results = this.store.records(id, 'browser-verification').slice(-10).map(row => ({ ...row, fresh: !!current && current.revision === row.revision && Object.keys(context).filter(key => key !== 'executionContext').every(key => (current as any)[key] === (context as any)[key] && row[key] === (context as any)[key]) }));
+    const results = this.store.records(id, 'browser-verification').slice(-10).map(row => ({ ...row, fresh: !!current && !row.candidateId && current.targetVersion === row.targetVersion && current.revision === row.revision && Object.keys(context).filter(key => key !== 'executionContext').every(key => (current as any)[key] === (context as any)[key] && row[key] === (context as any)[key]) }));
     return { scenario: this.work(id).browserScenario ?? null, ...this.activity(id), results };
   }
   save(id: string, input: unknown) {
     const work = this.work(id);
     if (!['implementation', 'verification'].includes(work.phase) || !['idle', 'failed', 'interrupted'].includes(work.state) || this.active || this.closing) throw new ConflictException('실행을 마친 구현·검증 업무에서 시나리오를 등록해 주세요');
-    new FileResults(this.store).path(work); projectCoordinator(this.store).assertWorkCanStart(work);
+    this.targetResolver().resolve(work.sourceId, work.id); projectCoordinator(this.store).assertWorkCanStart(work);
     try { work.browserScenario = parseScenario(input); } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : '잘못된 시나리오입니다'); }
     this.mailbox.prepare(work); this.store.save(work); this.store.event(id, 'browser-plan-saved', {}); return this.status(id);
   }
@@ -76,7 +83,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const latest = (await this.status(work.id, true)).results.at(-1);
     if (!latest?.fresh || latest.status !== 'passed') throw new ConflictException('현재 코드와 시나리오의 브라우저 검증을 통과해야 합니다');
   }
-  run(id: string, owner: 'user' | 'tool' = 'user') {
+  run(id: string, owner: 'user' | 'tool' = 'user', candidateId?: string) {
     desktopHealth(this.store).assertExecutionAllowed();
     const work = this.work(id);
     if (this.active || this.closing) throw new ConflictException('다른 브라우저 검증이 진행 중이거나 종료 중입니다');
@@ -84,9 +91,10 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (!['implementation', 'verification'].includes(work.phase) || !(owner === 'tool' ? work.state === 'running' : ['idle', 'failed', 'interrupted'].includes(work.state))) throw new ConflictException('현재 업무 상태에서는 검증을 실행할 수 없습니다');
     if (this.store.records(id, 'question').some(unresolvedQuestion)) throw new ConflictException('남아 있는 질문·승인을 먼저 처리해 주세요');
     projectCoordinator(this.store).assertActivityCanStart(work);
-    const files = new FileResults(this.store); files.assertSourcePlan(work); const root = files.path(work);
+    new FileResults(this.store).assertSourcePlan(work);
+    const selected = this.targetResolver().resolve(work.sourceId, work.id, candidateId), root = selected.root;
     let scenario: Scenario; try { scenario = parseScenario(work.browserScenario); } catch { throw new BadRequestException('사용자가 브라우저 시나리오를 먼저 등록해야 합니다'); }
-    const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
+    const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, candidateId: candidateId ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
     let resolveDone!: () => void;
     // Reserve synchronously, before any async copy. Cancellation works while preparing.
     const active: Active = this.active = { workId: id, cancelled: false, abort: new AbortController(), done: new Promise<void>(resolve => { resolveDone = resolve; }) };
@@ -94,22 +102,28 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (owner === 'user') { work.state = 'running'; work.phase = 'verification'; this.store.save(work); }
     this.store.event(id, 'browser-started', { id: row.id });
     const started = Date.now(); let snapshot: VerificationSnapshot | undefined, guard: ReturnType<typeof guardBrowserProcess> | undefined, result: BrowserOutcome | undefined, finished = false;
+    let environmentProof: Awaited<ReturnType<VerificationEnvironments['capture']>> | undefined;
     const finish = async () => {
       if (finished) return; finished = true; clearTimeout(timer);
       let cleaned = true;
       if (guard) try { await (await guard).done; } catch { cleaned = false; }
       const final: any = { ...row, ...(result || { status: active.cancelled ? 'interrupted' : 'blocked', error: '실행 결과를 확인하지 못했습니다. 입력을 자동 반복하지 않습니다' }), durationMs: Date.now() - started };
+      if (final.status === 'passed' && !result?.buildAttestation) { final.status = 'blocked'; final.error = '새 빌드와 실제 서버 응답의 출처 확인이 없습니다'; }
       if (active.cancelled) final.status = 'interrupted';
       if (snapshot) {
         if (!active.cancelled) try {
-          const latest = this.work(id); new FileResults(this.store).assertSourcePlan(latest);
-          if (!await this.snapshots.matches(snapshot, new FileResults(this.store).path(latest), active.abort.signal) || Object.keys(this.context(this.work(id))).some(key => (this.context(this.work(id)) as any)[key] !== row[key])) { final.status = 'stale'; final.error = '검증 중 원본·사본·시나리오 또는 대화 실행이 변경됐습니다'; }
+          new FileResults(this.store).assertSourcePlan(this.work(id)); await environmentProof!.assertCurrent();
+          if ((!await this.snapshots.matches(snapshot, root, active.abort.signal, result?.buildAttestation?.outputs) && final.status !== 'blocked') || Object.keys(this.context(this.work(id))).some(key => (this.context(this.work(id)) as any)[key] !== row[key])) { final.status = 'stale'; final.error = '검증 중 원본·사본·시나리오 또는 대화 실행이 변경됐습니다'; }
         } catch { final.status = 'stale'; final.error = '검증 대상의 최신 상태를 확인하지 못했습니다'; }
         if (cleaned) try { await this.snapshots.cleanup(snapshot); final.snapshotStatus = 'removed'; } catch { final.status = 'blocked'; final.snapshotStatus = 'retained'; final.error = '검증 사본 정리를 확인하지 못해 보존했습니다'; }
         else final.snapshotStatus = 'retained';
       } else final.snapshotStatus = 'unavailable';
       if (active.cancelled && final.snapshotStatus !== 'retained') { final.status = 'interrupted'; final.error = '검증이 중단됐습니다. 입력을 자동 반복하지 않습니다'; }
       if (!cleaned) { final.status = 'blocked'; final.cleanupStatus = 'uncertain'; final.error = '프로세스 소유권 또는 정리를 확인하지 못했습니다. 검증 사본을 보존합니다'; }
+      if (final.image && environmentProof) try {
+        const directory = environmentProof.environment.evidencePath; inspectWorkspacePath(directory, []);
+        const path = join(directory, `${row.id}.jpg`); await writeFile(path, Buffer.from(final.image.slice('data:image/jpeg;base64,'.length), 'base64'), { flag: 'wx' }); final.evidencePath = path;
+      } catch { final.status = 'blocked'; final.error = '호스트 증거 경로에 화면을 보존하지 못했습니다'; }
       this.store.record(row.id, id, 'browser-verification', final);
       if (owner === 'user') { const latest = this.work(id); if (latest.state === 'running' && latest.threadId === row.threadId && (latest.turnId ?? null) === row.turnId && this.context(latest).executionContext === row.executionContext) { latest.state = active.cancelled ? 'interrupted' : 'idle'; this.store.save(latest); } }
       if (this.active === active) this.active = undefined;
@@ -119,13 +133,16 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const timer = setTimeout(() => { active.cancelled = true; void stop(); }, 130000);
     void (async () => {
       try {
-        snapshot = await this.snapshots.prepare(work, root, active.abort.signal);
-        row.environmentId = snapshot.id; row.snapshotRoot = snapshot.root; row.revision = snapshot.revision; row.snapshotStatus = 'ready';
+        environmentProof = await this.targetEnvironments().capture({ sourceId: work.sourceId, workId: id, ...(candidateId ? { candidateId } : {}) });
+        const environment = environmentProof.environment;
+        if (environment.executionPath !== root) throw new ConflictException('검증 대상 경로가 변경됐습니다');
+        snapshot = await this.snapshots.prepare(this.work(id), root, active.abort.signal, environment); await environmentProof.assertCurrent();
+        Object.assign(row, { environmentId: environment.environmentId, environment, targetVersion: environment.targetVersion, build: environment.build }); row.snapshotRoot = snapshot.root; row.revision = snapshot.revision; row.snapshotStatus = 'ready';
         this.store.record(row.id, id, 'browser-verification', row);
         active.abort.signal.throwIfAborted();
         if (Object.keys(this.context(this.work(id))).some(key => (this.context(this.work(id)) as any)[key] !== row[key])) throw new ConflictException('사본 준비 중 검증 실행 컨텍스트가 변경됐습니다');
         const source = existsSync(join(__dirname, 'browser-worker.js')) ? join(__dirname, 'browser-worker.js') : join(__dirname, 'browser-worker.ts');
-        const env: NodeJS.ProcessEnv = { OPENSPEC_BROWSER_DIRECTORY: browserDirectory() };
+        const env: NodeJS.ProcessEnv = { OPENSPEC_BROWSER_DIRECTORY: browserDirectory(), OPENSPEC_VERIFICATION_DATA_ROOT: resolve(process.env.DATA_DIR || '../.data') };
         for (const key of ['SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'COMSPEC', 'TEMP', 'TMP', 'PATHEXT', 'PATH', 'Path']) if (process.env[key]) env[key] = process.env[key];
         const runtime = localRuntimeDirectory(); if (runtime) env.OPENSPEC_NODE_DIRECTORY = runtime;
         const child = active.child = fork(source, [], { execPath: process.execPath, execArgv: source.endsWith('.ts') ? ['--import', pathToFileURL(require.resolve('tsx')).href] : [], env, silent: true, windowsHide: true });
@@ -138,7 +155,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         child.stdout?.resume(); child.stderr?.resume();
         await guard;
         active.abort.signal.throwIfAborted();
-        child.send({ scenario, root: snapshot.root }, error => { if (error) void stop(); });
+        child.send({ scenario, root: snapshot.root, snapshot, environment }, error => { if (error) void stop(); });
       } catch (error) {
         row.error = error instanceof Error ? error.message : '검증 사본 준비에 실패했습니다';
         result = { status: active.cancelled ? 'interrupted' : 'blocked', error: row.error, steps: [], viewport: { width: 1280, height: 800 }, consoleErrors: 0 };
@@ -162,5 +179,5 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const status = await this.status(id);
     return { running: status.running, scenarioName: (status.scenario as Scenario | null)?.name, result: status.results.at(-1) ?? null };
   }
-  async onModuleDestroy() { this.closing = true; this.mailbox.close(); if (this.active) await this.cancel(this.active.workId); }
+  async onModuleDestroy() { this.closing = true; this.mailbox.close(); if (this.active) await this.cancel(this.active.workId); await this.ownedLegacy?.onModuleDestroy(); }
 }

@@ -1,10 +1,15 @@
 const { createServer } = require('node:http');
-const { writeFileSync, readFileSync } = require('node:fs');
+const { writeFileSync, readFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { createHash } = require('node:crypto');
 const file = join(process.env.DATA_DIR, 'value.json');
 let value = ''; try { value = JSON.parse(readFileSync(file, 'utf8')); } catch {}
 const server = createServer(async (req, res) => {
+  if (req.url === '/__fixture-build.js' || req.url === '/__fixture-identity.json') {
+    const path = join(process.cwd(), 'dist', req.url === '/__fixture-build.js' ? 'fixture-app.js' : 'fixture-identity.json');
+    if (!existsSync(path)) { res.writeHead(404); res.end(); return; }
+    res.setHeader('Content-Type', req.url === '/__fixture-build.js' ? 'application/javascript' : 'application/json'); res.end(readFileSync(path)); return;
+  }
   if (req.url === '/' && process.argv[3] === 'root-redirect') { res.writeHead(302, { Location: '/home' }); res.end(); return; }
   if (req.url === '/redirect' || req.url === '/redirect-local') { res.writeHead(302, { Location: req.url === '/redirect-local' ? '/redirect' : `http://127.0.0.1:${process.argv[2] || 14399}/private` }); res.end(); return; }
   if (req.url === '/events') { res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' }); res.write('data: streamed\n\n'); return; }
@@ -15,6 +20,7 @@ const server = createServer(async (req, res) => {
   if (req.url === '/value') { res.end(value); return; }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end(`<!doctype html><h1>검증</h1><label>이름<input id="name"></label><button id="save">저장</button><p role="status" aria-label="결과"></p>
+    ${existsSync(join(process.cwd(), 'dist/fixture-app.js')) ? '<script src="/__fixture-build.js"></script>' : ''}
     ${req.url === '/ambiguous' ? '<button>저장</button>' : ''}
     ${req.url === '/external' ? '<img src="http://127.0.0.1:14399/private">' : ''}
     ${req.url === '/stream' ? '<p data-testid="stream"></p><p data-testid="socket"></p><script>new EventSource("/events").onmessage=e=>document.querySelector("[data-testid=stream]").textContent=e.data;new WebSocket("ws://"+location.host+"/ws").onmessage=e=>document.querySelector("[data-testid=socket]").textContent=e.data;</script>' : ''}

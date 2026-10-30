@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Browser, BrowserContext, Page, Locator } from '@playwright/test';
@@ -11,6 +10,9 @@ import { localRuntimeDirectory, runtimeCommand, runtimeEnvironment } from '../ru
 import { stopOwnedProcess } from './browser-process';
 import { debuglog } from 'node:util';
 import { browserNetwork } from './browser-network';
+import { prepareBrowserBuild, completeBrowserBuild, verifyBrowserBuild, type BrowserBuildAttestation } from './browser-build';
+import type { VerificationSnapshot } from './verification-snapshot';
+import type { VerificationEnvironment } from './verification-environment';
 const debug = debuglog('openspec-browser');
 async function bounded<T>(operation: Promise<T>, signal: AbortSignal, ms = 10000): Promise<T> {
   signal.throwIfAborted(); let timer: NodeJS.Timeout;
@@ -26,6 +28,7 @@ export interface BrowserOutcome {
   startupAttempts?: number; startupRecovery?: 'windows-native-startup-crash';
   steps: { index: number; op: string; status: 'passed' | 'failed'; durationMs: number }[];
   image?: string; browser?: string; viewport: { width: number; height: number }; consoleErrors: number;
+  buildAttestation?: BrowserBuildAttestation;
 }
 async function assertPortFree(port: number) {
   const probe = createServer();
@@ -34,25 +37,36 @@ async function assertPortFree(port: number) {
 function target(page: Page, value: Target): Locator {
   return value.testId !== undefined ? page.getByTestId(value.testId) : page.getByRole(value.role!, { name: value.name, exact: true });
 }
-export async function runScenario(input: Scenario, root: string, signal: AbortSignal, progress: (step: BrowserOutcome['steps'][number]) => void = () => {}): Promise<BrowserOutcome> {
+export interface BrowserExecution { snapshot: VerificationSnapshot; environment: VerificationEnvironment; }
+export async function runScenario(input: Scenario, root: string, signal: AbortSignal, progress: (step: BrowserOutcome['steps'][number]) => void = () => {}, execution?: BrowserExecution): Promise<BrowserOutcome> {
   const outcome: BrowserOutcome = { status: 'blocked', steps: [], viewport: { width: 1280, height: 800 }, consoleErrors: 0 };
-  let browser: Browser | undefined, server: ChildProcess | undefined, page: Page | undefined, data: string | undefined, blocked = false, serverError = false;
+  let browser: Browser | undefined, server: ChildProcess | undefined, buildProcess: ChildProcess | undefined, page: Page | undefined, data: string | undefined, blocked = false, serverError = false, provenanceFailure = false;
   let context: BrowserContext | undefined;
   let network: Awaited<ReturnType<typeof browserNetwork>> | undefined;
   const abort = () => { void browser?.close().catch(() => {}); };
   signal.addEventListener('abort', abort);
   try {
     signal.throwIfAborted();
+    if (!execution || execution.snapshot.root !== root || execution.environment.sourceRevision !== execution.snapshot.revision) throw new Error('호스트 소유 검증 환경과 독립 사본 출처가 필요합니다');
     const scenario = parseScenario(input), cwd = serverCwd(root, scenario.server.cwd), origin = scenario.server.url;
+    if (origin !== execution.environment.origin) throw new Error('등록된 검증 환경 origin과 다릅니다');
     const api = browserRuntime();
     debug('runtime ready');
     if (scenario.server.command === 'node' && !existsSync(join(cwd, scenario.server.args[0]))) throw new Error('테스트 서버 실행 파일이 없습니다');
     await assertPortFree(Number(new URL(origin).port)); signal.throwIfAborted();
     debug('port free');
-    data = mkdtempSync(join(tmpdir(), 'openspec-browser-')); writeFileSync(join(data, 'config.json'), JSON.stringify({ sources: [] }));
+    data = execution.environment.dataPath;
+    const prepared = await prepareBrowserBuild(execution.snapshot, execution.environment, root);
+    writeFileSync(join(data, 'config.json'), JSON.stringify({ sources: [] }), { flag: 'wx' });
     const base: NodeJS.ProcessEnv = {};
     for (const key of ['SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'COMSPEC', 'TEMP', 'TMP', 'PATHEXT', 'PATH', 'Path']) if (process.env[key]) base[key] = process.env[key];
     Object.assign(base, { NODE_ENV: 'test', OPENSPEC_VERIFICATION: '1', DATA_DIR: data, CONFIG_PATH: join(data, 'config.json'), HOME: data, USERPROFILE: data, PORT: new URL(origin).port, HOST: '127.0.0.1' });
+    const buildCommand = runtimeCommand(prepared.contract.build.command, prepared.contract.build.args, localRuntimeDirectory());
+    buildProcess = spawn(buildCommand.command, buildCommand.args, { cwd: serverCwd(root, prepared.contract.build.cwd), shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: 'ignore', env: runtimeEnvironment(base) });
+    await bounded(new Promise<void>((resolve, reject) => {
+      buildProcess!.once('error', reject); buildProcess!.once('close', code => code === 0 ? resolve() : reject(new Error('새 테스트 빌드가 실패했습니다')));
+    }), signal, 20000);
+    outcome.buildAttestation = await completeBrowserBuild(prepared);
     const command = runtimeCommand(scenario.server.command, scenario.server.args, localRuntimeDirectory());
     server = spawn(command.command, command.args, { cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: 'ignore', env: runtimeEnvironment(base) });
     server.on('error', () => { serverError = true; });
@@ -65,6 +79,7 @@ export async function runScenario(input: Scenario, root: string, signal: AbortSi
       if (Date.now() > deadline) throw new Error('테스트 서버 준비 시간이 초과됐습니다');
       await delay(100, undefined, { signal });
     }
+    await verifyBrowserBuild(outcome.buildAttestation, origin, signal);
     // Chromium's own background services may also hit the proxy. Deny those
     // without attributing them to the page's scenario. Page/WS events below
     // mark actual scenario violations, while the proxy blocks their traffic.
@@ -131,10 +146,12 @@ export async function runScenario(input: Scenario, root: string, signal: AbortSi
         row.status = 'passed';
       } finally { row.durationMs = Date.now() - started; outcome.steps.push(row); progress(row); }
     }
+    try { await verifyBrowserBuild(outcome.buildAttestation, origin, signal); }
+    catch (error) { provenanceFailure = true; outcome.status = 'blocked'; throw error; }
     outcome.status = blocked ? 'blocked' : 'passed';
   } catch (error) {
     outcome.status = signal.aborted ? 'interrupted' : blocked ? 'blocked' : outcome.status === 'blocked' ? 'blocked' : 'failed';
-    outcome.error = signal.aborted ? '사용자가 검증을 중단했습니다. 입력을 자동 반복하지 않습니다' : blocked ? '허용 범위를 벗어난 통신·팝업·입력을 차단했습니다' : outcome.steps.length ? '시나리오 단계가 실패했습니다. 단계와 화면을 확인해 주세요' : error instanceof Error ? error.message : '브라우저 준비에 실패했습니다';
+    outcome.error = signal.aborted ? '사용자가 검증을 중단했습니다. 입력을 자동 반복하지 않습니다' : blocked ? '허용 범위를 벗어난 통신·팝업·입력을 차단했습니다' : outcome.steps.length && !provenanceFailure ? '시나리오 단계가 실패했습니다. 단계와 화면을 확인해 주세요' : error instanceof Error ? error.message : '브라우저 준비에 실패했습니다';
   } finally {
     debug('cleanup %s', outcome.status);
     signal.removeEventListener('abort', abort);
@@ -146,7 +163,8 @@ export async function runScenario(input: Scenario, root: string, signal: AbortSi
     try { if (browser) await bounded(browser.close(), new AbortController().signal, 60000); } catch (error) { debug('browser cleanup: %s', error instanceof Error ? error.message.slice(0, 200) : 'unknown'); outcome.status = 'blocked'; outcome.error = '브라우저 종료를 확인하지 못했습니다'; }
     await network?.close();
     if (server) try { await stopOwnedProcess(server); } catch { outcome.status = 'blocked'; outcome.error = '검증 서버 종료를 확인하지 못했습니다'; }
-    if (data) try { rmSync(data, { recursive: true, force: true }); } catch { /* Test-only data retained if a process still owns it. */ }
+    if (buildProcess) try { await stopOwnedProcess(buildProcess); } catch { outcome.status = 'blocked'; outcome.error = '검증 빌드 종료를 확인하지 못했습니다'; }
+    // Host-owned environment data and evidence are retained for explicit cleanup.
   }
   if (blocked && outcome.status === 'passed') { outcome.status = 'blocked'; outcome.error = '허용하지 않은 통신이 감지됐습니다'; }
   return outcome;

@@ -5,8 +5,10 @@ import { dirname, join, parse, relative, resolve, sep } from 'node:path';
 import type { Work, WorkStore } from '../work/store';
 import { pathsOverlap } from '../work/workspace-paths';
 import { managedPrivatePath } from '../work/workspace-file-policy';
+import type { VerificationEnvironment } from './verification-environment';
 
-export interface VerificationSnapshot { id: string; root: string; revision: string; sourceRoot: string; }
+export interface VerificationSnapshot { id: string; root: string; revision: string; sourceRoot: string; environment?: VerificationEnvironment; }
+export interface VerificationOutput { path: string; hash: string; size: number; mode: number; }
 type Entry = { kind: 'file'; path: string; hash: string; mode: number; size: number } | { kind: 'directory'; path: string; mode: number };
 type Budget = { signal?: AbortSignal; deadline: number };
 const excluded = (path: string) => managedPrivatePath(path) || path.split('/').some(part => ['.tools', '.idea-trash'].includes(part.toLowerCase()));
@@ -102,7 +104,7 @@ export class VerificationSnapshots {
     if (first !== revision(await manifest(root, limits))) fail('소스 상태 확인 중 파일이 변경되었습니다');
     return first;
   }
-  async prepare(work: Work, sourceRoot: string, signal?: AbortSignal): Promise<VerificationSnapshot> {
+  async prepare(work: Work, sourceRoot: string, signal?: AbortSignal, environment?: VerificationEnvironment): Promise<VerificationSnapshot> {
     const limits = budget(signal); sourceRoot = await directory(sourceRoot); checkpoint(limits);
     const data = resolve(process.env.DATA_DIR || '../.data');
     for (const current of [...this.store.list(), work]) {
@@ -114,7 +116,7 @@ export class VerificationSnapshots {
     const id = randomUUID(), container = join(base, id), root = join(container, 'project');
     await mkdir(container); const stat = await lstat(container);
     this.owned.set(id, { container, dev: stat.dev, ino: stat.ino });
-    const snapshot: VerificationSnapshot = { id, root, sourceRoot, revision: '' };
+    const snapshot: VerificationSnapshot = { id, root, sourceRoot, revision: '', ...(environment ? { environment } : {}) };
     try {
       const marker = await open(join(container, 'owner.json'), 'wx');
       try { await marker.writeFile(JSON.stringify({ id, workId: work.id })); } finally { await marker.close(); }
@@ -128,11 +130,35 @@ export class VerificationSnapshots {
       // Set directory modes only after writing children, deepest first.
       for (const entry of [...before].reverse()) if (entry.kind === 'directory') { checkpoint(limits); await chmod(join(root, entry.path), entry.mode); }
       if (revision(await manifest(sourceRoot, limits)) !== snapshot.revision || revision(await manifest(root, limits)) !== snapshot.revision) fail('복사 중 원본 또는 사본이 변경되었습니다');
+      if (environment) {
+        const container = join(data, 'verification-environments', environment.environmentId);
+        if (!/^[a-f0-9-]{36}$/.test(environment.environmentId) || environment.workId !== work.id || key(environment.executionPath) !== key(sourceRoot) || environment.sourceRevision !== snapshot.revision || environment.dataPath !== join(container, 'data') || environment.evidencePath !== join(container, 'evidence')) fail('환경과 독립 사본 출처가 다릅니다');
+        await directory(join(data, 'verification-environments'), true); await mkdir(container);
+        const marker = await open(join(container, 'owner.json'), 'wx'); try { await marker.writeFile(JSON.stringify({ environmentId: environment.environmentId, workId: work.id, snapshotId: id, targetVersion: environment.targetVersion })); } finally { await marker.close(); }
+        await mkdir(environment.dataPath); await mkdir(environment.evidencePath);
+      }
       return snapshot;
     } catch (error) { try { await this.cleanup(snapshot); } catch { /* Preserve an unconfirmed container. */ } throw error; }
   }
-  async matches(snapshot: VerificationSnapshot, root: string, signal?: AbortSignal) {
-    try { return key(await directory(root)) === key(snapshot.sourceRoot) && await this.revision(root, signal) === snapshot.revision && await this.revision(snapshot.root, signal) === snapshot.revision; }
+  async matches(snapshot: VerificationSnapshot, root: string, signal?: AbortSignal, outputs: VerificationOutput[] = []) {
+    try {
+      if (key(await directory(root)) !== key(snapshot.sourceRoot)) return false;
+      const limits = budget(signal), source = await manifest(root, limits); if (revision(source) !== snapshot.revision) return false;
+      const actual = await manifest(snapshot.root, limits);
+      const expected = new Map(source.map(entry => [entry.path, entry]));
+      // Original inputs remain unchanged. Only exact, freshly-attested output files
+      // may differ in the independent copy; no directory-wide source exclusions.
+      for (const file of outputs) {
+        if (!/^(?:dist|build)\//.test(file.path) || file.path.split('/').some(part => !part || part === '.' || part === '..') || managedPrivatePath(file.path) || !/^[a-f0-9]{64}$/.test(file.hash)) return false;
+        expected.set(file.path, { kind: 'file', ...file });
+        let parent = dirname(file.path).replace(/\\/g, '/');
+        while (parent !== '.' && !expected.has(parent)) {
+          const entry = actual.find(entry => entry.path === parent); if (entry?.kind !== 'directory') return false; expected.set(parent, entry); parent = dirname(parent).replace(/\\/g, '/');
+        }
+      }
+      const canonical = (entries: Entry[]) => JSON.stringify(entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(entry => entry.kind === 'file' ? [entry.kind, entry.path, entry.hash, entry.mode, entry.size] : [entry.kind, entry.path, entry.mode]));
+      return canonical(actual) === canonical([...expected.values()]);
+    }
     catch { return false; }
   }
   async cleanup(snapshot: VerificationSnapshot) {

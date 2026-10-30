@@ -8,13 +8,16 @@ import { FileResults } from '../src/work/file-results';
 import { BrowserService } from '../src/browser/browser.service';
 import { projectCoordinator } from '../src/projects/coordinator';
 import { assertActiveCapacity } from '../src/work/workspace-policy';
+import { browserBuildFixture, browserFixtureConfig } from './fixtures/browser-build-fixture';
 
 let store: WorkStore;
 const services: BrowserService[] = [];
-afterEach(async () => { for (const service of services.splice(0)) await service.onModuleDestroy(); store?.onApplicationShutdown(); delete process.env.DATA_DIR; });
+const savedConfig = process.env.CONFIG_PATH, savedData = process.env.DATA_DIR;
+afterEach(async () => { for (const service of services.splice(0)) await service.onModuleDestroy(); store?.onApplicationShutdown(); if (savedData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = savedData; if (savedConfig === undefined) delete process.env.CONFIG_PATH; else process.env.CONFIG_PATH = savedConfig; });
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'browser-service-')), root = join(dir, 'source'); mkdirSync(root); mkdirSync(join(root, 'openspec'));
   copyFileSync(resolve('test/fixtures/browser-server.cjs'), join(root, 'server.cjs'));
+  browserBuildFixture(root); browserFixtureConfig(root, 'test');
   process.env.DATA_DIR = join(dir, 'data'); store = new WorkStore();
   const work = store.save({ id: 'browser', sourceId: 'test', projectPath: root, changeName: 'browser', requestKey: 'browser', ideaIds: [], phase: 'implementation', state: 'idle', threadId: 'preserved', reviewedVersion: null, createdAt: '', updatedAt: '' });
   const files = new FileResults(store); files.prepare(work);
