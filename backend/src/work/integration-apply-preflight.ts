@@ -134,10 +134,10 @@ export class IntegrationApplyPreflight {
       return [path, before.dev, before.ino, before.mode, before.mtimeMs, before.ctimeMs, digest.digest('hex')];
     });
   }
-  private attributes(root: string, tracked: string[]) {
+  private attributes(root: string, tracked: string[], source?: string) {
     const input = Buffer.from(tracked.length ? `${tracked.join('\0')}\0` : '');
     if (input.length > 1024 * 1024) throw new ConflictException('원본 속성 검사 한도를 초과했습니다');
-    const values = readGitBufferSync(root, ['-c', 'core.fsmonitor=false', 'check-attr', '-z', '--stdin', 'filter', 'working-tree-encoding', 'ident', 'text', 'eol'], input).toString();
+    const values = readGitBufferSync(root, ['-c', 'core.fsmonitor=false', 'check-attr', ...(source ? [`--source=${source}`] : []), '-z', '--stdin', 'filter', 'working-tree-encoding', 'ident', 'text', 'eol'], input).toString();
     const fields = values.split('\0'), attributes = new Map<string, Record<string, string>>();
     for (let n = 0; n + 2 < fields.length; n += 3) {
       if (['filter', 'working-tree-encoding', 'ident'].includes(fields[n + 1]) && !['unspecified', 'unset'].includes(fields[n + 2])) throw new ConflictException('원본 실제 속성의 필터·인코딩·ident 변환을 지원하지 않습니다');
@@ -204,7 +204,23 @@ export class IntegrationApplyPreflight {
     if (confirmed.version !== original.version) throw new ConflictException('원본 사전검사 중 파일·등록 기준이 변경되었습니다');
     assertUnchanged(); projectCoordinator(this.store).assertOperationCanStart(plan);
     const expectedVersion = hash([proof.version, proof.recordsVersion, original.version, start]);
-    return { request, plan, expectedVersion, verificationRefs: proof.verificationRefs, assertUnchanged };
+    return { request, plan, expectedVersion, verificationRefs: proof.verificationRefs, sourceGitDir: this.gitDirectory(request.projectPath, request.commonDir), assertUnchanged };
+  }
+  /** Post-command observation; does not reuse a proof whose original HEAD intentionally changed. */
+  async inspectOriginal(request: IntegrationRequest, expectedHead: string) {
+    const expected = { ...request, targetHead: expectedHead }, before = this.metadata(expected);
+    const first = await this.original(expected), second = await this.original(expected);
+    if (first.version !== second.version || hash(before) !== hash(this.metadata(expected))) throw new ConflictException('반영 뒤 원본 상태가 수집 중 변경되었습니다');
+    return { head: expectedHead, version: first.version };
+  }
+  /** Checkout evaluates new paths in the original's config/info/global attribute context. */
+  async captureSourceAttributes(request: IntegrationRequest) {
+    if (!request.candidateCommit) throw new ConflictException('고정 후보 커밋이 없습니다');
+    const paths = (await this.read(request.projectPath, ['ls-tree', '-r', '--name-only', '-z', request.candidateCommit])).split('\0').filter(Boolean).sort();
+    if (paths.length > 10000) throw new ConflictException('후보 전체 경로 속성 검사 한도를 초과했습니다');
+    const read = () => hash([paths, this.attributes(request.projectPath, paths).version, this.attributes(request.projectPath, paths, request.candidateCommit!).version]);
+    const version = read();
+    return { version, assertUnchanged: () => { if (read() !== version) throw new ConflictException('원본의 후보 전체 경로 속성이 변경되었습니다'); } };
   }
   async preview(workId: string, candidateId: string) {
     const proof = await this.capture(workId, candidateId);

@@ -1,4 +1,5 @@
 import { spawn, execFile, execFileSync } from 'node:child_process';
+import { guardBrowserProcess } from '../browser/browser-job';
 export class GitError extends Error {
     constructor(message: string, public status = 400, public uncertain = false, public terminationUnconfirmed = false, public confirmedRejection = false) {
         super(message);
@@ -11,10 +12,12 @@ export interface RunnerOptions {
     timeoutMs?: number;
     maxOutputBytes?: number;
     onSpawn?: (pid: number) => void | Promise<void>;
+    /** Internal-only: the caller pins this path/ref from its owned source checkpoint. */
+    headPin?: { file: string; ref: string; beforeDispatch: () => void | Promise<void> };
 }
 export function gitEnvironment() {
     const env = { ...process.env };
-    for (const key of Object.keys(env)) if (/^(GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_PARAMETERS|CONFIG_KEY_.*|CONFIG_VALUE_.*))$/.test(key)) delete env[key];
+    for (const key of Object.keys(env)) if (/^(GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|CONFIG_COUNT|CONFIG_PARAMETERS|CONFIG_KEY_.*|CONFIG_VALUE_.*))$/.test(key.toUpperCase())) delete env[key];
     Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true', GIT_PAGER: 'cat', PAGER: 'cat', SSH_ASKPASS_REQUIRE: 'never' });
     return env;
 }
@@ -26,6 +29,7 @@ export function readGitBufferSync(root: string, args: string[], input?: Buffer) 
 export function readGitSync(root: string, args: string[]) { return readGitBufferSync(root, args).toString('utf8'); }
 /** Arguments are produced by the service; user paths always follow -- with literal pathspecs. */
 export function runGit(root: string, args: string[], options: RunnerOptions = {}, optional = false): Promise<Buffer> {
+    if (options.headPin) return runHeadPinnedGit(root, args, options, optional);
     return new Promise((resolve, reject) => {
         const env = gitEnvironment();
         const child = spawn('git', ['--no-optional-locks', '--literal-pathspecs', ...args], { cwd: root, shell: false, windowsHide: true, detached: process.platform !== 'win32', env });
@@ -115,4 +119,41 @@ export function runGit(root: string, args: string[], options: RunnerOptions = {}
                 resolve(code !== 0 ? Buffer.alloc(0) : Buffer.concat(chunks));
         });
     });
+}
+
+/** Git starts only after PID persistence, Job assignment, native HEAD pin and final fence. */
+async function runHeadPinnedGit(root: string, args: string[], options: RunnerOptions, optional: boolean): Promise<Buffer> {
+    if (process.platform !== 'win32') throw new GitError('원본 Git 반영의 native HEAD 보호는 현재 Windows에서만 지원합니다', 409);
+    const env = gitEnvironment(), workerEnv = { ...env };
+    for (const key of Object.keys(workerEnv)) if (key.toUpperCase().startsWith('GIT_') || ['NODE_OPTIONS', 'NODE_PATH', 'DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY'].includes(key.toUpperCase())) delete workerEnv[key];
+    for (const key of Object.keys(env)) if (['NODE_OPTIONS', 'NODE_PATH', 'DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY'].includes(key.toUpperCase())) delete env[key];
+    const worker = "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',b=>{s+=b;if(s.length>2000000)process.exit(2)});process.stdin.on('end',()=>{try{const c=JSON.parse(s);const p=require('child_process').spawn('git',c.args,{cwd:process.cwd(),env:c.env,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});p.stdout.pipe(process.stdout);p.stderr.pipe(process.stderr);p.once('error',()=>process.exit(127));p.once('close',n=>process.exit(Number.isInteger(n)?n:1));}catch{process.exit(2)}});";
+    const child = spawn(process.execPath, ['-e', worker], { cwd: root, env: workerEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let code: number | null = null, closedFlag = false, dispatched = false, total = 0, failure = '';
+    const out: Buffer[] = [], err: Buffer[] = [];
+    const closed = new Promise<void>(resolve => { child.once('error', () => { closedFlag = true; resolve(); }); child.once('close', value => { code = value; closedFlag = true; resolve(); }); });
+    // Kill only this live waiting worker. Its supervisor drains the entire owned Job.
+    const stop = () => { if (!closedFlag) child.kill(); };
+    const output = (target: Buffer[], bytes: Buffer) => { total += bytes.length; if (total > (options.maxOutputBytes ?? 8 * 1024 * 1024)) { failure = 'Git 출력 제한을 초과했습니다'; stop(); } else target.push(bytes); };
+    child.stdout!.on('data', bytes => output(out, bytes)); child.stderr!.on('data', bytes => output(err, bytes)); child.stdin!.on('error', () => { failure ||= 'Git 대기 실행기 전송을 확인하지 못했습니다'; stop(); });
+    const timer = setTimeout(() => { failure = 'Git 실행 시간 제한을 초과했습니다'; stop(); }, options.timeoutMs ?? 30000);
+    const guard = guardBrowserProcess(child, { file: options.headPin!.file, ref: options.headPin!.ref }); void guard.catch(() => {});
+    try {
+        if (!child.pid) throw new GitError('Git 대기 실행기 PID가 없습니다', 409);
+        await options.onSpawn?.(child.pid);
+        const owned = await guard;
+        await options.headPin!.beforeDispatch();
+        if (closedFlag || failure) throw new GitError(failure || 'Git 대기 실행기가 종료되었습니다', 409);
+        dispatched = true; child.stdin!.end(JSON.stringify({ args: ['--no-optional-locks', '--literal-pathspecs', ...args], env }));
+        await closed; await owned.done;
+        if (failure) throw new GitError(failure, 409, true, false);
+        if (code !== 0 && !optional) throw new GitError(scrub(Buffer.concat(err).toString()) || 'Git 작업에 실패했습니다', 400);
+        return code === 0 ? Buffer.concat(out) : Buffer.alloc(0);
+    } catch (error: any) {
+        stop(); await closed;
+        let terminated = !dispatched;
+        try { await (await guard).done; terminated = true; } catch { /* Never release a dispatched Git Job based only on worker close. */ }
+        if (error instanceof GitError && terminated) { error.terminationUnconfirmed = false; throw error; }
+        throw new GitError(error instanceof Error ? error.message : 'Git 소유 실행을 확인할 수 없습니다', 409, dispatched, !terminated);
+    } finally { clearTimeout(timer); }
 }

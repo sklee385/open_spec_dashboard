@@ -210,3 +210,11 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 `GET /api/work/:id/integration/:candidateId/apply/preview`는 최신 후보 검증과 원본 상태를 확인하여 `{candidateId, preflightPassed:true, applied:false, expectedVersion}`을 반환한다. `POST .../apply/preflight`는 `{confirmed:true, expectedVersion}`을 받아 같은 검사를 다시 수행한다. 기준이 바뀌면 409로 거부하며, 이 두 API는 실제 반영·적용 의도 예약·업무 완료를 수행하지 않는다.
 
 원본의 대상 브랜치와 HEAD, 전체 index·추적 파일·미추적 파일·assume-unchanged/skip-worktree, 진행 중인 Git 작업과 lock, worktree 등록 및 다른 공간의 대상 브랜치 checkout을 검사한다. 후보 CLI와 필수 브라우저 검증 근거도 현재 후보·계획·실행 환경에 맞아야 한다. 비겹침 파일의 변경도 자동 정리하지 않고 거부한다. 이 개발 단계의 검사는 배포 완료나 원본 반영 기능의 완성을 뜻하지 않는다.
+
+### 명시적인 후보 반영 (개발·검증 중)
+
+`POST /api/work/:id/integration/:candidateId/apply`는 `{requestKey, confirmed:true, expectedVersion}`을 받는다. 같은 키와 내용은 저장된 적용 영수증을 최신 원본 검사보다 먼저 반환하고 Git을 반복 실행하지 않는다. 같은 키의 다른 내용, 이미 적용한 후보에 대한 새 반영, 종료·결과 미확인 상태는 거부한다.
+
+새 요청은 저장소의 통합 범위를 잠그고 실행 의도를 기록한 뒤 Windows의 원본 HEAD 보호와 소유 프로세스 등록을 마쳐야 Git을 시작한다. 마지막 기준을 다시 검사하고 ff-only로 반영하며 자동 stash·원격 push·브랜치 전환·ignored 파일 덮어쓰기를 하지 않는다. 선택되는 원본/후보 속성 변환을 검사하고 프로젝트 hook·FSMonitor·자동 maintenance를 실행하지 않는다. 해당 HEAD 보호를 지원하지 않는 환경에서는 반영을 시작하지 않는다.
+
+영수증의 `status`는 `running|applied|failed|uncertain`, `applied`는 적용 확인 여부다. `appliedCommit`과 `observedHead`는 처리 시점에 확인한 커밋이며 이후 원본의 실시간 상태를 뜻하지 않는다. HTTP 200만으로 적용 성공을 판단하지 않는다. 명령 오류나 결과 저장 실패 뒤에도 실제 HEAD·index·파일과 업무/후보 보존을 확인하고, 불일치는 영수증과 점유 근거를 유지한다. 결과가 불명확하다고 새 키로 자동 반영하거나 원본을 자동 되돌리지 않는다. 반영과 업무 완료·보관은 별도 동작이다.
