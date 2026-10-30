@@ -29,6 +29,8 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
   const [history, setHistory] = useState<GitCommit[]>([]), [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [detail, setDetail] = useState<GitDetail | null>(null), [diff, setDiff] = useState<GitDiff | null>(null), [historical, setHistorical] = useState<{ path: string; content: string | null; base?: string; reason?: string } | null>(null);
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [operation, setOperation] = useState<GitOperation | null>(null);
+  const [readErrors, setReadErrors] = useState<Record<string, string>>({});
+  const readResult = useCallback((resource: string, failure?: unknown) => setReadErrors(previous => { const next = { ...previous }; if (failure) next[resource] = failure instanceof Error ? failure.message : String(failure); else delete next[resource]; return next; }), []);
   const dirty = file !== null && (draft !== (file.content ?? '').replace(/\r\n?/g, '\n') || !!latest);
   const persistence = useLocalDraft(sourceId && file ? projectDraftKey(sourceId, workId, file.path, candidateId) : null, { content: draft, version: file?.version, baseContent: file?.content }, dirty, () => setDraftError(t('draft.failed')));
   const fileView = useRef({ file, dirty, sourceId });
@@ -42,10 +44,11 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     try {
       const page = await projectApi<ProjectPage>(sourceId, `${query ? '/search' : '/tree'}${projectQuery({ path, q: query || undefined, cursor: next, showHidden: String(hidden) })}`);
       if (!valid(sourceId, gen) || options !== treeOptions.current || request !== treeRequests.current.get(resource)) return;
+      readResult('tree');
       setEntries(old => next ? [...old, ...page.entries] : page.entries); setCursor(page.nextCursor); if (select) setDirectory(path); setIgnoredUnavailable(!!page.ignoredUnavailable);
       if (!query) setTreePages(old => ({ ...old, [path]: { ...page, entries: next ? [...(old[path]?.entries ?? []), ...page.entries] : page.entries } }));
-    } catch (err) { if (valid(sourceId, gen)) report(err); }
-  }, [sourceId, query, hidden, directory, valid, projectApi]);
+    } catch (err) { if (valid(sourceId, gen)) readResult('tree', err); }
+  }, [sourceId, query, hidden, directory, valid, projectApi, readResult]);
   const refresh = useCallback(async () => {
     if (!sourceId || statusInFlight.current === resourceKey) return;
     statusInFlight.current = resourceKey;
@@ -58,6 +61,7 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
       }
       if (git.status === 'rejected') throw git.reason;
       const value = git.value;
+      if (valid(sourceId, gen)) readResult('refresh');
       if (valid(sourceId, gen)) setStatus(value);
       if (value.available) {
         const list = await projectApi<{ branches: { name: string; current: boolean }[] }>(sourceId, '/git/branches');
@@ -72,9 +76,9 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
           else { setFile(current); setDraft((current.content ?? '').replace(/\r\n?/g, '\n')); setLatest(null); }
         }
       }
-    } catch (err) { if (valid(sourceId, gen)) report(err); }
+    } catch (err) { if (valid(sourceId, gen)) readResult('refresh', err); }
     finally { if (statusInFlight.current === resourceKey) statusInFlight.current = null; }
-  }, [sourceId, valid, projectApi, resourceKey]);
+  }, [sourceId, valid, projectApi, resourceKey, readResult]);
   const loadHistory = useCallback(async (next?: string) => {
     if (!sourceId) return; const gen = generation.current;
     try { const value = await projectApi<{ commits: GitCommit[]; nextCursor: string | null }>(sourceId, `/git/log${projectQuery({ cursor: next })}`); if (valid(sourceId, gen)) { setHistory(old => next ? [...old, ...value.commits] : value.commits); setHistoryCursor(value.nextCursor); } } catch (err) { if (valid(sourceId, gen)) report(err); }
@@ -114,8 +118,9 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     void poll(); return () => { stopped = true; clearTimeout(timer); };
   }, [active, sourceId, operation?.id, operation?.status, refresh, loadTree, loadHistory, openDetail, valid, projectApi, resourceKey]);
   const openFile = async (path: string) => {
-    if (!sourceId) return; const gen = generation.current, request = ++fileRequest.current; setError('');
+    if (!sourceId) return; const gen = generation.current, request = ++fileRequest.current;
     try { const value = await projectApi<ProjectFile>(sourceId, `/file${projectQuery({ path })}`); if (valid(sourceId, gen) && request === fileRequest.current) {
+      readResult('file');
       let restored: ReturnType<typeof readDocumentDraft> = null;
       try { restored = readDocumentDraft(projectDraftKey(sourceId, workId, path, candidateId)); } catch { setDraftError(t('draft.readFailed')); }
       setFile(restored ? { ...value, version: restored.version, content: restored.baseContent ?? (restored.version === value.version ? value.content : '') } : value);
@@ -123,7 +128,7 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
       setLatest(restored && restored.version !== value.version ? value : null);
       setDraftNotice(restored ? t('draft.restored') : ''); setDiff(null); setHistorical(null);
       try { draftStorage.setItem(viewKey, JSON.stringify({ path })); } catch { setDraftError(t('draft.failed')); }
-    } } catch (err) { if (valid(sourceId, gen)) report(err); }
+    } } catch (err) { if (valid(sourceId, gen)) readResult('file', err); }
   };
   useEffect(() => {
     if (!sourceId) return;
@@ -180,5 +185,5 @@ export function useProjectWorkspace(sourceId: string | null, active = true, work
     } catch (err) { if (valid(sourceId, gen)) report(err); return false; }
   };
   const reconcile = async () => { if (!sourceId || !operation || busyRef.current) return; const gen = generation.current; busyRef.current = true; setBusy(true); try { const response = await projectApi<GitReconciliation>(sourceId, `/git/operations/${encodeURIComponent(operation.id)}/reconcile`, { confirmed: true }); if (valid(sourceId, gen)) { const value = { ...response.operation, evidence: response.evidence }; setOperation(value); setStatus(response.status); persistOperation(resourceKey, value); } } catch (err) { if (valid(sourceId, gen)) report(err); } finally { if (valid(sourceId, gen)) { busyRef.current = false; setBusy(false); } } };
-  return { workspace, workspaceUnavailable, entries, treePages, directory, cursor, query, setQuery, hidden, setHidden, ignoredUnavailable, loadTree, file, draft, setDraft, editing, setEditing, latest, dirty, error, draftNotice, draftError, setError, busy, status, branches, history, historyCursor, loadHistory, detail, openDetail, diff, historical, showDiff, showHistorical, operation, run, refresh, openFile, save, discard, mutate, clearFile, reconcile, moveEntry };
+  return { workspace, workspaceUnavailable, entries, treePages, directory, cursor, query, setQuery, hidden, setHidden, ignoredUnavailable, loadTree, file, draft, setDraft, editing, setEditing, latest, dirty, error, readNotice: Object.values(readErrors).join('\n'), draftNotice, draftError, setError, busy, status, branches, history, historyCursor, loadHistory, detail, openDetail, diff, historical, showDiff, showHistorical, operation, run, refresh, openFile, save, discard, mutate, clearFile, reconcile, moveEntry };
 }

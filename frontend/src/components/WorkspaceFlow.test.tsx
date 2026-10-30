@@ -99,3 +99,13 @@ it('shows a persisted request key while an explicit reservation is still waiting
   await screen.findByText('요청 저장됨·응답 확인 중'); expect(screen.getByText(String(readMutation('integration:a')?.body.requestKey))).toBeVisible(); expect(fetcher.mock.calls.filter(call => call[1])).toHaveLength(1);
   await act(async () => finish({ ok: true, json: async () => ({ status: 'queued' }) }));
 });
+
+it('does not expose an older applied candidate as the current completion basis', async () => {
+  const current = { id: 'new', candidateId: 'new-c', status: 'validating', targetBranch: 'main', targetHead: 'target', workHead: 'work', candidateCommit: 'new-head', executionPath: 'C:/owned/new', conflicts: [] };
+  const applied = { ...current, id: 'old', candidateId: 'old-c', status: 'applied' };
+  const onAppliedChange = vi.fn();
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/apply/status') ? { candidateId: 'new-c', receipt: null, receipts: [], live: { state: 'settled' }, observation: { state: 'not-checked' } } : { active: current, requests: [applied, current] } })));
+  render(<WorkIntegration workId="a" onAppliedChange={onAppliedChange} />);
+  await screen.findByRole('button', { name: '저장된 후보 확인 new-c' });
+  expect(onAppliedChange).toHaveBeenLastCalledWith(false);
+});

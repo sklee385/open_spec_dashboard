@@ -1,4 +1,6 @@
 export const enProjectCopy = {
+  'project.candidateScopeHint': 'Use the candidate editing, verification and application workflow. Candidate files never use the copy-to-original procedure.',
+  'project.candidateRecovery': 'Resolve candidate conflicts in the candidate editor, then explicitly stage and commit the full files. Inspect uncertain candidate requests from the work screen.',
   'project.kind.integration-candidate': 'Integration candidate',
   'project.workspaceKind': 'Workspace kind', 'project.kind.original': 'Project original', 'project.kind.copy': 'Copy workspace', 'project.kind.git-worktree': 'Git worktree', 'project.executionPath': 'Actual workspace path',
   'project.startingCommit': 'Starting commit', 'project.workspaceBaseline': 'Workspace comparison baseline', 'project.snapshotBaseline': 'Saved file snapshot', 'project.unknown': 'Not available',
@@ -31,6 +33,8 @@ export const enProjectCopy = {
   'project.base': 'Comparison base', 'project.original': 'Original path', 'project.fileUnavailable': 'File content unavailable', 'project.copied': 'Original copied', 'project.noUpstream': 'An existing upstream is required.',
 } as const;
 export const koProjectCopy: Record<keyof typeof enProjectCopy, string> = {
+  'project.candidateScopeHint': '후보 전용 편집·검증·반영 절차를 사용하세요. 후보 파일에는 복사 공간의 원본 반영 절차를 사용하지 않습니다.',
+  'project.candidateRecovery': '후보 편집기에서 충돌을 해결한 뒤 파일 전체를 명시적으로 stage·커밋하세요. 불명확한 후보 요청은 업무 화면에서 실제 상태를 확인하세요.',
   'project.workspaceKind': '공간 종류', 'project.kind.integration-candidate': '통합 후보', 'project.kind.original': '프로젝트 원본', 'project.kind.copy': '복사 공간', 'project.kind.git-worktree': 'Git 워크트리', 'project.executionPath': '실제 작업 경로',
   'project.startingCommit': '시작 커밋', 'project.workspaceBaseline': '업무 변경 비교 기준', 'project.snapshotBaseline': '저장된 파일 스냅샷', 'project.unknown': '확인 불가',
   'project.overlaps': '겹치는 변경 파일', 'project.overlapAdvisory': '현재 확인한 변경 경로의 겹침 경고이며 병합 성공 여부를 판정하지 않습니다.',

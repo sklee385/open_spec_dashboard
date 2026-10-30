@@ -115,6 +115,14 @@ it('keeps raw candidate editing available when attributes block Git status and p
   expect(localStorage.getItem('project-draft:["demo","one","a.json","candidate"]')).toContain('repair attributes draft');
   expect(mock.mock.calls.some(([url]) => url.includes('/git/operations'))).toBe(false);
 });
+it('uses candidate recovery guidance and clears a transient read conflict without clearing mutation errors', async () => {
+  const mock = mockApi(), implementation = mock.getMockImplementation()!; let conflicted = true;
+  mock.mockImplementation(async (url, init) => url.includes('/workspace') ? { ok: true, json: async () => ({ kind: 'integration-candidate', executionPath: 'C:/candidate', overlaps: [], partial: false, gitReadOnly: true }) } : url.includes('/git/status') && conflicted ? { ok: false, status: 409, json: async () => ({ message: 'temporary candidate observation' }) } : implementation(url, init));
+  render(<ProjectWorkspace sourceId="demo" workId="one" candidateId="candidate" />);
+  expect(await screen.findByText(/후보 전용 편집·검증·반영 절차/)).toBeVisible(); expect(screen.queryByText(/업무 화면에서 원본에 반영한 뒤 프로젝트 원본에서 커밋/)).toBeNull();
+  expect((await screen.findByText('temporary candidate observation')).getAttribute('role')).toBe('status');
+  conflicted = false; fireEvent.click(screen.getByRole('button', { name: '새로고침' })); await waitFor(() => expect(screen.queryByText('temporary candidate observation')).toBeNull());
+});
 it('shows verified workspace metadata and partial overlap warnings even without Git', async () => {
   const mock = mockApi(), originalMock = mock.getMockImplementation()!;
   mock.mockImplementation(async (url, init) => url.includes('/workspace') ? { ok: true, json: async () => ({ kind: 'copy', workId: 'one', executionPath: 'C:/work/one', baseCommit: null, workspaceBaselineCommit: null, branch: null, partial: true, overlaps: [{ workId: 'two', title: '다른 업무', paths: ['shared.txt'] }] }) } : url.includes('/git/status') ? { ok: true, json: async () => ({ available: false, reason: 'not git' }) } : originalMock(url, init));

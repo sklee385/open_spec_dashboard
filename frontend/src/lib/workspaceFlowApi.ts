@@ -40,8 +40,8 @@ async function finishAttempt(scope: string, receipt: MutationReceipt) {
     draftStorage.setItem(key(scope), JSON.stringify(receipt));
   });
 }
-export async function flowGet<T>(endpoint: string): Promise<T> {
-  const response = await fetch(endpoint); const data = await response.json();
+export async function flowGet<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
+  const response = await (signal ? fetch(endpoint, { signal }) : fetch(endpoint)); const data = await response.json();
   if (!response.ok) throw new WorkspaceFlowError(response.status, data);
   return data as T;
 }
