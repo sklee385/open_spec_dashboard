@@ -19,6 +19,7 @@ import { IntegrationService } from '../src/work/integration.service';
 import { CompletedResults } from '../src/work/completed-results';
 import { OpenSpecService } from '../src/openspec/openspec.service';
 import { projectCoordinator } from '../src/projects/coordinator';
+import { WorkspaceCleanup } from '../src/work/workspace-cleanup';
 import { fileURLToPath } from 'node:url';
 vi.setConfig({ testTimeout: 60000, hookTimeout: 30000 });
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -120,11 +121,20 @@ it('Git 보관 실패는 반영·완료 캡처를 보존하고 별도 결과와 
   expect(new CompletedResults(store).header(work.id).retained.captureId).toBe(capture.retained.captureId);
   expect(store.records(work.id, 'archive-attempt').at(-1)).toMatchObject({ status: 'failed', result: { ok: false }, postCheck: { state: 'clean' } }); expect(openspec).toHaveBeenCalledTimes(1);
 });
-it('Git 보관 dirty는 완료로 남고 사용자 정리 뒤 명시 재확인만 CLI 재실행 없이 보관을 확정한다', async () => {
+it('Git 업무·후보 공간 정리 후 보관 dirty는 완료로 남고 사용자 정리 뒤 명시 재확인만 CLI 재실행 없이 보관을 확정한다', async () => {
   const trace = (stage: string) => console.error('[archive-dirty-fixture]', JSON.stringify({ stage, at: Date.now(), pid: process.pid }));
   writeFileSync(join(work.executionPath!, 'openspec/changes/a/specs/demo/spec.md'), '## ADDED Requirements\n\n### Requirement: Archive fixture\nThe system SHALL preserve completed results.\n\n#### Scenario: Result preserved\n- **WHEN** an applied result is archived\n- **THEN** its completion evidence is retained\n');
   git(work.executionPath!, 'add', '--', 'openspec/changes/a/specs/demo/spec.md'); git(work.executionPath!, 'commit', '-m', 'valid archive delta fixture');
   await completeReady(trace); expect((await workAction('complete')).status).toBe(200); trace('completed');
+  const cleanup = new WorkspaceCleanup(store, app.get(WorkspaceSettingsService)), preview = await cleanup.preview(work.id);
+  expect(preview.canRemove, JSON.stringify(preview.blockers)).toBe(true);
+  const removed = await cleanup.remove(work.id, { requestKey: randomUUID(), token: preview.token, expectedVersion: preview.version, confirmed: true });
+  expect(removed, JSON.stringify({status:removed.status,error:removed.error,path:removed.target?.path,container:removed.target?.container})).toMatchObject({ status: 'removed' });
+  expect(existsSync(work.executionPath!)).toBe(false); expect(new CompletedResults(store).header(work.id).integration.appliedCommit).toBe(reserved.candidateCommit);
+  const candidatePreview = await cleanup.preview(work.id, reserved.candidateId);
+  expect(candidatePreview.canRemove, JSON.stringify(candidatePreview.blockers)).toBe(true);
+  expect(await cleanup.remove(work.id, { requestKey: randomUUID(), token: candidatePreview.token, expectedVersion: candidatePreview.version, confirmed: true }, reserved.candidateId)).toMatchObject({ status: 'removed', targetKind: 'integration-candidate' });
+  expect(existsSync(reserved.executionPath)).toBe(false); expect(git(source,'show-ref','--verify','refs/heads/codex/integration-'+reserved.candidateId)).toContain(reserved.candidateCommit);
   // Use the real CLI: its verified Windows EPERM fallback is part of archive behavior.
   const openspec = vi.spyOn(app.get(OpenSpecService), 'run');
   expect((await workAction('archive')).status).toBe(409); trace('archive-needs-review');

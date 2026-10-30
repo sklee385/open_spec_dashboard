@@ -263,3 +263,11 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 원본 보관은 integration 범위로 직렬화하고 실행 전에 archive-attempt와 소유 intent를 저장한다. 명령 결과·실제 문서 이동·보관 후 raw Git 상태를 별도 보존한다. 실패는 완료 상태와 반영 근거를 유지하고409를 반환한다. 성공 명령이 원본을 dirty로 남기면 needs-review이며 완료 상태를 유지한다. 사용자가 원본 변경을 정리한 뒤 같은 archive 동작으로 명시 재확인하면 CLI 재실행 없이 문서 이동과 clean 기준을 다시 검사해 archived로 확정한다. 종료 또는 저장 결과가 미확인이면 자동 재실행하지 않는다. 파일 이동만으로 Git 업무 완료·보관을 자동 확정하지 않는다. 비Git copy의 원본 Git 검사는 not-applicable로 표시하고 기존 외부 보관 이력 조회는 유지한다.
 
 2026-10-30 개발 검증은 실제 Git/HTTP/SQLite 완료1건, 완료 캡처 후 편집 거부1건, 보관 실패·파일이동 자동확정 방지2건, 기존 copy 실제 HTTP/OpenSpec 보관1건, 실제 Git/OpenSpec 보관 dirty→명시 재확인1건 및 보관 버튼 모의 UI1건의 통과 근거를 사용했다. Git 후보의 선행 CLI 검증 일부는 fixture 참조이므로 전체 사용자 동선 E2E 성공을 뜻하지 않는다. raw rename mock의 Windows EPERM 및 한 차례 worker 예기치 않은 종료는 성공 근거에서 제외했다. 설치된 실제 CLI의 Windows 처리 경로로 보관1회를 확인했고 watcher/ACL/운영 앱은 바꾸지 않았다. 최종 backend build 통과. 설치본·Codex 내장 브라우저 실제 동선과 OS crash/PID 정밀 증명은 별도 미완료다.
+
+### 관리 Git 공간의 확인 후 개별 정리(개발 변경)
+
+`GET /api/work/:id/workspace/cleanup/preview`는 완료/보관된 업무의 소유·실행·질문/승인·종료·미커밋/미반영·ignored·장기 보존 상태를 검사한다. 후보는 `?candidateId=UUID`로 고정한다. 같은 주소의 `cleanup` GET은 저장된 마지막 정리 영수증만 읽는다. 미리보기는 파일이나 DB를 정리하지 않으며 허용된 경우에만 version과 호스트 확인 token을 반환한다. 토큰은 같은 업무/대상/버전에 한정되고 서버 재시작 또는 유효기간 경과 뒤에는 다시 미리본다. copy/구형 미관리 공간의 자동 정리는 지원하지 않고 보존·차단 이유를 반환한다.
+
+`POST /api/work/:id/workspace/cleanup[?candidateId=UUID]`는 정확한 `{requestKey:UUID,token:UUID,expectedVersion:SHA256,confirmed:true}`만 받는다. 소유/파일/실행 상태를 새로 검사하고 영속 의도를 저장한 뒤 정상 `git worktree remove -- <고정 경로>`만 실행한다. force/prune/루트 재귀 삭제/브랜치 제거는 제공하지 않는다. 비어 있고 소유가 같은 앱의 disabled-hooks와 identity만 확인해 해당 컨테이너를 정리한다. 다른 파일/폴더나 링크가 끼어들면 보존하며 미확인 결과를 남긴다. 원본·완료 자료·로컬 브랜치·원격 ref는 보존한다. 같은 요청 키의 정확한 재요청은 기존 running/removed/failed/uncertain 영수증만 반환하고 제거를 반복하지 않는다. 종료/결과 미확인은 자동 재실행하거나 TTL로 해제하지 않는다. 공개 HTTP 경로는 앱 업데이트/종료 요청 관리에도 연결한다.
+
+정리 뒤 완료 증거의 workspace 상태는 정확히 일치하는 removed 영수증이 있을 때만 기존 적용 기준으로 대조한다. 업무·후보 공간이 모두 없어도 보존 자료를 읽고 원본 보관을 명시적으로 이어갈 수 있다. 2026-10-30 검증: 기본 보존/차단3건, 정상 제거·확인 후 변경 거부·도중 새 파일 보존3건, 실제 경로 교체1건, HTTP 경계1건과 실제 Git 업무/후보 정리→OpenSpec 보관/재확인1건(49.42초)을 확인했다. 공통 검사는 변경 없는 통과 근거를 재사용했으며 전체 테스트나 설치 앱 E2E 성공으로 계산하지 않는다. 초기 5초 테스트 예산 초과와 훅 폴더 누락 실패는 성공 근거에서 제외하고 해당 원인 수정 뒤 관련 사례만 다시 검사했다.

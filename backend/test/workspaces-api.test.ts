@@ -49,3 +49,14 @@ it('검토·실험 허용·복사 방식 확인을 모두 요구하고 상태·�
     expect((await request(`work/${work.id}/openspec?operation=context`)).status).toBe(409);
   } finally { inspect.mockRestore(); app.get(WorkStore).save(before); }
 });
+
+it('정리 API는 미리보기·저장 결과를 읽고 임의 경로·force 요청을 삭제 없이 거부한다',async()=>{
+ const endpoint='work/'+work.id+'/workspace/cleanup',before=JSON.stringify(app.get(WorkStore).get(work.id));
+ expect(await request(endpoint+'/preview')).toMatchObject({status:200,data:{canRemove:false,version:null}});
+ expect(await request(endpoint)).toMatchObject({status:200,data:{receipt:null}});
+ expect((await request(endpoint+'/preview?path=other')).status).toBe(400);expect((await request(endpoint+'?path=other')).status).toBe(400);expect((await request(endpoint+'?candidateId=wrong')).status).toBe(400);
+ expect((await request(endpoint+'/preview?candidateId=wrong')).status).toBe(400);
+ expect((await request(endpoint,{requestKey:'key',token:'token',expectedVersion:'version',confirmed:true,force:true})).status).toBe(400);
+ expect((await request('work/not-owned/workspace/cleanup/preview')).status).toBe(404);
+ expect(JSON.stringify(app.get(WorkStore).get(work.id))).toBe(before);
+});

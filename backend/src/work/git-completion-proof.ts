@@ -6,7 +6,9 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 export type CompletionRef = { id: string; kind: 'verification' | 'candidate-verification' | 'browser-verification'; digest: string };
 /** Small immutable anchors, captured inside the apply admission transaction. No log/image copies. */
 export function captureCompletionProof(store: WorkStore, work: Work, request: IntegrationRequest, candidateRefs: string[]) {
-  const basis = hash([work.sourceId, work.projectPath, work.executionPath, work.workspace, work.reviewedVersion, work.sourceMutationVersion ?? null, work.verificationCommands ?? null, work.browserScenario ?? null,
+  const removed = work.workspace?.status === 'removed' && store.db.prepare("SELECT 1 FROM records WHERE work_id=? AND kind='workspace-cleanup' AND json_extract(data,'$.targetKind')='work' AND json_extract(data,'$.workspaceId')=? AND json_extract(data,'$.target.path')=? AND json_extract(data,'$.status')='removed' AND json_extract(data,'$.processTerminated')=1 AND json_extract(data,'$.keepBranch')=1 LIMIT 1").get(work.id,work.workspace.workspaceId,work.workspace.executionPath);
+  const workspace = removed ? { ...work.workspace!, status: 'ready' } : work.workspace;
+  const basis = hash([work.sourceId, work.projectPath, work.executionPath, workspace, work.reviewedVersion, work.sourceMutationVersion ?? null, work.verificationCommands ?? null, work.browserScenario ?? null,
     request.id, request.candidateId, request.candidateMutationVersion ?? null, request.candidateCommit, request.targetBranch, request.targetHead, request.resultCommit, request.sourceRevision, request.reviewedVersion, request.workVerificationRefs, candidateRefs]);
   const refs: CompletionRef[] = [];
   for (const [ids, candidate] of [[request.workVerificationRefs, false], [candidateRefs, true]] as const) {
