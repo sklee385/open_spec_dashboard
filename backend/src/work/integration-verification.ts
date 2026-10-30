@@ -10,7 +10,8 @@ import { DesktopLifecycle } from '../desktop/lifecycle';
 import { desktopHealth } from '../desktop/health';
 import { projectCoordinator } from '../projects/coordinator';
 import type { OperationRequest } from '../projects/operation-locks';
-import { runGit } from '../projects/git-runner';
+import { readGitSync, runGit } from '../projects/git-runner';
+import { parseGitCachedSizes, readCleanTrackedFiles, readGitTextAttributes } from './git-clean-files';
 import { candidateBranch, candidateLocation, verifyCandidateCheckpoint } from './integration-candidate';
 import { collectFiles, snapshotRevision } from './file-results';
 import { workspaceResourcePath } from './workspace-file-policy';
@@ -116,14 +117,23 @@ export class IntegrationVerification {
     const fixed = hash([this.workPolicy(work), request.id, request.fingerprint, request.candidateId, request.candidateCommit, request.candidateMutationVersion, request.targetHead, request.resultCommit, commands]);
     const startingStamp = this.stamp(work, request);
     const before = [this.source(work, request.executionPath), this.source(work, request.workExecutionPath), this.source(work, request.projectPath)];
-    const [index, workIndex, originalIndex, workHead, originalHead, targetHead, dirty, flags] = await Promise.all([
+    const [index, workIndex, originalIndex, workHead, originalHead, targetHead, untracked, flags, tree, format, textConfig, debug] = await Promise.all([
       this.read(request.executionPath, ['ls-files', '--stage', '-z']), this.read(request.workExecutionPath, ['ls-files', '--stage', '-z']), this.read(request.projectPath, ['ls-files', '--stage', '-z']),
       this.read(request.workExecutionPath, ['rev-parse', 'HEAD']), this.read(request.projectPath, ['rev-parse', 'HEAD']), this.read(request.projectPath, ['rev-parse', '--verify', `refs/heads/${request.targetBranch}^{commit}`]),
-      this.read(request.executionPath, ['status', '--porcelain=v1', '--no-renames', '-z', '--untracked-files=all']), this.read(request.executionPath, ['ls-files', '-v', '-z']),
+      this.read(request.executionPath, ['ls-files', '--others', '--exclude-standard', '-z']), this.read(request.executionPath, ['ls-files', '-v', '-z']),
+      this.read(request.executionPath, ['ls-tree', '-r', '-z', request.candidateCommit]), this.read(request.executionPath, ['rev-parse', '--show-object-format']),
+      this.read(request.executionPath, ['config', '--null', '--get-regexp', '^core[.](autocrlf|filemode|eol|safecrlf)$']), this.read(request.executionPath, ['ls-files', '--debug', '-z']),
     ]);
     if (workHead.trim() !== request.resultCommit || targetHead.trim() !== request.targetHead) throw new ConflictException('현재 업무 결과 HEAD 또는 원본 대상 HEAD가 변경되었습니다. 후보를 다시 준비해 주세요');
     if (flags.split('\0').filter(Boolean).some(row => row[0] === 'S' || /[a-z]/.test(row[0]))) throw new ConflictException('후보 assume-unchanged/skip-worktree를 먼저 정리해 주세요');
-    const clean = !dirty.split('\0').filter(Boolean).some(row => !workspaceResourcePath(work, row.slice(3)));
+    const entries = index.split('\0').filter(Boolean).filter(row => !workspaceResourcePath(work, row.slice(row.indexOf('\t') + 1))), tracked = entries.map(row => row.slice(row.indexOf('\t') + 1)).sort();
+    const headEntries = tree.split('\0').filter(Boolean).map(row => { const at = row.indexOf('\t'), [mode, , blob] = row.slice(0, at).split(' '); return `${mode} ${blob} 0\t${row.slice(at + 1)}`; }).filter(row => !workspaceResourcePath(work, row.slice(row.indexOf('\t') + 1)));
+    if (!['sha1', 'sha256'].includes(format.trim())) throw new ConflictException('후보 Git object 형식을 지원하지 않습니다');
+    const config = new Map(textConfig.split('\0').filter(Boolean).map(field => { const at = field.indexOf('\n'); if (at < 0) throw new ConflictException('후보 Git 텍스트 정책을 확인할 수 없습니다'); return [field.slice(0, at).toLowerCase(), field.slice(at + 1).toLowerCase()]; }));
+    const boolean = (value: string | undefined) => ['false', 'no', 'off', '0'].includes(value ?? '') ? 'false' : ['true', 'yes', 'on', '1', ''].includes(value ?? 'true') ? 'true' : value ?? 'true';
+    const attributes = readGitTextAttributes(request.executionPath, tracked);
+    let clean = !untracked.split('\0').filter(Boolean).some(path => !workspaceResourcePath(work, path)) && entries.every(row => /^\d+ [a-f0-9]+ 0\t/.test(row)) && hash([...entries].sort()) === hash(headEntries.sort());
+    if (clean) try { readCleanTrackedFiles(request.executionPath, tracked, { format: format.trim(), autocrlf: config.get('core.autocrlf') === 'input' ? 'input' : boolean(config.get('core.autocrlf') ?? 'false'), filemode: boolean(config.get('core.filemode')), attributes: attributes.attributes, cachedSizes: parseGitCachedSizes(debug), index: new Map(entries.map(row => { const at = row.indexOf('\t'), [mode, blob] = row.slice(0, at).split(' '); return [row.slice(at + 1), { mode, blob }]; })) }); } catch { clean = false; }
     if (requireClean && !clean) throw new ConflictException('후보의 staged·unstaged·untracked 변경을 새 후보 커밋으로 먼저 기록해 주세요');
     const checkpoint = await verifyCandidateCheckpoint(request, this.settings.protectedPaths(), request.candidateCommit, undefined, false, index);
     const again = await Promise.all([
@@ -134,8 +144,11 @@ export class IntegrationVerification {
     const current = this.request(workId, candidateId);
     if (fixed !== hash([this.workPolicy(current.work), current.request.id, current.request.fingerprint, current.request.candidateId, current.request.candidateCommit, current.request.candidateMutationVersion, current.request.targetHead, current.request.resultCommit, this.works.execution.commands(current.work, 'full', undefined, checkpoint.path)]) || hash(before) !== hash([this.source(work, request.executionPath), this.source(work, request.workExecutionPath), this.source(work, request.projectPath)]) || this.stamp(work, request) !== startingStamp) throw new ConflictException('후보 검증 기준을 읽는 중 소스·소유·명령이 변경되었습니다');
     const runtime = this.works.execution.candidateCommandContext(commands);
-    const basis = { targetKind: 'integration-candidate', candidateId, candidateEpoch: request.candidateMutationVersion ?? null, candidateCommit: checkpoint.head, workHead: workHead.trim(), targetRef: `refs/heads/${request.targetBranch}`, targetHead: targetHead.trim(), originalHead: originalHead.trim(), source: before, index: hash(index), workIndex: hash(workIndex), originalIndex: hash(originalIndex), planRevision, reviewedVersion: work.reviewedVersion, sourceMutationVersion: work.sourceMutationVersion ?? null, workPolicyVersion: hash(this.workPolicy(work)), preparation: this.preparation(work), runtime, runtimeVersion: hash(runtime), candidatePlan: collectWorkspaceDocuments(request.executionPath, work.changeName).planRevision, originalPlan: collectWorkspaceDocuments(request.projectPath, work.changeName).planRevision, commandVersion: hash(commands), browserVersion: hash(work.browserScenario ?? null), clean };
-    return { work, request, commands, basis, version: hash(basis), checkPublication: () => this.stamp(work, request) === startingStamp };
+    const readPolicy = { attributesVersion: attributes.version, textConfigVersion: hash(textConfig), objectFormat: format.trim() };
+    const checkPublication = () => this.stamp(work, request) === startingStamp && readGitTextAttributes(request.executionPath, tracked).version === attributes.version && readGitSync(request.executionPath, ['-c', 'core.fsmonitor=false', 'config', '--null', '--get-regexp', '^core[.](autocrlf|filemode|eol|safecrlf)$']) === textConfig;
+    if (!checkPublication()) throw new ConflictException('후보 속성 또는 텍스트 정책이 수집 중 변경되었습니다');
+    const basis = { targetKind: 'integration-candidate', candidateId, candidateEpoch: request.candidateMutationVersion ?? null, candidateCommit: checkpoint.head, workHead: workHead.trim(), targetRef: `refs/heads/${request.targetBranch}`, targetHead: targetHead.trim(), originalHead: originalHead.trim(), source: before, index: hash(index), workIndex: hash(workIndex), originalIndex: hash(originalIndex), planRevision, reviewedVersion: work.reviewedVersion, sourceMutationVersion: work.sourceMutationVersion ?? null, workPolicyVersion: hash(this.workPolicy(work)), preparation: this.preparation(work), runtime, runtimeVersion: hash(runtime), candidatePlan: collectWorkspaceDocuments(request.executionPath, work.changeName).planRevision, originalPlan: collectWorkspaceDocuments(request.projectPath, work.changeName).planRevision, commandVersion: hash(commands), browserVersion: hash(work.browserScenario ?? null), readPolicy, clean };
+    return { work, request, commands, basis, version: hash(basis), checkPublication };
   }
   private publish(work: Work, request: IntegrationRequest, ready: boolean, refs: string[], records: any[], check?: () => boolean) {
     let accepted = false;

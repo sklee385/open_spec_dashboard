@@ -6,8 +6,9 @@ import type { Work, WorkStore } from '../work/store';
 import { pathsOverlap } from '../work/workspace-paths';
 import { managedPrivatePath } from '../work/workspace-file-policy';
 import type { VerificationEnvironment } from './verification-environment';
+import { projectCoordinator } from '../projects/coordinator';
 
-export interface VerificationSnapshot { id: string; root: string; revision: string; sourceRoot: string; environment?: VerificationEnvironment; }
+export interface VerificationSnapshot { id: string; root: string; revision: string; sourceRoot: string; environment?: VerificationEnvironment; containerDev?: number; containerIno?: number; }
 export interface VerificationOutput { path: string; hash: string; size: number; mode: number; }
 type Entry = { kind: 'file'; path: string; hash: string; mode: number; size: number } | { kind: 'directory'; path: string; mode: number };
 type Budget = { signal?: AbortSignal; deadline: number };
@@ -17,6 +18,17 @@ const key = (path: string) => process.platform === 'win32' ? path.toLowerCase() 
 function checkpoint(budget: Budget) { budget.signal?.throwIfAborted(); if (Date.now() > budget.deadline) fail('검증 사본 준비 시간이 초과됐습니다'); }
 const budget = (signal?: AbortSignal): Budget => ({ signal, deadline: Date.now() + 120000 });
 async function exists(path: string) { try { await lstat(path); return true; } catch (error: any) { if (error.code === 'ENOENT') return false; throw error; } }
+async function ownerMarker(path: string) {
+  const before = await lstat(path); if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 65536) fail('사본 소유 표시의 파일 경계가 다릅니다');
+  const fd = await open(path, 'r');
+  try {
+    const opened = await fd.stat(); if (opened.dev !== before.dev || opened.ino !== before.ino || opened.nlink !== 1) fail('사본 소유 표시가 변경되었습니다');
+    const bytes = Buffer.alloc(65537); let size = 0, count: number;
+    while ((count = (await fd.read(bytes, size, bytes.length - size, null)).bytesRead) > 0) { size += count; if (size > 65536) fail('사본 소유 표시 크기를 초과했습니다'); }
+    const after = await lstat(path); if (after.dev !== before.dev || after.ino !== before.ino || after.nlink !== 1 || after.size !== size || after.mtimeMs !== before.mtimeMs) fail('사본 소유 표시가 변경되었습니다');
+    return JSON.parse(bytes.subarray(0, size).toString('utf8'));
+  } finally { await fd.close(); }
+}
 async function physicalPath(path: string): Promise<string> {
   try { return await realpath(path); }
   catch (error: any) { if (error.code !== 'ENOENT' || dirname(path) === path) throw error; return join(await physicalPath(dirname(path)), relative(dirname(path), path)); }
@@ -135,7 +147,7 @@ export class VerificationSnapshots {
     const id = randomUUID(), container = join(base, id), root = join(container, 'project');
     await mkdir(container); const stat = await lstat(container);
     this.owned.set(id, { container, dev: stat.dev, ino: stat.ino });
-    const snapshot: VerificationSnapshot = { id, root, sourceRoot, revision: '', ...(environment ? { environment } : {}) };
+    const snapshot: VerificationSnapshot = { id, root, sourceRoot, revision: '', containerDev: stat.dev, containerIno: stat.ino, ...(environment ? { environment } : {}) };
     try {
       const marker = await open(join(container, 'owner.json'), 'wx');
       try { await marker.writeFile(JSON.stringify({ id, workId: work.id })); } finally { await marker.close(); }
@@ -180,12 +192,24 @@ export class VerificationSnapshots {
     }
     catch { return false; }
   }
-  async cleanup(snapshot: VerificationSnapshot) {
+  /** Only explicit, independently-proven terminated recovery may restore this handle. */
+  async restore(snapshot: VerificationSnapshot) {
+    const data = resolve(process.env.DATA_DIR || '../.data'), container = join(data, 'verification-snapshots', snapshot.id);
+    if (!/^[a-f0-9-]{36}$/.test(snapshot.id) || snapshot.root !== join(container, 'project') || pathsOverlap(snapshot.root, snapshot.sourceRoot) || !snapshot.environment) fail('복구할 사본의 고정 소유 경계를 확인할 수 없습니다');
+    await directory(data); if (!await exists(container)) return false;
+    await directory(container); const stat = await lstat(container), marker = await ownerMarker(join(container, 'owner.json'));
+    if (stat.dev !== snapshot.containerDev || stat.ino !== snapshot.containerIno || marker.id !== snapshot.id || marker.workId !== snapshot.environment.workId) fail('복구할 사본의 실제 소유가 다릅니다');
+    this.owned.set(snapshot.id, { container, dev: stat.dev, ino: stat.ino });
+    return true;
+  }
+  async cleanup(snapshot: VerificationSnapshot, permit?: () => void) {
+    if (permit) permit(); else projectCoordinator(this.store).assertOperationCanStart({ kind: 'workspace', root: snapshot.root, commonDir: snapshot.root });
     const owned = this.owned.get(snapshot.id);
     if (!owned || snapshot.root !== join(owned.container, 'project')) fail('검증 사본 소유 경로를 확인할 수 없습니다');
     await directory(owned.container);
-    const stat = await lstat(owned.container), marker = JSON.parse(await readFile(join(owned.container, 'owner.json'), 'utf8'));
+    const stat = await lstat(owned.container), marker = await ownerMarker(join(owned.container, 'owner.json'));
     if (stat.dev !== owned.dev || stat.ino !== owned.ino || marker.id !== snapshot.id) fail('검증 사본 소유가 변경되어 보존합니다');
+    permit?.();
     // Remove only the exact exclusively-created container; never follow links.
     await rm(owned.container, { recursive: true, force: false }); this.owned.delete(snapshot.id);
   }

@@ -91,6 +91,19 @@ async function ended() {
   for (let n = 0; n < 150; n++) { const row = store.records('a', 'candidate-verification').at(-1); if (row?.status !== 'running' && app.get(DesktopLifecycle).requests === 0) return row; await new Promise(resolve => setTimeout(resolve, 100)); }
   throw new Error('candidate command did not settle');
 }
+it('Job 종료 뒤 후보 속성 검사와 상태 수집 사이 경쟁도 clean helper를 실행하지 않는다', async () => {
+  work.verificationCommands = [{ id: 'fixture', command: process.execPath, args: ['-e', 'process.exit(0)'] }]; store.save(work); await seed();
+  const editing = app.get(IntegrationEditing), read = editing.assertGitRead.bind(editing), command = works.execution.runCandidateCommand.bind(works.execution), marker = join(dirname(source), 'clean-helper-ran.txt'), script = join(dirname(source), 'clean-helper.cjs'); let endedJob = false, injected = false;
+  writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(marker)},'unexpected');process.stdin.pipe(process.stdout);`);
+  vi.spyOn(works.execution, 'runCandidateCommand').mockImplementation(async (...args: any[]) => { const result = await command(...args); endedJob = result.processTerminated === true; return result; });
+  vi.spyOn(editing, 'assertGitRead').mockImplementation(async (...args: any[]) => {
+    await read(...args);
+    if (endedJob && !injected) { injected = true; git(reserved.executionPath, 'config', 'filter.race.clean', `"${process.execPath.replace(/\\/g, '/')}" "${script.replace(/\\/g, '/')}"`); writeFileSync(join(reserved.executionPath, '.gitattributes'), 'code.txt filter=race'+String.fromCharCode(10)); writeFileSync(join(reserved.executionPath, 'code.txt'), readFileSync(join(reserved.executionPath, 'code.txt'))); }
+  });
+  const roots = [source, work.executionPath!, reserved.executionPath], heads = roots.map(root => git(root, 'rev-parse', 'HEAD')), indexes = roots.map(root => readFileSync(git(root, 'rev-parse', '--path-format=absolute', '--git-path', 'index')).toString('base64'));
+  await start('guard-status-race'); const result = await ended(); expect(endedJob).toBe(true); expect(injected).toBe(true); expect(result.status).toBe('stale'); expect(existsSync(marker)).toBe(false);
+  expect(roots.map(root => git(root, 'rev-parse', 'HEAD'))).toEqual(heads); expect(roots.map(root => readFileSync(git(root, 'rev-parse', '--path-format=absolute', '--git-path', 'index')).toString('base64'))).toEqual(indexes);
+});
 it('다른 업무의 질문 대기는 허용하고 타 Store는 후보 실행 intent로 편집을 차단한다', async () => {
   work.verificationCommands = [{ id: 'fixture', command: process.execPath, args: ['-e', 'setTimeout(()=>process.exit(0),700)'] }]; store.save(work); await seed();
   store.save({ ...work, id: 'b', requestKey: 'b', changeName: 'b', executionPath: join(dirname(source), 'other'), workspace: undefined, state: 'waiting-input' });

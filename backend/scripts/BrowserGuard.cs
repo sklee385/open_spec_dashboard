@@ -7,6 +7,7 @@ using System.Threading;
 // A supervisor outside the worker's job owns the only job handle. A worker or
 // host crash therefore terminates every descendant without PID/name guessing.
 public static class BrowserGuard {
+  static int stopRequested=0;
   [StructLayout(LayoutKind.Sequential)] struct Basic {
     public long PerProcessUserTimeLimit, PerJobUserTimeLimit;
     public uint LimitFlags;
@@ -34,10 +35,11 @@ public static class BrowserGuard {
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   public static int Main(string[] args) {
     IntPtr job=IntPtr.Zero, process=IntPtr.Zero, parent=IntPtr.Zero, buffer=IntPtr.Zero;
-    FileStream head=null; bool pinned=false;
+    FileStream head=null; bool pinned=false, browserJob=false; int result=1;
     try {
       uint owner, host;
-      if((args.Length!=2 && args.Length!=4) || !uint.TryParse(args[0], out owner) || !uint.TryParse(args[1], out host) || owner==0 || host==0) return 2;
+      browserJob=args.Length==3 && args[2]=="BROWSER-JOB-V2";
+      if((args.Length!=2 && args.Length!=4 && !browserJob) || !uint.TryParse(args[0], out owner) || !uint.TryParse(args[1], out host) || owner==0 || host==0) return 2;
       job=CreateJobObject(IntPtr.Zero, null);
       if(job==IntPtr.Zero) throw new Exception("job create failed");
       Extended info=new Extended(); info.BasicLimitInformation.LimitFlags=0x2000;
@@ -54,17 +56,24 @@ public static class BrowserGuard {
         if(offset!=bytes.Length || Encoding.UTF8.GetString(bytes).Trim()!="ref: "+args[3]) throw new Exception("head ref changed");
         pinned=true;
       }
-      Console.WriteLine(pinned ? "READY HEAD-PIN-V1" : "READY"); Console.Out.Flush();
-      if(WaitForMultipleObjects(2, new IntPtr[]{ process, parent }, false, 0xffffffff)==0xffffffff) throw new Exception("job wait failed");
-      return 0;
-    } catch { Console.Error.WriteLine("browser process ownership failed: " + Marshal.GetLastWin32Error()); return 1; }
+      Console.WriteLine(browserJob ? "READY BROWSER-JOB-V2" : pinned ? "READY HEAD-PIN-V1" : "READY"); Console.Out.Flush();
+      if(browserJob) {
+        Thread input=new Thread(delegate() { try { string line; while((line=Console.ReadLine())!=null) if(line=="STOP BROWSER-JOB-V2") { Interlocked.Exchange(ref stopRequested,1); return; } Interlocked.Exchange(ref stopRequested,1); } catch { Interlocked.Exchange(ref stopRequested,1); } }); input.IsBackground=true; input.Start();
+        while(Interlocked.CompareExchange(ref stopRequested,0,0)==0) { uint wait=WaitForMultipleObjects(2,new IntPtr[]{process,parent},false,100); if(wait==0xffffffff) throw new Exception("job wait failed"); if(wait!=258) break; }
+      } else if(WaitForMultipleObjects(2, new IntPtr[]{ process, parent }, false, 0xffffffff)==0xffffffff) throw new Exception("job wait failed");
+      result=0;
+    } catch { Console.Error.WriteLine("browser process ownership failed: " + Marshal.GetLastWin32Error()); result=1; }
     finally {
       if(job!=IntPtr.Zero) {
         // Closing the job handle only schedules termination. Keep HEAD pinned until
         // the kernel confirms every assigned descendant has actually terminated.
         TerminateJobObject(job, 1);
         Accounting accounting;
-        while(!QueryInformationJobObject(job, 1, out accounting, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero) || accounting.ActiveProcesses!=0) Thread.Sleep(10);
+        if(browserJob) {
+          DateTime deadline=DateTime.UtcNow.AddSeconds(10); bool quiescent=false;
+          while(DateTime.UtcNow<deadline) { if(QueryInformationJobObject(job,1,out accounting,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero) && accounting.ActiveProcesses==0) { quiescent=true; break; } Thread.Sleep(10); }
+          if(quiescent) { Console.WriteLine("QUIESCENT BROWSER-JOB-V2"); Console.Out.Flush(); } else result=1;
+        } else while(!QueryInformationJobObject(job, 1, out accounting, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero) || accounting.ActiveProcesses!=0) Thread.Sleep(10);
       }
       if(head!=null) {
         if(pinned) { Console.WriteLine("QUIESCENT HEAD-PIN-V1"); Console.Out.Flush(); }
@@ -75,5 +84,6 @@ public static class BrowserGuard {
       if(process!=IntPtr.Zero) CloseHandle(process);
       if(parent!=IntPtr.Zero) CloseHandle(parent);
     }
+    return result;
   }
 }

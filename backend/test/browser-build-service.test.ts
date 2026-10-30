@@ -36,12 +36,18 @@ beforeEach(async () => {
   browser = new BrowserService(store, new ProjectResolver(legacy, store));
 });
 afterEach(async () => { await browser?.onModuleDestroy(); await legacy?.onModuleDestroy(); store?.onApplicationShutdown(); for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-async function run(candidateId?: string) { const result = browser.run(work.id, 'user', candidateId); await vi.waitFor(() => expect(browser.activity(work.id).running).toBe(false), { timeout: 120000 }); return store.records(work.id, 'browser-verification').find(row => row.id === result.id)!; }
+async function run(candidateId?: string) { const result = browser.run(work.id, 'user', candidateId); await vi.waitFor(() => expect(browser.activity(work.id, candidateId).running).toBe(false), { timeout: 120000 }); return store.records(work.id, 'browser-verification').find(row => row.id === result.id)!; }
 it('실제 업무·후보는 각각 새 사본·서버·data·증거와 새 빌드 attestation으로 통과한다', async () => {
   const first = await run(), second = await run(candidate.candidateId);
   expect({ status: first.status, error: first.error }).toEqual({ status: 'passed', error: undefined }); expect({ status: second.status, error: second.error }).toEqual({ status: 'passed', error: undefined });
   expect(first.targetKind).toBe('work'); expect(second).toMatchObject({ targetKind: 'integration-candidate', candidateId: candidate.candidateId }); expect(first.environmentId).not.toBe(second.environmentId); expect(first.environment.dataPath).not.toBe(second.environment.dataPath); expect(first.buildAttestation.buildId).not.toBe(second.buildAttestation.buildId);
   expect(first.environment.build.state).toBe('unprepared'); expect(second.buildAttestation.sourceRevision).toBe(second.environment.sourceRevision); expect(existsSync(first.evidencePath)).toBe(true); expect(existsSync(second.evidencePath)).toBe(true);
+  for (const row of [first, second]) {
+    expect(row).toMatchObject({ executionProtocol: 'browser-job-v2', processTerminated: true, workerClosed: true, terminationProof: { protocol: 'browser-job-v2', state: 'job-quiescent', activeProcesses: 0 } });
+    expect(row.terminationProof.workerPid).toBeGreaterThan(0); expect(row.terminationProof.guardPid).toBeGreaterThan(0);
+  }
+  const slot = JSON.parse((store.db.prepare("SELECT data FROM records WHERE id = 'browser-global-slot'").get() as any).data);
+  expect(slot).toMatchObject({ status: 'settled', runId: second.id, terminationProof: { runId: second.id } });
   for (const root of [work.projectPath, work.executionPath!, candidate.executionPath]) expect(existsSync(join(root, 'dist'))).toBe(false); expect(store.get(work.id)?.threadId).toBe('original-thread');
 });
 it('새 빌드 실패는 브라우저 입력 전 blocked이고 원본·업무 소스를 보존한다', async () => {
