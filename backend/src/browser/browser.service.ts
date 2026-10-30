@@ -101,7 +101,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     // borrow a polling scan which may have read the source before this request.
     const proof = await this.capturePassedProof(work.id); proof.assertUnchanged();
   }
-  run(id: string, owner: 'user' | 'tool' = 'user', candidateId?: string, binding?: BrowserExecutionContext) {
+  run(id: string, owner: 'user' | 'tool' = 'user', candidateId?: string, binding?: BrowserExecutionContext, httpRequestKey?: string) {
     const previousSlot = browserSlot(this.store); if (previousSlot && previousSlot.status !== 'settled') throw new ConflictException('다른 브라우저 검증이 진행 중이거나 실제 종료 확인이 필요합니다');
     desktopHealth(this.store).assertExecutionAllowed();
     const work = this.work(id);
@@ -114,8 +114,9 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const executionBinding = owner === 'user' ? this.executionBindings().select(id, candidateId) : binding ?? this.executionBindings().current(id);
     if ((executionBinding.candidateId ?? undefined) !== candidateId) throw new ConflictException('호스트가 승인한 검증 대상과 다릅니다');
     this.executionBindings().assertRun(executionBinding);
+    if (owner === 'user' && httpRequestKey) executionBinding.requestId = httpRequestKey;
     let scenario: Scenario; try { scenario = parseScenario(work.browserScenario); } catch { throw new BadRequestException('사용자가 브라우저 시나리오를 먼저 등록해야 합니다'); }
-    const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, executionBinding, ...(executionBinding.requestId ? { requestKey: executionBinding.requestId, mailboxRequestId: executionBinding.requestId } : {}), candidateId: candidateId ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
+    const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, executionBinding, ...(executionBinding.requestId ? { requestKey: executionBinding.requestId, ...(owner === 'tool' ? { mailboxRequestId: executionBinding.requestId } : {}) } : {}), candidateId: candidateId ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
     const lease = claimBrowser(this.store, row, () => { if (owner === 'user') { work.state = 'running'; work.phase = 'verification'; this.store.save(work); } });
     let resolveDone!: () => void;
     // Reserve synchronously, before any async copy. Cancellation works while preparing.

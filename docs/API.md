@@ -233,8 +233,8 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 이 항목은 현재 설치본에 반영됐다는 의미가 아니다. `GET /api/work/:id/browser`와 `GET /api/work/:id/integration/:candidateId/browser`는 대상별 최근10개 저장 결과와 live 정보만 읽고 `observation.state=not-checked`, 결과 `fresh=false/freshnessState=not-checked`를 반환한다. 현재 파일·Git·대상 기준의 재검사는 `?inspect=1`만 허용한다. 다른 query는400이다. 저장된 passed와 현재 유효 통과를 구분한다.
 
 - `PUT /api/work/:id/browser/scenario`: 기존 시나리오 JSON을 등록한다. 후보 화면은 이 업무 시나리오를 읽기만 한다.
-- `POST /api/work/:id/browser/run`: 빈 body 또는 `{}`. 서버의 업무를 사용자 소유로 실행한다.
-- `POST /api/work/:id/integration/:candidateId/browser/run`: 빈 body 또는 `{}`. route에 연결된 같은 업무의 후보를 사용자 소유로 실행한다. 경로·명령·추가 대상 body는400이며 AI 도구의 후보 선택 기능으로 사용하지 않는다.
+- `POST /api/work/:id/browser/run`: 빈 body/`{}`의 기존 호출 또는 `{requestKey:UUID}`. 서버의 업무를 사용자 소유로 실행한다.
+- `POST /api/work/:id/integration/:candidateId/browser/run`: 빈 body/`{}`의 기존 호출 또는 `{requestKey:UUID}`. route에 연결된 같은 업무의 후보를 사용자 소유로 실행한다. 경로·명령·추가 대상 body는400이며 AI 도구의 후보 선택 기능으로 사용하지 않는다.
 - `POST /api/work/:id/browser/cancel`: 기존 빈 body 또는 `{runId}`. 현재 Work 대상만 중단하며 후보 실행을 대신 중단하지 않는다.
 - `POST /api/work/:id/integration/:candidateId/browser/cancel`: `{runId}` 필수. 정확한 UUID 실행·후보·업무 및 호스트 executionBinding context를 확인한 뒤 소유 실행에 중단을 요청한다. 다른/새 실행과 대상 불일치는 `{requested:false}`이며 추가/잘못된 입력은400, 소유 컨텍스트 확인 불가는409다.
 
@@ -252,3 +252,6 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 목록 limit는1~50, 기본25이며 잘못된 query·번호는400, 다른 업무/없는 파일은404다. 파일 목록과 본문은 SQLite의 별도 열로 분리하고 공간이 사라져도 원본·업무 폴더를 다시 읽지 않는다. 전후 text는각200,000바이트 미만, 파일10,000개·합계128MiB·헤더64KiB·검증256개, 화면은각1MiB로 제한한다. 보존 한도 초과나 실패를 조용히 자르지 않고 완료 transaction을 되돌린다. 기존 소스 수집기의 전체 읽기 예산 보강은 별도 단계이며 이 API 한도만으로 소스 수집 전체가 bounded라는 보장은 하지 않는다.
 
 화면은 호스트 원본을 소유·바이트 확인 후 앱 DB로 복제한다. 현재 설정 retentionDays(기본14일) 경과는 eligibleForCleanup만 표시하며 자동 삭제나 만료 확정은 하지 않는다. 확인한 정리의 내부 만료 기록 뒤에만 state=expired·링크 없음·410을 제공한다. 자료 누락은 missing과 구분한다. 이 단계에는 사용자 삭제 API를 노출하지 않으며 확인 토큰과 공간 정리 UI는8.2~8.4 후속이다.
+브라우저 사용자 실행의 `requestKey`는 업무 안에서 유일하며 같은 키 재요청은 기존 `{id,status:"accepted",runStatus,requestKey,candidateId,targetKind}`를 반환한다. 다른 후보에 키를 재사용하면409다. accepted는 실행 수락 확인이며 검증 통과·종료를 뜻하지 않는다. UI는 같은 키/업무/대상의 사용자 실행 기록을 관측해 응답 유실을 복구하고 늦은 응답을 무시한다. 자동 재실행·새 키 재발행은 하지 않는다.
+
+`POST /api/work/:id/browser/reconcile` 및 `POST /api/work/:id/integration/:candidateId/browser/reconcile`는 정확한 `{runId:UUID,confirmed:true}`만 받는다. 같은 업무·대상 실행의 실제 종료 근거를 확인한 뒤 정리하며, 근거가 없으면409로 점유를 유지한다. 이미 종료 확인된 동일 실행의 재요청은 저장 결과만 반환하며 새 실행을 해제하지 않는다. PID·force·임의 경로는 받지 않는다.

@@ -9,7 +9,7 @@ import { BrowserService } from '../src/browser/browser.service';
 import { WorkStore } from '../src/work/store';
 let app: INestApplication, store: WorkStore, base: string;
 const saved = process.env.DATA_DIR, id = '11111111-1111-4111-8111-111111111111', other = '22222222-2222-4222-8222-222222222222', contextId = 'a'.repeat(64);
-const browser = { run: vi.fn(), cancel: vi.fn(), activity: vi.fn(), status: vi.fn(), store: undefined as unknown as WorkStore };
+const browser = { run: vi.fn(), cancel: vi.fn(), activity: vi.fn(), status: vi.fn(), reconcile: vi.fn(), store: undefined as unknown as WorkStore };
 @Module({ controllers: [BrowserController], providers: [{ provide: BrowserService, useValue: browser }] }) class Fixture {}
 beforeAll(async () => {
   process.env.DATA_DIR = join(mkdtempSync(join(tmpdir(), 'bhttp-')), 'data'); store = browser.store = new WorkStore();
@@ -18,7 +18,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await app?.close(); store?.onApplicationShutdown(); if (saved === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = saved; });
 beforeEach(() => {
-  vi.clearAllMocks(); browser.run.mockReturnValue({ id, status: 'running' }); browser.cancel.mockResolvedValue({ requested: true }); browser.status.mockResolvedValue({ results: [], running: false, busy: false });
+  vi.clearAllMocks(); browser.run.mockReturnValue({ id, status: 'running' }); browser.cancel.mockResolvedValue({ requested: true }); browser.reconcile.mockResolvedValue({ id, status: 'interrupted', cleanupStatus: 'confirmed', reconciliation: 'terminated', processTerminated: true }); browser.status.mockResolvedValue({ results: [], running: false, busy: false });
   browser.activity.mockReturnValue({ running: true, busy: true, live: { id, candidateId: 'c' } });
   store.record(id, 'a', 'browser-verification', { candidateId: 'c', executionBinding: { contextId }, status: 'running' });
 });
@@ -41,4 +41,16 @@ it('후보의 명시 inspect와 업무의 cheap 조회를 분리하고 임의 qu
   expect((await fetch(base + '/a/integration/c/browser?inspect=1')).status).toBe(200); expect(browser.status).toHaveBeenCalledWith('a', true, 'c');
   expect((await fetch(base + '/a/browser')).status).toBe(200); expect(browser.status).toHaveBeenCalledWith('a', false);
   expect((await fetch(base + '/a/integration/c/browser?target=other')).status).toBe(400);
+});
+it('같은 HTTP 요청 키의 응답 유실·재요청은 기존 실행만 반환하고 다른 후보로 키를 재사용하지 않는다', async () => {
+  browser.run.mockImplementation((workId:string,owner:string,candidateId:string,_binding:unknown,requestKey:string)=>{store.record(id,workId,'browser-verification',{owner,candidateId,requestKey,status:'running',executionBinding:{contextId}});return {id,status:'running'};});
+  const key='33333333-3333-4333-8333-333333333333';
+  const first=await post('/a/integration/c/browser/run',{requestKey:key});expect(first.status).toBe(200);expect(await first.json()).toMatchObject({id,requestKey:key,status:'accepted',runStatus:'running'});
+  expect(await(await post('/a/integration/c/browser/run',{requestKey:key})).json()).toMatchObject({id,requestKey:key,status:'accepted'});expect(browser.run).toHaveBeenCalledTimes(1);
+  expect((await post('/a/integration/other/browser/run',{requestKey:key})).status).toBe(409);expect(browser.run).toHaveBeenCalledTimes(1);
+});
+it('종료 재확인 HTTP는 명시한 같은 업무·후보 실행만 복구하고 임의 강제 해제를 받지 않는다', async () => {
+  expect((await post('/a/integration/c/browser/reconcile',{runId:id,confirmed:true})).status).toBe(200);expect(browser.reconcile).toHaveBeenCalledWith('a',id,true);browser.reconcile.mockClear();
+  expect((await post('/a/integration/other/browser/reconcile',{runId:id,confirmed:true})).status).toBe(409);
+  expect((await post('/a/integration/c/browser/reconcile',{runId:id,confirmed:false})).status).toBe(400);expect((await post('/a/integration/c/browser/reconcile',{runId:id,confirmed:true,force:true})).status).toBe(400);expect(browser.reconcile).not.toHaveBeenCalled();
 });

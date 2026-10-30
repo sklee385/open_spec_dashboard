@@ -9,6 +9,7 @@ import { WorkStore, type Work, type IntegrationRequest } from '../src/work/store
 import { LegacyService } from '../src/legacy/legacy.service';
 import { ProjectResolver } from '../src/projects/resolver';
 import { BrowserService } from '../src/browser/browser.service';
+import { runBrowserTarget } from '../src/browser/browser-controls';
 import { WorkspaceSettingsService } from '../src/work/workspace-settings.service';
 import { WorktreeManager } from '../src/work/worktree-manager';
 import { collectWorkspaceDocuments } from '../src/work/workspace-documents';
@@ -56,4 +57,18 @@ it('새 빌드 실패는 브라우저 입력 전 blocked이고 원본·업무 �
 it('시나리오 중 서버가 artifact를 바꾸면 passed 직전 실제bytes 재검사에서 blocked다', async () => {
   work.browserScenario = { ...(work.browserScenario as any), steps: [{ op: 'goto', path: '/change' }, { op: 'expectVisible', target: { role: 'heading', name: 'Fresh build' } }] }; store.save(work);
   const row = await run(); expect(row.status).toBe('blocked'); expect(row.steps).toHaveLength(2); expect(row.error).toContain('산출물'); expect(existsSync(join(work.executionPath!, 'dist'))).toBe(false);
+});
+
+it('사용자 요청 키는 실제 실패 시나리오와 화면·종료 근거를 보존하고 같은 요청을 재실행하지 않는다', async () => {
+  work.browserScenario = { ...(work.browserScenario as any), steps: [{ op: 'goto', path: '/' }, { op: 'expectText', target: { role: 'heading', name: 'Fresh build' }, value: '의도적 오답' }, { op: 'reload' }] }; store.save(work);
+  const requestKey = randomUUID();
+  const first = runBrowserTarget(browser, work.id, null, { requestKey });
+  expect(first).toMatchObject({ status: 'accepted', requestKey });
+  await vi.waitFor(() => expect(browser.activity(work.id).busy).toBe(false), { timeout: 120000 });
+  const row = store.records(work.id, 'browser-verification').find(row => row.id === first.id)!;
+  expect(row).toMatchObject({ status: 'failed', owner: 'user', requestKey, candidateId: null, processTerminated: true, workerClosed: true, terminationProof: { protocol: 'browser-job-v2', activeProcesses: 0 } });
+  expect(row.mailboxRequestId).toBeUndefined(); expect(row.steps).toHaveLength(2); expect(row.image).toMatch(/^data:image\/jpeg;base64,/); expect(existsSync(row.evidencePath)).toBe(true);
+  const second = runBrowserTarget(browser, work.id, null, { requestKey });
+  expect(second).toMatchObject({ id: first.id, status: 'accepted', runStatus: 'failed' });
+  expect(store.records(work.id, 'browser-verification')).toHaveLength(1); expect(browser.activity(work.id).busy).toBe(false);
 });

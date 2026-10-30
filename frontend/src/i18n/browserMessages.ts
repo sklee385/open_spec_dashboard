@@ -1,4 +1,5 @@
 export const koBrowserCopy = {
+  'browser.reconcile': '실행 종료 재확인', 'browser.reconcileHint': '실제 종료 근거를 확인한 실행만 정리합니다. 확인되지 않으면 잠금을 유지합니다.',
   'browser.inspect': '검증 결과 최신성 확인', 'browser.notChecked': '최신성 미확인', 'browser.fresh': '현재 기준과 일치', 'browser.target': '검증 대상', 'browser.work': '업무', 'browser.candidate': '통합 후보', 'browser.environment': '실행 환경', 'browser.build': '확인된 빌드', 'browser.executedCommit': '실행 당시 커밋',
   'browser.candidateTitle': '후보 브라우저 검증', 'browser.candidateRun': '후보 시나리오 실행', 'browser.candidateCancel': '후보 브라우저 검증 중단', 'browser.candidateScenario': '업무에 등록한 시나리오로 선택한 후보를 검증합니다. 시나리오는 업무 화면에서 변경합니다.',
   'browser.title': '백그라운드 브라우저 검증', 'browser.hint': 'PC 입력을 점유하지 않고 전용 브라우저에서 실행합니다. 테스트 데이터만 사용하는 로컬 서버를 등록해 주세요.',
@@ -8,6 +9,7 @@ export const koBrowserCopy = {
   'browser.image': '검증 화면', 'browser.unsaved': '수정한 시나리오를 먼저 저장해 주세요.', 'browser.evidence': '단계별 결과와 화면',
 };
 export const enBrowserCopy: Record<keyof typeof koBrowserCopy, string> = {
+  'browser.reconcile': 'Recheck execution termination', 'browser.reconcileHint': 'Only executions with verified termination evidence are released. Unconfirmed executions remain locked.',
   'browser.inspect': 'Check result freshness', 'browser.notChecked': 'Freshness not checked', 'browser.fresh': 'Matches current inputs', 'browser.target': 'Verification target', 'browser.work': 'Work', 'browser.candidate': 'Integration candidate', 'browser.environment': 'Execution environment', 'browser.build': 'Attested build', 'browser.executedCommit': 'Executed commit',
   'browser.candidateTitle': 'Candidate browser verification', 'browser.candidateRun': 'Run candidate scenario', 'browser.candidateCancel': 'Stop candidate verification', 'browser.candidateScenario': 'Verifies this candidate with the work scenario. Edit the scenario in the work panel.',
   'browser.title': 'Background browser verification', 'browser.hint': 'Runs in a dedicated browser without taking over your desktop. Register a local server that uses test data only.',

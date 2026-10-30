@@ -33,3 +33,14 @@ it('restores a remounted uncertain view after the same attempt already finished 
   const observed = await observeExactMutation('remounted', initial, { workId: 'w', candidateId: 'c', requestKey: 'key', expectedVersion: 'version', status: 'applied', processTerminated: true }, 'settled');
   expect(observed).toMatchObject({ state: 'completed' });
 });
+it('브라우저 수락은 같은 업무·후보·사용자 요청만 확인하며 검증 통과나 종료로 바꾸지 않는다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ status: 'running' }) })));
+  await exactMutation('browser-accept', '/api/work/w/integration/c/browser/run', { requestKey: 'key' });
+  const saved = readExactMutation('browser-accept')!;
+  const row = { workId: 'w', candidateId: 'c', id: 'run', owner: 'user', requestKey: 'key', status: 'running', processTerminated: false };
+  for (const change of [{ workId: 'other' }, { candidateId: null }, { owner: 'tool' }, { requestKey: 'other' }, { status: 'unknown' }]) {
+    expect(await observeExactMutation('browser-accept', saved, { ...row, ...change })).toBeNull();
+    expect(readExactMutation('browser-accept')).toEqual(saved);
+  }
+  expect(await observeExactMutation('browser-accept', saved, row)).toMatchObject({ state: 'completed', response: { observed: true, receipt: { status: 'running', processTerminated: false } } });
+});
