@@ -4,7 +4,8 @@ const { randomUUID } = require('node:crypto');
 const op = process.argv[2];
 if (process.argv.length !== 3 || !['run', 'status', 'cancel'].includes(op)) { console.error('사용법: node cli.cjs run|status|cancel'); process.exit(1); }
 const id = randomUUID(), request = path.join(__dirname, 'requests', `${id}.json`), response = path.join(__dirname, 'results', `${id}.json`);
-fs.writeFileSync(request + '.tmp', JSON.stringify({ id, op }), { flag: 'wx' }); fs.renameSync(request + '.tmp', request);
+let contextId; try { const context = JSON.parse(fs.readFileSync(path.join(__dirname, 'context.json'), 'utf8')); if (typeof context.contextId === 'string' && /^[a-f0-9]{64}$/.test(context.contextId)) contextId = context.contextId; } catch {}
+fs.writeFileSync(request + '.tmp', JSON.stringify({ id, op, ...(contextId ? { contextId } : {}) }), { flag: 'wx' }); fs.renameSync(request + '.tmp', request);
 const deadline = Date.now() + (op === 'run' ? 140000 : 15000);
 const timer = setInterval(() => {
   if (fs.existsSync(response)) {

@@ -11,6 +11,7 @@ import { LegacyService } from '../legacy/legacy.service';
 import { inspectWorkspacePath } from '../work/workspace-paths';
 import { VerificationEnvironments } from './verification-environment';
 import { BrowserFreshness, browserDigest, browserEvidenceValid } from './browser-freshness';
+import { BrowserExecutionContexts, type BrowserExecutionContext } from './browser-execution-context';
 import { FileResults } from '../work/file-results';
 import { projectCoordinator } from '../projects/coordinator';
 import { unresolvedQuestion } from '../codex/questions';
@@ -35,10 +36,11 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
   private contexts = new Map<string, (id: string) => unknown>();
   private environments?: VerificationEnvironments;
   private ownedLegacy?: LegacyService;
+  private bindings?: BrowserExecutionContexts;
   constructor(@Inject(WorkStore) readonly store: WorkStore, @Optional() @Inject(ProjectResolver) private resolver?: ProjectResolver) {
     this.snapshots = new VerificationSnapshots(store);
     desktopHealth(store).register('browser', work => this.active?.workId === work.id ? 'active' : store.records(work.id, 'browser-verification').some(row => row.cleanupStatus === 'uncertain') ? 'unknown' : undefined);
-    this.mailbox = new BrowserMailbox(store, (id, input) => this.tool(id, input));
+    this.mailbox = new BrowserMailbox(store, (id, input, context) => this.tool(id, input, context), { resolver: () => this.targetResolver(), contexts: () => this.executionBindings() });
     for (const work of store.list().filter(work => !['completed', 'archived'].includes(work.phase))) for (const row of store.records(work.id, 'browser-verification').filter(row => row.status === 'running')) {
       store.record(row.id, work.id, 'browser-verification', { ...row, status: 'interrupted', snapshotStatus: row.snapshotRoot ? 'retained' : row.snapshotStatus, error: '서버 재시작으로 검증 결과를 확인할 수 없습니다' });
       if (work.state === 'running' && row.owner === 'user') { work.state = 'interrupted'; store.save(work); }
@@ -49,6 +51,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
   private work(id: string) { const work = this.store.get(id); if (!work) throw new NotFoundException('업무를 찾을 수 없습니다'); return work; }
   private targetResolver() { return this.resolver ??= new ProjectResolver(this.ownedLegacy ??= new LegacyService(), this.store); }
   private targetEnvironments() { return this.environments ??= new VerificationEnvironments(this.store, this.targetResolver()); }
+  private executionBindings() { return this.bindings ??= new BrowserExecutionContexts(this.store, this.targetResolver(), work => this.context(work).executionContext); }
   private context(work: Work) { return { scenarioVersion: digest(work.browserScenario), sourceMutationVersion: work.sourceMutationVersion ?? null, threadId: work.threadId, turnId: work.turnId ?? null, executionContext: digest([...this.contexts].map(([name, provider]) => [name, provider(work.id)])) }; }
   async identity(work: Work) {
     const { environment } = await this.targetEnvironments().capture({ sourceId: work.sourceId, workId: work.id });
@@ -86,7 +89,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (!['implementation', 'verification'].includes(work.phase) || !['idle', 'failed', 'interrupted'].includes(work.state) || this.active || this.closing) throw new ConflictException('실행을 마친 구현·검증 업무에서 시나리오를 등록해 주세요');
     this.targetResolver().resolve(work.sourceId, work.id); projectCoordinator(this.store).assertWorkCanStart(work);
     try { work.browserScenario = parseScenario(input); } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : '잘못된 시나리오입니다'); }
-    this.mailbox.prepare(work); this.store.save(work); this.store.event(id, 'browser-plan-saved', {}); return this.status(id);
+    this.store.save(work); this.mailbox.prepare(work); this.store.event(id, 'browser-plan-saved', {}); return this.status(id);
   }
   async assertPassed(work: Work) {
     if (!work.browserScenario) return;
@@ -94,7 +97,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     // borrow a polling scan which may have read the source before this request.
     const proof = await this.capturePassedProof(work.id); proof.assertUnchanged();
   }
-  run(id: string, owner: 'user' | 'tool' = 'user', candidateId?: string) {
+  run(id: string, owner: 'user' | 'tool' = 'user', candidateId?: string, binding?: BrowserExecutionContext) {
     desktopHealth(this.store).assertExecutionAllowed();
     const work = this.work(id);
     if (this.active || this.closing) throw new ConflictException('다른 브라우저 검증이 진행 중이거나 종료 중입니다');
@@ -104,8 +107,11 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     projectCoordinator(this.store).assertActivityCanStart(work);
     new FileResults(this.store).assertSourcePlan(work);
     const selected = this.targetResolver().resolve(work.sourceId, work.id, candidateId), root = selected.root;
+    const executionBinding = owner === 'user' ? this.executionBindings().select(id, candidateId) : binding ?? this.executionBindings().current(id);
+    if ((executionBinding.candidateId ?? undefined) !== candidateId) throw new ConflictException('호스트가 승인한 검증 대상과 다릅니다');
+    this.executionBindings().assertRun(executionBinding);
     let scenario: Scenario; try { scenario = parseScenario(work.browserScenario); } catch { throw new BadRequestException('사용자가 브라우저 시나리오를 먼저 등록해야 합니다'); }
-    const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, candidateId: candidateId ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
+    const row: any = { id: randomUUID(), ...this.context(work), workId: id, owner, executionBinding, ...(executionBinding.requestId ? { requestKey: executionBinding.requestId, mailboxRequestId: executionBinding.requestId } : {}), candidateId: candidateId ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', snapshotStatus: 'preparing', status: 'running', steps: [], createdAt: new Date().toISOString() };
     let resolveDone!: () => void;
     // Reserve synchronously, before any async copy. Cancellation works while preparing.
     const active: Active = this.active = { workId: id, row, candidateId, cancelled: false, abort: new AbortController(), done: new Promise<void>(resolve => { resolveDone = resolve; }) };
@@ -144,6 +150,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         final.freshnessEvidence = { version: 1, runId: row.id, environmentId: row.environmentId, rawSourceRevision: row.environment.sourceRevision, executedCommit: row.environment.commit, buildId: result!.buildAttestation!.buildId, basis: initialBasis.basis, semanticVersion: initialBasis.version };
         if (!browserEvidenceValid(final)) throw new Error('실제 빌드·환경 근거의 연결을 확인할 수 없습니다');
       } catch (error: any) { final.status = 'stale'; final.error = error.message; delete final.freshnessEvidence; }
+      if (!active.cancelled && !this.executionBindings().isCurrent(executionBinding)) { final.status = 'stale'; final.error = '검증 대상 또는 대화 실행 컨텍스트가 변경됐습니다'; delete final.freshnessEvidence; }
       if (active.cancelled) { final.status = 'interrupted'; delete final.freshnessEvidence; }
       this.store.record(row.id, id, 'browser-verification', final);
       if (owner === 'user') { const latest = this.work(id); if (latest.state === 'running' && latest.threadId === row.threadId && (latest.turnId ?? null) === row.turnId && this.context(latest).executionContext === row.executionContext) { latest.state = active.cancelled ? 'interrupted' : 'idle'; this.store.save(latest); } }
@@ -154,6 +161,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     const timer = setTimeout(() => { active.cancelled = true; void stop(); }, 130000);
     void (async () => {
       try {
+        this.executionBindings().assertRun(executionBinding);
         environmentProof = await this.targetEnvironments().capture({ sourceId: work.sourceId, workId: id, ...(candidateId ? { candidateId } : {}) });
         const environment = environmentProof.environment;
         initialBasis = await new BrowserFreshness(this.store, this.targetResolver()).capture(id, candidateId);
@@ -163,6 +171,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         this.store.record(row.id, id, 'browser-verification', row);
         active.abort.signal.throwIfAborted();
         if (Object.keys(this.context(this.work(id))).some(key => (this.context(this.work(id)) as any)[key] !== row[key])) throw new ConflictException('사본 준비 중 검증 실행 컨텍스트가 변경됐습니다');
+        this.executionBindings().assertRun(executionBinding);
         const source = existsSync(join(__dirname, 'browser-worker.js')) ? join(__dirname, 'browser-worker.js') : join(__dirname, 'browser-worker.ts');
         const env: NodeJS.ProcessEnv = { OPENSPEC_BROWSER_DIRECTORY: browserDirectory(), OPENSPEC_VERIFICATION_DATA_ROOT: resolve(process.env.DATA_DIR || '../.data') };
         for (const key of ['SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'COMSPEC', 'TEMP', 'TMP', 'PATHEXT', 'PATH', 'Path']) if (process.env[key]) env[key] = process.env[key];
@@ -177,6 +186,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         child.stdout?.resume(); child.stderr?.resume();
         await guard;
         active.abort.signal.throwIfAborted();
+        this.executionBindings().assertRun(executionBinding);
         child.send({ scenario, root: snapshot.root, snapshot, environment }, error => { if (error) void stop(); });
       } catch (error) {
         row.error = error instanceof Error ? error.message : '검증 사본 준비에 실패했습니다';
@@ -186,20 +196,55 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     })();
     return { id: row.id, status: 'running' };
   }
-  async cancel(id: string) {
+  async cancel(id: string, expected?: { contextId: string; runId?: string; candidateId: string | null }) {
     this.work(id); const active = this.active;
     if (!active || active.workId !== id) return { requested: false };
+    if (expected && (active.row.executionBinding?.contextId !== expected.contextId || (active.candidateId ?? null) !== expected.candidateId || expected.runId && active.row.id !== expected.runId)) return { requested: false };
     active.cancelled = true; active.abort.abort();
     if (active.child?.connected) active.child.send({ cancel: true }, () => {});
     const timer = setTimeout(() => { if (active.child) void stopOwnedProcess(active.child).catch(() => {}); }, 5000);
     await active.done; clearTimeout(timer); return { requested: true };
   }
-  async tool(id: string, input: any) {
+  private receipt(id: string, runId: string) {
+    const row = this.store.db.prepare("SELECT id,data FROM records WHERE id=? AND work_id=? AND kind='browser-verification'").get(runId, id) as { id: string; data: string } | undefined;
+    return row ? { ...JSON.parse(row.data), id: row.id, workId: id } : undefined;
+  }
+  private async completedRun(id: string, runId: string) {
+    // Capture this promise before any await; never follow a later global active run.
+    const done = this.active?.workId === id && this.active.row.id === runId ? this.active.done : undefined;
+    if (done) await done;
+    return this.receipt(id, runId);
+  }
+  private boundResult(context: BrowserExecutionContext, runId?: string) {
+    const matches = (row: any) => row && (row.candidateId ?? null) === context.candidateId && (row.executionBinding ? row.executionBinding.contextId === context.contextId : row.threadId === context.threadId && (row.turnId ?? null) === context.turnId && row.scenarioVersion === context.scenarioVersion);
+    if (runId) { const row = this.receipt(context.workId, runId); return matches(row) ? row : undefined; }
+    return this.rows(context.workId, context.candidateId ?? undefined).filter(matches).at(-1);
+  }
+  async tool(id: string, input: any, bound?: BrowserExecutionContext) {
     if (!input || !['run', 'status', 'cancel'].includes(input.op) || Object.keys(input).some(key => key !== 'op')) throw new BadRequestException('등록 시나리오의 run/status/cancel만 사용할 수 있습니다');
-    if (input.op === 'run') { this.run(id, 'tool'); await this.active?.done; }
-    if (input.op === 'cancel') { await this.cancel(id); return { ...this.activity(id), scenarioName: (this.work(id).browserScenario as Scenario | undefined)?.name, result: { ...this.store.records(id, 'browser-verification').at(-1), fresh: false } }; }
-    const status = await this.status(id);
-    return { running: status.running, scenarioName: (status.scenario as Scenario | null)?.name, result: status.results.at(-1) ?? null };
+    const context = bound ? { ...this.executionBindings().load(id, bound.contextId), ...(bound.requestId ? { requestId: bound.requestId } : {}) } : this.executionBindings().current(id);
+    let runId: string | undefined, requested: boolean | undefined;
+    if (input.op === 'run') {
+      this.executionBindings().assertRun(context);
+      const started = this.run(id, 'tool', context.candidateId ?? undefined, context), startedId = started.id;
+      if (typeof startedId !== 'string' || !startedId) throw new ConflictException('시작한 브라우저 실행 ID를 확인할 수 없습니다');
+      runId = startedId; await this.completedRun(id, startedId);
+    }
+    if (input.op === 'cancel') {
+      const active = this.active;
+      if (active?.workId === id && active.row.executionBinding?.contextId === context.contextId) runId = active.row.id;
+      requested = (await this.cancel(id, { contextId: context.contextId, candidateId: context.candidateId, ...(runId ? { runId } : {}) })).requested;
+    }
+    const row = this.boundResult(context, runId); let fresh = false, reason: string | undefined;
+    if (input.op === 'run' && !row) throw new ConflictException('시작한 브라우저 실행의 정확한 영수증을 확인하지 못했습니다. 자동 반복하지 않습니다');
+    let contextChanged = !this.executionBindings().isCurrent(context);
+    if (row?.status === 'passed' && !contextChanged && input.op !== 'cancel') try {
+      const proof = await this.capturePassedProof(id, context.candidateId ?? undefined); proof.assertUnchanged(); fresh = proof.row.id === row.id;
+    } catch (error: any) { reason = error.message; }
+    contextChanged ||= !this.executionBindings().isCurrent(context);
+    if (contextChanged) fresh = false;
+    const result = row ? { ...row, fresh, freshnessState: fresh ? 'fresh' : input.op === 'cancel' ? 'not-checked' : 'stale', ...(reason ? { freshnessReason: reason } : {}) } : null;
+    return { ...this.activity(id, context.candidateId ?? undefined), contextId: context.contextId, contextChanged, targetKind: context.targetKind, candidateId: context.candidateId, ...(requested === undefined ? {} : { requested }), runId: result?.id ?? null, scenarioName: (this.work(id).browserScenario as Scenario | undefined)?.name, success: !contextChanged && !(input.op === 'run' && result?.status === 'running') && !(result?.status === 'passed' && !fresh) && !['failed', 'blocked', 'interrupted', 'stale'].includes(result?.status), result };
   }
   async onModuleDestroy() { this.closing = true; this.mailbox.close(); if (this.active) await this.cancel(this.active.workId); await this.ownedLegacy?.onModuleDestroy(); }
 }

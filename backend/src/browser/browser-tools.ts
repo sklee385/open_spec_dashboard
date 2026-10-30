@@ -5,7 +5,7 @@ export const backgroundBrowserTool = {
 };
 export function backgroundToolResponse(value: any) {
   const { image, ...result } = value.result || {};
-  return { success: !['failed', 'blocked', 'interrupted', 'stale'].includes(result.status), contentItems: [
+  return { success: value.success !== false && value.contextChanged !== true && !['failed', 'blocked', 'interrupted', 'stale'].includes(result.status), contentItems: [
     { type: 'inputText', text: JSON.stringify({ ...value, result }) },
     ...(image ? [{ type: 'inputImage', imageUrl: image }] : []),
   ] };
