@@ -8,9 +8,10 @@ import { draftStorage } from '../lib/draftStorage';
 import { projectDraftKey, readDocumentDraft } from '../hooks/useLocalDraft';
 import type { CandidateApplyStatus, CandidateRun, CandidateVerification, IntegrationRequest } from '../types/workspaceFlow';
 import { MutationStatus } from './WorkspaceFlowShared';
-type Props = { workId: string; candidate: IntegrationRequest; active?: boolean; workDirty?: boolean; sourceId?: string; onChanged?: () => void };
+import { BrowserVerification } from './BrowserVerification';
+type Props = { phase?: string; state?: string; workId: string; candidate: IntegrationRequest; active?: boolean; workDirty?: boolean; sourceId?: string; onChanged?: () => void };
 export function CandidateLifecycle(props: Props) { return <LifecycleContent key={JSON.stringify([props.workId, props.candidate.candidateId, props.candidate.candidateCommit ?? null, props.candidate.candidateMutationVersion ?? null])} {...props} />; }
-function LifecycleContent({ workId, candidate, active = true, workDirty = false, sourceId, onChanged }: Props) {
+function LifecycleContent({ workId, candidate, phase = 'verification', state = 'idle', active = true, workDirty = false, sourceId, onChanged }: Props) {
   const { t } = useI18n(), cid = candidate.candidateId, base = `/api/work/${encodeURIComponent(workId)}/integration/${encodeURIComponent(cid)}`, scope = `${workId}:${cid}`;
   const [status, setStatus] = useState<CandidateApplyStatus | null>(null), [verification, setVerification] = useState<CandidateVerification | null>(null), [expectedVersion, setExpectedVersion] = useState('');
   const [confirmRun, setConfirmRun] = useState(false), [confirmApply, setConfirmApply] = useState(false), [confirmCancel, setConfirmCancel] = useState(false), [loading, setLoading] = useState(false);
@@ -72,6 +73,7 @@ function LifecycleContent({ workId, candidate, active = true, workDirty = false,
     <button disabled={loading} onClick={() => void inspectVerification()}>{t('life.verifyInspect')}</button>
     {verification && <><p>{t(verification.cliPassed ? 'life.cliPassed' : 'life.cliMissing')}</p>{verification.browserRequired && <p>{t('life.browserRequired')}</p>}<p>{t(verification.ready ? 'life.ready' : 'life.notReady')}</p>{verification.error && <p role="status">{verification.error}</p>}
       <ul>{verification.commands?.map(command => <li key={command.id}>{command.id}: <code>{command.command}</code><ol>{command.args.map((arg, index) => <li key={index}>{arg}</li>)}</ol></li>)}</ul></>}
+    {candidate.candidateCommit && <BrowserVerification workId={workId} candidateId={cid} phase={phase} state={state} active={active} canRun={!workDirty && ['validating', 'ready'].includes(candidate.status)} beforeRun={guarded} revision={candidate.candidateMutationVersion ?? candidate.candidateCommit} />}
     <label><input type="checkbox" checked={confirmRun} disabled={busy || workDirty || running} onChange={event => setConfirmRun(event.target.checked)} />{t('life.confirmRun')}</label>
     <button disabled={busy || workDirty || !confirmRun || !verification?.candidateVersion || running || applied || cancelled || unknown || run.receipt?.state === 'uncertain'} onClick={() => { if (guarded()) void run.run(`${base}/verification/run`, { requestKey: crypto.randomUUID(), confirmed: true, candidateVersion: verification!.candidateVersion }).then(ok => { if (ok) { setConfirmRun(false); void inspectVerification(); } }); }}>{t('life.run')}</button>
     <MutationStatus {...run} retry={() => { if (guarded()) void run.run().then(ok => { if (ok) void inspectVerification(); }); }} />

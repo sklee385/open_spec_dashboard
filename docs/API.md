@@ -227,3 +227,15 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 - `POST /api/work/:id/integration/:candidateId/cancel`: 정확히 `{confirmed:true}`를 받는다. 후보를 논리 취소하고 파일·커밋·대화·검증 기록은 보존한다. 실행·질문·준비 작업·종료 불명 점유가 있으면 거부한다. 이미 취소한 후보는 같은 결과를 반환하고, 이미 반영한 후보는 `{cancelled:false, alreadyApplied:true, appliedCommit}`으로 반환한다. 역병합·공간 삭제를 수행하지 않는다.
 
 `reconcile`은 종료가 확인되고 원본이 저장된 후보 커밋과 정확히 일치할 때 과거 반영을 확정한다. 그 뒤 생긴 업무/후보의 새 파일 편집은 복원하지 않으며 `observation.sideChanged:true`로 구분한다. 이는 새 편집의 검증 통과나 업무 완료가 아니다. 일반 새 반영은 기존 기준과 파일 보존 검사를 계속 요구하며, 원본이 dirty이거나 알 수 없는 상태이면 불명 기록을 유지한다. 저장된 PID·구형 종료 표시·시간 경과만으로 점유를 해제하거나 프로세스를 채택·종료하지 않는다.
+
+## 업무·후보 브라우저 검증 (개발 브랜치)
+
+이 항목은 현재 설치본에 반영됐다는 의미가 아니다. `GET /api/work/:id/browser`와 `GET /api/work/:id/integration/:candidateId/browser`는 대상별 최근10개 저장 결과와 live 정보만 읽고 `observation.state=not-checked`, 결과 `fresh=false/freshnessState=not-checked`를 반환한다. 현재 파일·Git·대상 기준의 재검사는 `?inspect=1`만 허용한다. 다른 query는400이다. 저장된 passed와 현재 유효 통과를 구분한다.
+
+- `PUT /api/work/:id/browser/scenario`: 기존 시나리오 JSON을 등록한다. 후보 화면은 이 업무 시나리오를 읽기만 한다.
+- `POST /api/work/:id/browser/run`: 빈 body 또는 `{}`. 서버의 업무를 사용자 소유로 실행한다.
+- `POST /api/work/:id/integration/:candidateId/browser/run`: 빈 body 또는 `{}`. route에 연결된 같은 업무의 후보를 사용자 소유로 실행한다. 경로·명령·추가 대상 body는400이며 AI 도구의 후보 선택 기능으로 사용하지 않는다.
+- `POST /api/work/:id/browser/cancel`: 기존 빈 body 또는 `{runId}`. 현재 Work 대상만 중단하며 후보 실행을 대신 중단하지 않는다.
+- `POST /api/work/:id/integration/:candidateId/browser/cancel`: `{runId}` 필수. 정확한 UUID 실행·후보·업무 및 호스트 executionBinding context를 확인한 뒤 소유 실행에 중단을 요청한다. 다른/새 실행과 대상 불일치는 `{requested:false}`이며 추가/잘못된 입력은400, 소유 컨텍스트 확인 불가는409다.
+
+결과는 targetKind/candidateId, environmentId, environment의 실행 당시 commit, 실제 buildAttestation.buildId와 원시 실행 근거를 보존한다. environment.build의 준비 전 이력을 현재 빌드 성공으로 해석하지 않는다. 화면은 not-checked·stale·blocked·interrupted를 구분하고 후보 실행 전에 저장되지 않은 문서/소스 보호를 확인한다. 과거 applied/cancelled 후보는 이력 조회만 제공한다. 반영·완료·보관은 이 API로 자동 실행하지 않는다.

@@ -393,7 +393,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     {room?.error && !needsRecovery && <div className="work-error">{room.error}</div>}
     {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
     {room && <WorkspacePreparation key={`workspace-preparation:${room.id}`} workId={room.id} reviewedVersion={room.reviewedVersion} onStatus={status => setGitManaged(status.experimentalEnabled && status.kind === 'git-worktree')} />}
-    {room && gitManaged && <WorkIntegration key={`integration:${room.id}`} workId={room.id} sourceId={change.sourceId} workDirty={dirty} active={active} onAppliedChange={setGitApplied} onOpenCandidate={(candidateId, executionPath) => onOpenSource?.({ id: room.id, candidateId, executionPath })} />}
+    {room && gitManaged && <WorkIntegration key={`integration:${room.id}`} workId={room.id} phase={room.phase} state={room.state} sourceId={change.sourceId} workDirty={dirty} active={active} onAppliedChange={setGitApplied} onOpenCandidate={(candidateId, executionPath) => onOpenSource?.({ id: room.id, candidateId, executionPath })} />}
     {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}
     {needsRecovery && room && <WorkRecovery status={room.recovery || { required: true, canReconnect: !!room.threadId, code: room.errorCode || 'connection-failed' }} busy={busy} error={room.error || error || loadError} onRecover={() => void recover()} />}
     {nativeResume && room?.threadId && (room.errorCode === 'thread-in-use' || room.sessionRecovery) && <SessionRecovery key={`${room.id}:${room.threadId}:${room.errorCode || ''}`} workId={room.id} threadId={room.threadId} recovery={room.sessionRecovery} conflicted={room.errorCode === 'thread-in-use'} busy={busy}
@@ -417,7 +417,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       {room?.phase === 'completed' && <><button onClick={() => action('reopen')}>{t('workRoom.reopen')}</button><button onClick={() => action('archive')}>{t('workRoom.archive')}</button></>}
     </nav>
     <nav className="work-mobile-tabs" aria-label={t('workRoom.mobile')}><button aria-pressed={pane === 'chat'} onClick={() => setPane('chat')}>{t('workRoom.chatTab')}</button><button aria-pressed={pane === 'output'} onClick={() => setPane('output')}>{t('workRoom.outputTab')}</button></nav>
-    {room && <BrowserVerification key={room.id} workId={room.id} phase={room.phase} state={room.state} revision={room.updatedAt} />}
+    {room && <BrowserVerification key={room.id} workId={room.id} phase={room.phase} state={room.state} active={active} revision={room.updatedAt} />}
     <div className={`work-layout pane-${pane}`}>
       <section className="work-chat"><h2>{t('workRoom.questions')}</h2><p className="work-hint">{t('workRoom.questionsHint')}</p>
         {attentionTarget && readyTarget === attentionTarget.token && room?.id === attentionTarget.workId && room.questions.find(q => q.id === attentionTarget.questionId)?.status !== 'pending' && <p ref={attentionNotice} tabIndex={-1} className="work-notice" role="status">{t('attention.stale')}</p>}

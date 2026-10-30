@@ -40,3 +40,22 @@ it('브라우저 실행 POST가 대기해도 결과 조회는 계속 사용할 �
   const refresh = screen.getByRole('button', { name: '결과 새로고침' }); expect(refresh).toBeEnabled(); const previous = fetcher.mock.calls.length; fireEvent.click(refresh); await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThan(previous));
   await act(async () => { reply({ ok: true, json: async () => ({ id: 'run', status: 'running' }) }); });
 });
+it('후보 화면은 업무 시나리오를 읽기만 하고 같은 후보 실행과 정확한 runId 중단만 요청한다', async () => {
+  let running = false;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') { running = url.endsWith('/run'); return { ok: true, json: async () => ({ id: 'candidate-run', requested: true }) }; }
+    return { ok: true, json: async () => ({ scenario: { name: '등록됨' }, running, busy: running, live: running ? { id: 'candidate-run', candidateId: 'c' } : null, results: [] }) };
+  });
+  vi.stubGlobal('fetch', fetcher); render(<BrowserVerification workId="candidate-work" candidateId="c" phase="verification" state="idle" />); fireEvent.click(screen.getByText('후보 브라우저 검증')); await screen.findByText('아직 실행하지 않았습니다');
+  expect(screen.queryByRole('textbox')).toBeNull(); expect(screen.queryByRole('button', { name: '시나리오 저장' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '후보 시나리오 실행' })); await screen.findByRole('button', { name: '후보 브라우저 검증 중단' });
+  fireEvent.click(screen.getByRole('button', { name: '후보 브라우저 검증 중단' }));
+  await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url === '/api/work/candidate-work/integration/c/browser/cancel' && init?.body === JSON.stringify({ runId: 'candidate-run' }))).toBe(true));
+  expect(fetcher.mock.calls.every(([url]) => url.startsWith('/api/work/candidate-work/integration/c/browser'))).toBe(true);
+});
+it('후보 브라우저 실행은 저장되지 않은 편집 보호와 읽기 전용 이력을 우회하지 않는다', async () => {
+  const fetcher = vi.fn(async () => ({ ok: true, json: async () => ({ scenario: { name: '등록됨' }, running: false, busy: false, results: [] }) }));
+  vi.stubGlobal('fetch', fetcher); const view = render(<BrowserVerification workId="w" candidateId="c" phase="verification" state="idle" beforeRun={() => false} />); fireEvent.click(screen.getByText('후보 브라우저 검증')); await screen.findByText('아직 실행하지 않았습니다');
+  fireEvent.click(screen.getByRole('button', { name: '후보 시나리오 실행' })); expect(fetcher.mock.calls).toHaveLength(1);
+  view.rerender(<BrowserVerification workId="w" candidateId="c" phase="verification" state="idle" canRun={false} />); expect(screen.getByRole('button', { name: '후보 시나리오 실행' })).toBeDisabled();
+});
