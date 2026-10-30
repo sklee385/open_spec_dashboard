@@ -7,6 +7,7 @@ import { ProjectResolver } from './projects/resolver';
 import { LegacyController } from './legacy/legacy.controller';
 import { LegacyService } from './legacy/legacy.service';
 import { WorkController } from './work/work.controller';
+import { CompletedResultsController } from './work/completed-results.controller';
 import { WorkService } from './work/work.service';
 import { WorkStore } from './work/store';
 import { CodexService } from './codex/codex.service';
@@ -42,7 +43,7 @@ class HealthController {
   @Get('health') health() { return 'ok'; }
 }
 
-@Module({ controllers: [HealthController, LegacyController, WorkController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService, IntegrationEditing, IntegrationVerification, IntegrationApplyPreflight, IntegrationApply, IntegrationApplyRecovery] })
+@Module({ controllers: [HealthController, LegacyController, WorkController, CompletedResultsController, AiToolsController, DesktopController, NotificationsController, ProjectController, EdgeController, BrowserController, RemoteController, WorkspaceSettingsController, WorkspacesController, IntegrationController], providers: [LegacyService, WorkService, WorkStore, CodexService, OpenSpecService, ExecutionService, ReviewService, AiToolConfigService, AiToolService, ExternalCliAdapter, DesktopLifecycle, WindowsNotifications, NativeNotifications, ProjectResolver, EdgeService, BrowserService, RemoteService, WorkspaceSettingsService, IntegrationService, IntegrationEditing, IntegrationVerification, IntegrationApplyPreflight, IntegrationApply, IntegrationApplyRecovery] })
 class AppModule {}
 
 export async function createApplication() {

@@ -239,3 +239,16 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 - `POST /api/work/:id/integration/:candidateId/browser/cancel`: `{runId}` 필수. 정확한 UUID 실행·후보·업무 및 호스트 executionBinding context를 확인한 뒤 소유 실행에 중단을 요청한다. 다른/새 실행과 대상 불일치는 `{requested:false}`이며 추가/잘못된 입력은400, 소유 컨텍스트 확인 불가는409다.
 
 결과는 targetKind/candidateId, environmentId, environment의 실행 당시 commit, 실제 buildAttestation.buildId와 원시 실행 근거를 보존한다. environment.build의 준비 전 이력을 현재 빌드 성공으로 해석하지 않는다. 화면은 not-checked·stale·blocked·interrupted를 구분하고 후보 실행 전에 저장되지 않은 문서/소스 보호를 확인한다. 과거 applied/cancelled 후보는 이력 조회만 제공한다. 반영·완료·보관은 이 API로 자동 실행하지 않는다.
+## 완료 자료의 독립 보존·분리 조회 (개발 브랜치)
+
+새 보존 완료 보고서는 `source=completed`, `files=[]`, `retained={workId,captureId,fileCount,verificationCount,integration?}`를 제공한다. 빈 files를 변경 없음으로 해석하지 않고 retained의 목록을 조회한다. 기존 retained 없는 완료 보고서는 이전 형식을 유지한다. 파일 본문·검증 원문 로그·이미지를 기본 업무 응답에 모두 넣지 않는다. 현재 copy 완료에 연결했으며 Git 완료의 최종 통합 proof 연결은8.5 후속이다.
+
+- `GET /api/work/:id/completion[?captureId=UUID]`: 최신 또는 지정한 완료 캡처 헤더. 없는 캡처는 null이다.
+- `GET .../completion/files?captureId=UUID&after=0&limit=25`: 본문 없는 파일 metadata와 nextCursor. cursor는 다음 ordinal offset이며 마지막이면 null이다.
+- `GET .../completion/file?captureId=UUID&ordinal=N`: 사용자가 연 파일 하나의 전후 본문·가용성·해시·mode.
+- `GET .../completion/verifications?captureId=UUID&after=0&limit=25`: 대상별 요약과 화면 상태. 원문 명령 출력·전체 브라우저 history를 읽지 않는다.
+- `GET .../completion/evidence/:evidenceId?captureId=UUID`: 같은 캡처의 보존 JPEG. Cache-Control:no-store, 만료410·누락404. 임의 경로 입력은 받지 않는다.
+
+목록 limit는1~50, 기본25이며 잘못된 query·번호는400, 다른 업무/없는 파일은404다. 파일 목록과 본문은 SQLite의 별도 열로 분리하고 공간이 사라져도 원본·업무 폴더를 다시 읽지 않는다. 전후 text는각200,000바이트 미만, 파일10,000개·합계128MiB·헤더64KiB·검증256개, 화면은각1MiB로 제한한다. 보존 한도 초과나 실패를 조용히 자르지 않고 완료 transaction을 되돌린다. 기존 소스 수집기의 전체 읽기 예산 보강은 별도 단계이며 이 API 한도만으로 소스 수집 전체가 bounded라는 보장은 하지 않는다.
+
+화면은 호스트 원본을 소유·바이트 확인 후 앱 DB로 복제한다. 현재 설정 retentionDays(기본14일) 경과는 eligibleForCleanup만 표시하며 자동 삭제나 만료 확정은 하지 않는다. 확인한 정리의 내부 만료 기록 뒤에만 state=expired·링크 없음·410을 제공한다. 자료 누락은 missing과 구분한다. 이 단계에는 사용자 삭제 API를 노출하지 않으며 확인 토큰과 공간 정리 UI는8.2~8.4 후속이다.

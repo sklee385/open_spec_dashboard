@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { within } from '../files';
 import { Work, WorkStore } from './store';
+import { CompletedResults } from './completed-results';
 import { WorkspaceService } from './workspace.service';
 import type { WorkspaceSettingsService } from './workspace-settings.service';
 import { readGitSync } from '../projects/git-runner';
@@ -154,6 +155,7 @@ export class FileResults {
     });
   }
   report(work: Work) {
+    if (['completed', 'archived'].includes(work.phase)) { const retained = new CompletedResults(this.store).header(work.id); if (retained) return retained; }
     const saved = this.store.records(work.id, 'completed-changes')[0];
     if (['completed', 'archived'].includes(work.phase)) return saved?.report || this.unavailable();
     if (work.workspace?.kind === 'git-worktree') {
@@ -272,7 +274,8 @@ export class FileResults {
       endedAt: new Date().toISOString(), revision, files: differences(base.files, files), application: 'applied', excluded: excludedNames };
     const completed = { ...work, phase: 'completed' };
     this.store.transaction(() => {
-      this.store.record(`${work.id}:completed-changes`, work.id, 'completed-changes', { report });
+      const retained = new CompletedResults(this.store).capture(work, report);
+      this.store.record(`${work.id}:completed-changes`, work.id, 'completed-changes', { report: retained });
       this.store.save(completed);
     });
     work.phase = 'completed'; return report;

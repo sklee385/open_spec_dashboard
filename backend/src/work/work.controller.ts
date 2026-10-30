@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Headers, HttpCode, Inject, Param, Post, Put, Query, Sse } from '@nestjs/common';
 import { WorkService } from './work.service';
+import { CompletedResults } from './completed-results';
 import { AiToolService } from '../ai-tools/ai-tool.service';
 import { OpenSpecService } from '../openspec/openspec.service';
 import { ReviewService } from '../review/review.service';
@@ -21,7 +22,7 @@ export class WorkController {
     const commands = unavailable ? { full: [], work: [] } : { full: this.service.execution.commands(work), work: this.service.execution.commands(work, 'work', changeReport.files) };
     return { ...this.toolInfo(work), recovery, reviewRequired, reviewedVersion: unavailable || reviewRequired ? null : work.reviewedVersion,
       documents: unavailable ? [] : this.service.documents(work), events: this.service.store.events(id), questions: this.service.store.records(id, 'question'),
-      queuedMessages: this.service.store.records(id, 'queued-message'), verifications: unavailable ? this.service.store.records(id, 'verification').map(record => ({ ...record, fresh: false })) : this.service.execution.results(work, 'revision' in changeReport && typeof changeReport.revision === 'string' ? changeReport.revision : undefined, commands),
+      queuedMessages: this.service.store.records(id, 'queued-message'), verifications: changeReport.retained ? new CompletedResults(this.service.store).verifications(id, changeReport.retained.captureId, 0, 25).results.filter(record => record.kind === 'verification').map(record => ({ ...record, fresh: false })) : unavailable ? this.service.store.records(id, 'verification').map(record => ({ ...record, fresh: false })) : this.service.execution.results(work, 'revision' in changeReport && typeof changeReport.revision === 'string' ? changeReport.revision : undefined, commands),
       verificationCommands: commands.full, workVerificationCommands: commands.work, changes: changeReport.files, changeReport };
   }
   @Get(':id/document') document(@Param('id') id: string, @Query('path') path: string) { return this.service.document(id, path); }

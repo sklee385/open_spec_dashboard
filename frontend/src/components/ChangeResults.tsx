@@ -1,7 +1,8 @@
 import { useI18n } from '@/i18n/context';
 import { FileChange, type FileDiffProps } from './FileDiff';
+import { RetainedResults, type RetainedCapture } from './RetainedResults';
 
-export type ChangeReport = { source: string; isolated?: boolean; startedAt?: string | null; endedAt?: string | null; application?: string; error?: string; excluded?: string[]; conflicts?: string[] };
+export type ChangeReport = { source: string; workId?: string; retained?: RetainedCapture; isolated?: boolean; startedAt?: string | null; endedAt?: string | null; application?: string; error?: string; excluded?: string[]; conflicts?: string[] };
 export function ChangeResults({ workId, files, report, busy, applyDisabled, onApply, onIsolate }: { workId: string; files: (FileDiffProps & { status: string })[]; report?: ChangeReport; busy?: boolean; applyDisabled?: boolean; onApply?: () => void; onIsolate?: () => void }) {
   const { t } = useI18n();
   const source = report?.source || 'unavailable';
@@ -13,8 +14,7 @@ export function ChangeResults({ workId, files, report, busy, applyDisabled, onAp
       <p>{source === 'completed' ? t('changeResults.completed') : t('changeResults.current')}</p>
       <p>{t('changeResults.started')} · {report?.startedAt || t('changeResults.noTime')} · {t('changeResults.ended')} · {report?.endedAt || t('changeResults.noTime')}</p>
       <p>{t('changeResults.isolated')}</p>
-      {!files.length && <p>{t('changeResults.empty')}</p>}
-      {files.map(file => <FileChange key={file.path} file={file} status={status(file.status)} />)}
+      {report?.retained ? <RetainedResults workId={report.workId ?? report.retained.workId} capture={report.retained} /> : <>{!files.length && <p>{t('changeResults.empty')}</p>}{files.map(file => <FileChange key={file.path} file={file} status={status(file.status)} />)}</>}
       <p>{report?.application === 'applied' ? t('changeResults.applied') : report?.application === 'conflict' ? t('changeResults.conflict') : report?.application === 'applying' ? t('changeResults.recovery') : t('changeResults.notApplied')}</p>
       {report?.conflicts?.map(path => <p key={path}>{path}</p>)}
       {source === 'current' && onApply && <button disabled={busy || applyDisabled} onClick={onApply}>{t('changeResults.apply')}</button>}
