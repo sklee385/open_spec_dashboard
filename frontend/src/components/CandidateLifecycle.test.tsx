@@ -76,3 +76,44 @@ it('ignores a late verification response from an older candidate edit generation
   expect(screen.queryByText('CLI 통과')).toBeNull();
   expect(screen.getByRole('button', { name: '원본 반영 사전 검사' })).toBeDisabled();
 });
+it('keeps inspection usable while apply POST hangs and settles only its matching terminated receipt before a late reply', async () => {
+  let finish!: (value: unknown) => void, body: Record<string, unknown> | undefined, observed = false;
+  const pending = new Promise(resolve => { finish = resolve; });
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') { body = JSON.parse(String(init.body)); return pending; }
+    const receipt = body && observed ? { id: 'apply-run', workId: 'w', candidateId: 'c', requestKey: body.requestKey, expectedVersion: body.expectedVersion, status: 'applied', processTerminated: true, appliedCommit: 'candidate' } : null;
+    return { ok: true, json: async () => url.includes('/verification/') ? verification : url.endsWith('/apply/preview') ? { expectedVersion: 'expected' } : { ...status, receipt, receipts: receipt ? [receipt] : [] } };
+  });
+  vi.stubGlobal('fetch', fetcher); render(<CandidateLifecycle workId="w" candidate={candidate} />);
+  fireEvent.click(await screen.findByRole('button', { name: '후보 검증 기준·결과 확인' })); await screen.findByText('CLI 통과');
+  fireEvent.click(screen.getByRole('button', { name: '원본 반영 사전 검사' })); await screen.findByText('사전 검사 통과');
+  fireEvent.click(screen.getByLabelText('표시된 후보와 원본 반영을 확인했습니다')); fireEvent.click(screen.getByRole('button', { name: '원본에 명시적으로 반영' }));
+  await waitFor(() => expect(body?.requestKey).toBeTruthy());
+  const inspect = screen.getByRole('button', { name: '현재 원본 상태 관측' }); expect(inspect).toBeEnabled();
+  observed = true; fireEvent.click(inspect);
+  const saved = () => JSON.parse(localStorage.getItem('integration-control:candidate-apply:w:c') ?? 'null');
+  await waitFor(() => expect(saved()?.state).toBe('completed'));
+  const observationAttempt = saved().attemptId;
+  await act(async () => { finish({ ok: true, json: async () => ({ status: 'running', requestKey: body!.requestKey }) }); await pending; });
+  expect(saved()).toMatchObject({ state: 'completed', attemptId: observationAttempt });
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+});
+it('does not let an older POST finally release the busy state of a newer attempt', async () => {
+  const replies: ((value: unknown) => void)[] = [], bodies: Record<string, unknown>[] = []; let observed = false;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') { bodies.push(JSON.parse(String(init.body))); return new Promise(resolve => { replies.push(resolve); }); }
+    const body = bodies[0], receipt = body && observed ? { workId: 'w', candidateId: 'c', requestKey: body.requestKey, expectedVersion: body.expectedVersion, status: 'failed', processTerminated: true } : null;
+    return { ok: true, json: async () => url.includes('/verification/') ? verification : url.endsWith('/apply/preview') ? { expectedVersion: 'expected' } : { ...status, receipt, receipts: receipt ? [receipt] : [] } };
+  }));
+  render(<CandidateLifecycle workId="w" candidate={candidate} />);
+  fireEvent.click(await screen.findByRole('button', { name: '후보 검증 기준·결과 확인' })); await screen.findByText('CLI 통과');
+  fireEvent.click(screen.getByRole('button', { name: '원본 반영 사전 검사' })); await screen.findByText('사전 검사 통과');
+  fireEvent.click(screen.getByLabelText('표시된 후보와 원본 반영을 확인했습니다')); fireEvent.click(screen.getByRole('button', { name: '원본에 명시적으로 반영' }));
+  await waitFor(() => expect(replies).toHaveLength(1)); observed = true; fireEvent.click(screen.getByRole('button', { name: '현재 원본 상태 관측' }));
+  const saved = () => JSON.parse(localStorage.getItem('integration-control:candidate-apply:w:c') ?? 'null');
+  await waitFor(() => expect(saved()?.state).toBe('failed'));
+  fireEvent.click(screen.getByRole('button', { name: '원본에 명시적으로 반영' })); await waitFor(() => expect(replies).toHaveLength(2));
+  const newer = saved(); await act(async () => { replies[0]({ ok: true, json: async () => ({ status: 'running' }) }); });
+  expect(saved()).toEqual(newer); expect(screen.getByRole('button', { name: '원본에 명시적으로 반영' })).toBeDisabled();
+  await act(async () => { replies[1]({ ok: true, json: async () => ({ status: 'failed' }) }); });
+});

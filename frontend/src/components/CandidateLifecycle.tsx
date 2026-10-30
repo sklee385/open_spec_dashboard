@@ -18,12 +18,13 @@ function LifecycleContent({ workId, candidate, active = true, workDirty = false,
   const run = useExactMutation(`verification-run:${scope}`), apply = useExactMutation(`candidate-apply:${scope}`), cancel = useExactMutation(`candidate-cancel:${scope}`);
   const savedKey = status?.receipt?.requestKey ?? (typeof apply.receipt?.body.requestKey === 'string' ? apply.receipt.body.requestKey : '');
   const reconcile = useExactMutation(`candidate-apply-reconcile:${scope}:${savedKey}`);
+  const observeRun = run.observe;
   const labels: Record<string, string> = { applied: t('life.applied'), cancelled: t('life.cancelled'), uncertain: t('life.uncertain'), 'not-checked': t('life.notChecked'), active: t('life.active'), unknown: t('life.unknown'), settled: t('life.settled'), passed: t('life.passed'), failed: t('life.failed'), stale: t('life.stale'), running: t('life.active') };
   const label = (value: string) => labels[value] ?? value;
   const read = useReadRequests(); const get = useCallback(<T,>(endpoint: string) => read(signal => flowGet<T>(endpoint, signal)), [read]);
   const loadStatus = useCoalescedRefresh(async (inspect = false) => {
     const gen = generation.current;
-    try { const next = await get<CandidateApplyStatus>(`${base}/apply/status${inspect ? '?inspect=1' : ''}`); if (gen === generation.current) { if (!next || next.candidateId !== cid || !Array.isArray(next.receipts) || !next.live || !['active', 'unknown', 'settled'].includes(next.live.state) || !next.observation || typeof next.observation.state !== 'string') throw new Error(t('life.invalidStatus')); setStatus(next); setReadError(''); } }
+    try { const next = await get<CandidateApplyStatus>(`${base}/apply/status${inspect ? '?inspect=1' : ''}`); if (gen === generation.current) { if (!next || next.candidateId !== cid || !Array.isArray(next.receipts) || !next.live || !['active', 'unknown', 'settled'].includes(next.live.state) || !next.observation || typeof next.observation.state !== 'string') throw new Error(t('life.invalidStatus')); setStatus(next); setReadError(''); for (const row of next.receipts) { await apply.observe(row, next.live.state); await reconcile.observe(row, next.live.state); } } }
     catch (error) { if (gen === generation.current) setReadError(error instanceof Error ? error.message : String(error)); }
   });
   // Only the cheap, non-inspecting status endpoint is polled while visible.
@@ -42,10 +43,10 @@ function LifecycleContent({ workId, candidate, active = true, workDirty = false,
   const inspectVerification = useCallback(async () => {
     const gen = generation.current; setLoading(true); setVerifyError(''); setConfirmRun(false); setExpectedVersion(''); setConfirmApply(false);
     try {
-      const results = await get<CandidateVerification>(`${base}/verification/results`); if (gen !== generation.current) return; setVerification(results);
+      const results = await get<CandidateVerification>(`${base}/verification/results`); if (gen !== generation.current) return; setVerification(results); for (const row of results.runs) await observeRun(row);
       if (['validating', 'ready'].includes(candidate.status)) { const preview = await get<CandidateVerification>(`${base}/verification/preview`); if (gen === generation.current) setVerification(preview); }
     } catch (error) { if (gen === generation.current) setVerifyError(String(error)); } finally { if (gen === generation.current) setLoading(false); }
-  }, [base, candidate.status, get]);
+  }, [base, candidate.status, get, observeRun]);
   const guarded = () => {
     try {
       if (workDirty) throw new Error(t('life.unsaved'));
@@ -68,7 +69,7 @@ function LifecycleContent({ workId, candidate, active = true, workDirty = false,
   return <section className="workspace-flow" aria-label={t('life.title')}><h3>{t('life.title')}</h3><p>{t('life.separate')}</p>
     <dl><dt>{t('flow.target')}</dt><dd>{candidate.targetBranch} · {candidate.targetHead}</dd><dt>{t('flow.integration')}</dt><dd>{candidate.candidateCommit ?? '—'}</dd><dt>{t('flow.path')}</dt><dd>{candidate.executionPath}</dd></dl>
     {loading && <p role="status">{t('flow.loading')}</p>}{[readError, verifyError, guardError].filter(Boolean).map((error, index) => <p role="alert" key={index}>{error}</p>)}{workDirty && <p role="status">{t('life.unsaved')}</p>}
-    <button disabled={busy} onClick={() => void inspectVerification()}>{t('life.verifyInspect')}</button>
+    <button disabled={loading} onClick={() => void inspectVerification()}>{t('life.verifyInspect')}</button>
     {verification && <><p>{t(verification.cliPassed ? 'life.cliPassed' : 'life.cliMissing')}</p>{verification.browserRequired && <p>{t('life.browserRequired')}</p>}<p>{t(verification.ready ? 'life.ready' : 'life.notReady')}</p>{verification.error && <p role="status">{verification.error}</p>}
       <ul>{verification.commands?.map(command => <li key={command.id}>{command.id}: <code>{command.command}</code><ol>{command.args.map((arg, index) => <li key={index}>{arg}</li>)}</ol></li>)}</ul></>}
     <label><input type="checkbox" checked={confirmRun} disabled={busy || workDirty || running} onChange={event => setConfirmRun(event.target.checked)} />{t('life.confirmRun')}</label>
@@ -82,7 +83,7 @@ function LifecycleContent({ workId, candidate, active = true, workDirty = false,
     <h4>{t('life.receipts')}</h4>{status?.receipts.map((row, index) => <p key={`${row.requestKey}:${index}`}><code>{row.requestKey}</code>: {label(row.status)} · {row.appliedCommit ?? row.observedHead} {row.endedAt ?? row.createdAt} {row.error}</p>)}
     <h4>{t('life.current')}</h4><p>{label(status?.observation.state ?? 'not-checked')} {status?.observation.head} {status?.observation.reason}</p><p>{t('life.live')}: {label(status?.live.state ?? 'unknown')} {status?.live.reason}</p>
     {status?.observation.last && <details open><summary>{t('life.previous')}</summary><p>{label(status.observation.last.state)} {status.observation.last.head} {status.observation.last.reason}</p></details>}
-    <button disabled={busy} onClick={() => void loadStatus(true)}>{t('life.inspect')}</button>
+    <button disabled={loading} onClick={() => void loadStatus(true)}>{t('life.inspect')}</button>
     {savedKey && <button disabled={busy || status?.live.state === 'active'} onClick={() => void reconcile.run(`${base}/apply/reconcile`, { requestKey: savedKey, confirmed: true }).then(ok => { if (ok) void changed(); })}>{t('life.reconcile')}</button>}
     <MutationStatus {...reconcile} retry={() => void reconcile.run().then(ok => { if (ok) void changed(); })} />
     <p>{t('life.cancelHint')}</p><label><input type="checkbox" checked={confirmCancel} disabled={busy || applied || cancelled || unknown || running} onChange={event => setConfirmCancel(event.target.checked)} />{t('life.cancelConfirm')}</label>
@@ -93,6 +94,8 @@ function LifecycleContent({ workId, candidate, active = true, workDirty = false,
 function RunControls({ workId, candidateId, run, onChanged }: { workId: string; candidateId: string; run: CandidateRun; onChanged: () => Promise<void> }) {
   const { t } = useI18n(), base = `/api/work/${encodeURIComponent(workId)}/integration/${encodeURIComponent(candidateId)}/verification`;
   const cancel = useExactMutation(`verification-cancel:${workId}:${candidateId}:${run.id}`), reconcile = useExactMutation(`verification-reconcile:${workId}:${candidateId}:${run.id}`); const [confirmed, setConfirmed] = useState(false);
+  const observeCancel = cancel.observe, observeReconcile = reconcile.observe;
+  useEffect(() => { void observeCancel(run); void observeReconcile(run); }, [run, observeCancel, observeReconcile]);
   return <><label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />{t('life.runControlConfirm')}</label>
     <button disabled={!confirmed || cancel.busy || reconcile.busy || run.status !== 'running'} onClick={() => void cancel.run(`${base}/cancel`, { runId: run.id }).then(ok => { if (ok) void onChanged(); })}>{t('life.stopRun')}</button>
     <button disabled={!confirmed || cancel.busy || reconcile.busy} onClick={() => void reconcile.run(`${base}/reconcile`, { runId: run.id, confirmed: true }).then(ok => { if (ok) void onChanged(); })}>{t('life.reconcileRun')}</button>
