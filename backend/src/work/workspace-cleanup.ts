@@ -93,7 +93,7 @@ export class WorkspaceCleanup {
       const target = check.target, plan = { kind: 'management' as const, root: work.projectPath, commonDir: target.commonDir, spaces: [target.path], refs: ['refs/heads/' + target.branch] }, release = projectCoordinator(this.store).acquireOperation(plan);
       const settle = this.lifecycle?.beginRequest('workspace-cleanup',workId);
       const intentId=id+':intent', owner=randomUUID(), runGeneration=randomUUID(); let started=false, terminated=false;
-      let result: any = { id,workId,candidateId:candidateId??null,targetKind:candidateId?'integration-candidate':'work',workspaceId:work.workspace?.workspaceId,requestKey:body.requestKey,fingerprint,target,keepBranch:true,status:'running',intentId,owner,runGeneration,processTerminated:false,createdAt:new Date().toISOString() };
+      let result: any = { id,workId,candidateId:candidateId??null,targetKind:candidateId?'integration-candidate':'work',workspaceId:work.workspace?.workspaceId,requestKey:body.requestKey,expectedVersion:body.expectedVersion,fingerprint,target,keepBranch:true,status:'running',intentId,owner,runGeneration,processTerminated:false,createdAt:new Date().toISOString() };
       let intent: any = { id:intentId,scope:'management',root:work.projectPath,commonDir:target.commonDir,refs:plan.refs,affectedRoots:[target.path],stage:'workspace-remove',owner,runGeneration,status:'running',processTerminated:false };
       try {
         const fresh = await this.preview(workId,candidateId,true,true);

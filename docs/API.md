@@ -271,3 +271,11 @@ CLI의 `passed`는 후보 전체 확정을 뜻하지 않는다. 필수 브라우
 `POST /api/work/:id/workspace/cleanup[?candidateId=UUID]`는 정확한 `{requestKey:UUID,token:UUID,expectedVersion:SHA256,confirmed:true}`만 받는다. 소유/파일/실행 상태를 새로 검사하고 영속 의도를 저장한 뒤 정상 `git worktree remove -- <고정 경로>`만 실행한다. force/prune/루트 재귀 삭제/브랜치 제거는 제공하지 않는다. 비어 있고 소유가 같은 앱의 disabled-hooks와 identity만 확인해 해당 컨테이너를 정리한다. 다른 파일/폴더나 링크가 끼어들면 보존하며 미확인 결과를 남긴다. 원본·완료 자료·로컬 브랜치·원격 ref는 보존한다. 같은 요청 키의 정확한 재요청은 기존 running/removed/failed/uncertain 영수증만 반환하고 제거를 반복하지 않는다. 종료/결과 미확인은 자동 재실행하거나 TTL로 해제하지 않는다. 공개 HTTP 경로는 앱 업데이트/종료 요청 관리에도 연결한다.
 
 정리 뒤 완료 증거의 workspace 상태는 정확히 일치하는 removed 영수증이 있을 때만 기존 적용 기준으로 대조한다. 업무·후보 공간이 모두 없어도 보존 자료를 읽고 원본 보관을 명시적으로 이어갈 수 있다. 2026-10-30 검증: 기본 보존/차단3건, 정상 제거·확인 후 변경 거부·도중 새 파일 보존3건, 실제 경로 교체1건, HTTP 경계1건과 실제 Git 업무/후보 정리→OpenSpec 보관/재확인1건(49.42초)을 확인했다. 공통 검사는 변경 없는 통과 근거를 재사용했으며 전체 테스트나 설치 앱 E2E 성공으로 계산하지 않는다. 초기 5초 테스트 예산 초과와 훅 폴더 누락 실패는 성공 근거에서 제외하고 해당 원인 수정 뒤 관련 사례만 다시 검사했다.
+
+### 정리 목록과 보존 화면 사본 만료(개발 변경)
+
+`GET /api/workspace-settings/maintenance?spaceAfter=0&imageAfter=0`는 등록된 이전/현재 루트의 용량·잔여/공유 저장분·부분 집계와 공간/화면 메타데이터를 각각25개씩 반환한다. nextSpaceAfter/nextImageAfter로 더 읽는다. 원본 소스 본문·화면 BLOB을 응답에 넣거나 기간 경과로 삭제하지 않는다. 공유 런타임 미준비·파일 수/시간 한도는 미확인/부분 집계로 표시한다.
+
+`GET /api/work/:id/completion/evidence/:evidenceId/cleanup?captureId=UUID`로 같은 업무/캡처/화면의 상태·expectedHash·현재 policyVersion·정리 가능 여부를 확인한다. `POST .../expire`는 `{requestKey:UUID,captureId:UUID,expectedHash:SHA256,policyVersion:number,confirmed:true}`만 받는다. 정책 잠금 안에서 현재 기간과 버전·해시·소유를 확인하고 해당 캡처 BLOB만 만료시킨다. 이미 만료된 동일 업무/캡처/화면/해시의 재요청은 만료 상태만 반환한다. 원래 실행 자료/장기 완료 기록은 보존하고 GET 이미지는410, 요약은 expired 및 링크 없음으로 표시한다.
+
+2026-10-30: 실제 HTTP/설정/SQLite의 정책 변경·해시 불일치/확인 거부·만료 및 재요청1건 통과. 용량 항목 변경 뒤 해당1건만 재확인했다. 모의 fetch 화면3건과 공통 영수증 기존/신규 경계7건, 수정 프런트 파일 lint, frontend/backend build 통과. 정리/만료 응답 유실은 같은 업무·대상·키/버전 또는 캡처/화면/해시의 실제 저장 결과만 관측해 해소하고 늦은 POST는 무시한다. 미실시인 설치 앱/Codex 내장 브라우저 전체 동선과 구분한다.

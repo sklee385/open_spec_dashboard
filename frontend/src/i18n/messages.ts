@@ -1,3 +1,4 @@
+import { enMaintenanceCopy, koMaintenanceCopy } from './maintenanceMessages';
 import { enFlowCopy, koFlowCopy } from './flowMessages';
 import { enRetainedCopy, koRetainedCopy } from './retainedMessages';
 import { enLifecycleCopy, koLifecycleCopy } from './lifecycleMessages';
@@ -12,6 +13,7 @@ import { enBrowserCopy, koBrowserCopy } from './browserMessages';
 import { enWorkspaceCopy, koWorkspaceCopy } from './workspaceMessages';
 
 const en = {
+  ...enMaintenanceCopy,
   ...enRetainedCopy,
   ...enLifecycleCopy,
   ...enFlowCopy,
@@ -68,6 +70,7 @@ type MessageArgs<K extends keyof typeof en> = (typeof en)[K] extends (args: infe
 export type MessageKey = keyof typeof en;
 type Dictionary = { [K in MessageKey]: (typeof en)[K] extends string ? string : (typeof en)[K] };
 const ko: Dictionary = {
+  ...koMaintenanceCopy,
   ...koRetainedCopy,
   ...koLifecycleCopy,
   ...koFlowCopy,

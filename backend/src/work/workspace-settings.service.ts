@@ -9,6 +9,7 @@ import { gitCommonDirectory } from '../projects/git-metadata';
 import { WorkStore } from './store';
 import { projectCoordinator } from '../projects/coordinator';
 import { assertActiveCapacity } from './workspace-policy';
+import { workspaceMaintenance } from './workspace-maintenance';
 
 export interface WorkspaceRoot { rootId: string; path: string; managedPath: string; confirmedAt: string; }
 export interface WorkspacePolicy { maxActiveWorks: number; minimumFreeBytes: number; retentionDays: number; }
@@ -30,6 +31,7 @@ export class WorkspaceSettingsService {
     this.update(body.version, settings => { settings.policy = { maxActiveWorks: policy.maxActiveWorks, minimumFreeBytes: policy.minimumFreeBytes, retentionDays: policy.retentionDays }; });
     return this.view();
   }
+  maintenance(query:Record<string,unknown>={}) { if(!this.store)throw new ConflictException('업무 저장소를 확인할 수 없습니다');return workspaceMaintenance(this.store,this.read(),query); }
   history() {
     if (!this.store) throw new ConflictException('업무 참조 저장소를 확인할 수 없습니다.');
     const settings = this.read();

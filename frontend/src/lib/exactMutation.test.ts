@@ -44,3 +44,12 @@ it('브라우저 수락은 같은 업무·후보·사용자 요청만 확인하�
   }
   expect(await observeExactMutation('browser-accept', saved, row)).toMatchObject({ state: 'completed', response: { observed: true, receipt: { status: 'running', processTerminated: false } } });
 });
+
+it('정리 관측은 업무·후보·키·버전·종료가 같은 확정 결과만 수락한다',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({status:'running'})})));await exactMutation('cleanup-observe','/api/work/w/workspace/cleanup?candidateId=c',{requestKey:'key',expectedVersion:'version'});const saved=readExactMutation('cleanup-observe')!,row={workId:'w',candidateId:'c',requestKey:'key',expectedVersion:'version',status:'removed',processTerminated:true};
+ for(const change of [{workId:'other'},{candidateId:null},{requestKey:'other'},{expectedVersion:'other'},{status:'uncertain'},{processTerminated:false}])expect(await observeExactMutation('cleanup-observe',saved,{...row,...change})).toBeNull();expect(await observeExactMutation('cleanup-observe',saved,row)).toMatchObject({state:'completed'});
+});
+it('화면 만료 관측은 같은 업무·캡처·자료·해시의 만료만 수락한다',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({status:'uncertain'})})));await exactMutation('image-observe','/api/work/w/completion/evidence/image/expire',{requestKey:'key',captureId:'capture',expectedHash:'hash'});const saved=readExactMutation('image-observe')!,row={workId:'w',captureId:'capture',id:'image',expectedHash:'hash',status:'expired'};
+ for(const change of [{workId:'other'},{captureId:'other'},{id:'other'},{expectedHash:'other'},{status:'available'}])expect(await observeExactMutation('image-observe',saved,{...row,...change})).toBeNull();expect(await observeExactMutation('image-observe',saved,row)).toMatchObject({state:'completed'});
+});

@@ -45,28 +45,34 @@ export async function exactMutation<T>(scope: string, endpoint?: string, body?: 
   }
 }
 
-export type ExactObservation = { workId?: string; candidateId?: string | null; owner?: string; cleanupStatus?: string; reconciliation?: string; id?: string; requestKey?: string; candidateVersion?: string; expectedVersion?: string; status?: string; processTerminated?: boolean };
-/** A matching durable acceptance acknowledges transport, not verification success. Never resends a POST. */
+export type ExactObservation = { captureId?: string; expectedHash?: string; workId?: string; candidateId?: string | null; owner?: string; cleanupStatus?: string; reconciliation?: string; id?: string; requestKey?: string; candidateVersion?: string; expectedVersion?: string; status?: string; processTerminated?: boolean };
+/** Observe only the exact persisted operation; no POST, worker termination or verification success is inferred. */
 export async function observeExactMutation(scope: string, expected: ExactReceipt | null, row: ExactObservation, live?: string): Promise<ExactReceipt | null> {
   if (!expected || expected.state !== 'uncertain') return null;
-  const browserRoute = /^\/api\/work\/([^/]+)(?:\/integration\/([^/]+))?\/browser\/(run|cancel|reconcile)$/.exec(expected.endpoint);
-  let browserAccepted = false;
-  if (browserRoute) {
-    if (row.workId !== decodeURIComponent(browserRoute[1]) || (row.candidateId ?? null) !== (browserRoute[2] ? decodeURIComponent(browserRoute[2]) : null) || !row.id) return null;
-    if (browserRoute[3] === 'run') {
+  let completed = false;
+  const browser = /^\/api\/work\/([^/]+)(?:\/integration\/([^/]+))?\/browser\/(run|cancel|reconcile)$/.exec(expected.endpoint);
+  const cleanup = /^\/api\/work\/([^/]+)\/workspace\/cleanup(?:\?candidateId=([^&]+))?$/.exec(expected.endpoint);
+  const image = /^\/api\/work\/([^/]+)\/completion\/evidence\/([^/]+)\/expire$/.exec(expected.endpoint);
+  if (browser) {
+    if (row.workId !== decodeURIComponent(browser[1]) || (row.candidateId ?? null) !== (browser[2] ? decodeURIComponent(browser[2]) : null) || !row.id) return null;
+    if (browser[3] === 'run') {
       if (row.owner !== 'user' || typeof expected.body.requestKey !== 'string' || row.requestKey !== expected.body.requestKey || !['running', 'passed', 'failed', 'blocked', 'stale', 'interrupted'].includes(row.status ?? '')) return null;
-      browserAccepted = true;
     } else {
       if (typeof expected.body.runId !== 'string' || row.id !== expected.body.runId || row.processTerminated !== true || !['passed', 'failed', 'blocked', 'stale', 'interrupted', 'cancelled'].includes(row.status ?? '')) return null;
-      if (browserRoute[3] === 'reconcile' && (row.cleanupStatus !== 'confirmed' || row.reconciliation !== 'terminated')) return null;
-      browserAccepted = true;
+      if (browser[3] === 'reconcile' && (row.cleanupStatus !== 'confirmed' || row.reconciliation !== 'terminated')) return null;
     }
-  }
-  if (!browserRoute && row.processTerminated !== true) return null;
-  const route = /^\/api\/work\/([^/]+)\/integration\/([^/]+)\/(apply(?:\/reconcile)?|verification\/(?:run|cancel|reconcile))$/.exec(expected.endpoint);
-  if (!browserRoute && (!route || row.workId !== decodeURIComponent(route[1]) || row.candidateId !== decodeURIComponent(route[2]))) return null;
-  const operation = route?.[3] ?? '';
-  if (!browserRoute) {
+    completed = true; // Transport/control accepted; verification outcome remains in the server row.
+  } else if (cleanup) {
+    if (row.workId !== decodeURIComponent(cleanup[1]) || (row.candidateId ?? null) !== (cleanup[2] ? decodeURIComponent(cleanup[2]) : null) || typeof expected.body.requestKey !== 'string' || row.requestKey !== expected.body.requestKey || typeof expected.body.expectedVersion !== 'string' || row.expectedVersion !== expected.body.expectedVersion || row.processTerminated !== true || !['removed','failed'].includes(row.status ?? '')) return null;
+    completed = row.status === 'removed';
+  } else if (image) {
+    if (row.workId !== decodeURIComponent(image[1]) || row.id !== decodeURIComponent(image[2]) || typeof expected.body.captureId !== 'string' || row.captureId !== expected.body.captureId || typeof expected.body.expectedHash !== 'string' || row.expectedHash !== expected.body.expectedHash || row.status !== 'expired') return null;
+    completed = true; // This is a DB asset state, not a process-exit assertion.
+  } else {
+    if (row.processTerminated !== true) return null;
+    const route = /^\/api\/work\/([^/]+)\/integration\/([^/]+)\/(apply(?:\/reconcile)?|verification\/(?:run|cancel|reconcile))$/.exec(expected.endpoint);
+    if (!route || row.workId !== decodeURIComponent(route[1]) || row.candidateId !== decodeURIComponent(route[2])) return null;
+    const operation = route[3];
     if (operation.startsWith('apply')) {
       if (live !== 'settled' || !['applied', 'failed'].includes(row.status ?? '') || typeof expected.body.requestKey !== 'string' || row.requestKey !== expected.body.requestKey) return null;
       if (operation === 'apply' && (typeof expected.body.expectedVersion !== 'string' || row.expectedVersion !== expected.body.expectedVersion)) return null;
@@ -76,11 +82,12 @@ export async function observeExactMutation(scope: string, expected: ExactReceipt
         if (typeof expected.body.requestKey !== 'string' || row.requestKey !== expected.body.requestKey || typeof expected.body.candidateVersion !== 'string' || row.candidateVersion !== expected.body.candidateVersion) return null;
       } else if (typeof expected.body.runId !== 'string' || row.id !== expected.body.runId) return null;
     }
+    completed = ['applied', 'passed', 'cancelled'].includes(row.status ?? '');
   }
   return lock(scope, () => {
     const current = readExactMutation(scope);
     if (!current || current.localId !== expected.localId || current.attemptId !== expected.attemptId || current.endpoint !== expected.endpoint || JSON.stringify(current.body) !== JSON.stringify(expected.body)) return null;
-    const next: ExactReceipt = { ...current, attemptId: crypto.randomUUID(), state: browserAccepted || ['applied', 'passed', 'cancelled'].includes(row.status ?? '') ? 'completed' : 'failed', response: { observed: true, receipt: row }, error: undefined };
+    const next: ExactReceipt = { ...current, attemptId: crypto.randomUUID(), state: completed ? 'completed' : 'failed', response: { observed: true, receipt: row }, error: undefined };
     draftStorage.setItem(`${key(scope)}:history:${current.attemptId}`, JSON.stringify(current));
     draftStorage.setItem(key(scope), JSON.stringify(next)); return next;
   });

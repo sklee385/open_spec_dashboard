@@ -55,6 +55,12 @@ export class CompletedResults {
     if(!row?.bytes||!row.sha256)throw new NotFoundException('보존한 검증 화면이 없습니다');
     const bytes=Buffer.from(row.bytes);if(hash(bytes)!==row.sha256)throw new ConflictException('보존 증거의 무결성을 확인할 수 없습니다');return bytes;
   }
+  evidenceCleanup(workId:string,captureId:string,id:string,retentionDays:number) {
+    this.owner(workId,captureId);if(!Number.isSafeInteger(retentionDays)||retentionDays<1)throw new BadRequestException('보존 기간을 확인해 주세요');
+    const row=this.store.db.prepare('SELECT sha256,created_at,expired_at,length(bytes) size FROM completion_images WHERE capture_id=? AND id=?').get(captureId,id) as any;
+    if(!row)throw new NotFoundException('보존 화면이 없습니다');
+    return {workId,captureId,id,expectedHash:row.sha256,createdAt:row.created_at,expiredAt:row.expired_at,state:row.expired_at?'expired':row.sha256&&row.size!==null?'available':'missing',eligibleForCleanup:!row.expired_at&&!!row.sha256&&row.size!==null&&Date.now()>=Date.parse(row.created_at)+retentionDays*86400000};
+  }
   /** Internal confirmed cleanup hook; age alone never deletes a retained image. */
   expireEvidence(workId:string,captureId:string,id:string,input:{confirmed:true;expectedHash:string}) {
     this.owner(workId,captureId);if(input?.confirmed!==true||!/^[a-f0-9]{64}$/.test(input.expectedHash))throw new BadRequestException('확인한 보존 자료가 필요합니다');

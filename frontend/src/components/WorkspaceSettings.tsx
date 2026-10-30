@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../i18n/context';
+import { WorkspaceMaintenance } from './WorkspaceMaintenance';
 
 interface Settings {
   version: number; profileId: string; path: string | null; managedPath: string | null;
@@ -96,5 +97,6 @@ export function WorkspaceSettings() {
         <button type="button" className="rounded border px-3 py-2 text-sm disabled:opacity-50" disabled={busy || !validPolicy} onClick={() => void savePolicy()}>{t('workspace.savePolicy')}</button>
       </fieldset>
     </>}
+    <WorkspaceMaintenance />
   </section>;
 }
