@@ -11,7 +11,7 @@ import { projectCoordinator } from '../projects/coordinator';
 import { relatedTestCommands, type TestScope } from './test-commands';
 import { desktopHealth } from '../desktop/health';
 import { WorkspaceService } from './workspace.service';
-import { guardBrowserProcess } from '../browser/browser-job';
+import { guardBrowserProcess, guardWorkerPath } from '../browser/browser-job';
 import { stopOwnedProcess } from '../browser/browser-process';
 
 export interface VerificationCommand { id: string; command: string; args: string[]; }
@@ -130,7 +130,7 @@ export class ExecutionService implements OnModuleDestroy {
     for (const key of Object.keys(env)) if (privateEnvironment.has(key.toUpperCase()) || key.toUpperCase().startsWith('GIT_')) delete env[key];
     // Same waiting-worker / kill-on-close Job contract as local preparation.
     const worker = "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',b=>s+=b);process.stdin.on('end',()=>{try{const c=JSON.parse(s);const p=require('child_process').spawn(c.command,c.args,{cwd:process.cwd(),env:process.env,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});p.stdout.pipe(process.stdout);p.stderr.pipe(process.stderr);p.once('error',e=>{console.error(e.message);process.exit(1)});p.once('close',c=>process.exit(c===0?0:1));}catch{process.exit(1)}});";
-    const child = spawn(process.execPath, ['-e', worker], { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--require', guardWorkerPath(), '-e', worker], { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
     result.terminationEvidence = 'unconfirmed';
     this.candidateChildren.set(runId, child);
     const closed = new Promise<void>(resolve => { child.once('error', error => { result.stderr += error.message; resolve(); }); child.once('close', code => { result.code = code; resolve(); }); });

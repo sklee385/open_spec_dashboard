@@ -8,7 +8,7 @@ import { inspectWorkspacePath, pathsOverlap } from './workspace-paths';
 import { WorkspacePreparation, type PreparationOptions } from './workspace-preparation';
 import { runtimeCommand, runtimeEnvironment } from '../runtime';
 import { stopOwnedProcess } from '../browser/browser-process';
-import { guardBrowserProcess } from '../browser/browser-job';
+import { guardBrowserProcess, guardWorkerPath } from '../browser/browser-job';
 export interface LocalPreparationCommand { id: string; stage: 'install' | 'build'; command: string; args: string[]; }
 export interface LocalPreparationPolicy {
   version: number; projectId: string; planRevision: string; confirmed: boolean;
@@ -155,7 +155,7 @@ export class LocalPreparation {
       // No project code runs before the supervisor has assigned this waiting
       // worker to its kill-on-close Job Object. Descendants inherit the job.
       const worker = "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',b=>input+=b);process.stdin.on('end',()=>{try{const c=JSON.parse(input);const p=require('child_process').spawn(c.command,c.args,{cwd:process.cwd(),env:process.env,shell:false,windowsHide:true,stdio:'ignore'});p.once('error',()=>process.exit(1));p.once('close',code=>process.exit(code===0?0:1));}catch{process.exit(1)}});";
-      const child = spawn(process.execPath, ['-e', worker], { ...context, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'ignore', 'ignore'] }); this.children.add(child);
+      const child = spawn(process.execPath, ['--require', guardWorkerPath(), '-e', worker], { ...context, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'ignore', 'ignore', 'ipc'] }); this.children.add(child);
       const guard = guardBrowserProcess(child); void guard.catch(() => {});
       const id = `${work.id}:local-process:${command.id}`, record = { commandId: command.id, stage: command.stage, workspaceId: work.workspace!.workspaceId, executionPath: context.cwd, pid: child.pid ?? null, status: 'running', startedAt: new Date().toISOString() };
       let done = false, timedOut = false;

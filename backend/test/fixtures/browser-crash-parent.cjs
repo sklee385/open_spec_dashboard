@@ -12,7 +12,7 @@ if(mode==='leaf') {
   require('reflect-metadata');
   const {WorkStore}=require('../../dist/work/store.js');
   const {claimBrowser,checkpointBrowser}=require('../../dist/browser/browser-lease.js');
-  const {guardBrowserProcess}=require('../../dist/browser/browser-job.js');
+  const {guardBrowserProcess,guardWorkerPath}=require('../../dist/browser/browser-job.js');
   const {randomUUID}=require('node:crypto');
   const {prepareBrowserWitness,bindBrowserWitness}=require('../../dist/browser/browser-witness.js');
   process.env.DATA_DIR=path.join(root,'data');let worker;
@@ -21,7 +21,7 @@ if(mode==='leaf') {
     const store=new WorkStore();store.save({id:'w',sourceId:'fixture',projectPath:path.join(root,'source'),changeName:'w',requestKey:'w',ideaIds:[],phase:'verification',state:'running',threadId:'preserved-thread',reviewedVersion:null,createdAt:'',updatedAt:''});
     const row={id:randomUUID(),workId:'w',owner:'user',candidateId:null,targetKind:'work',status:'running',snapshotStatus:'running',steps:[],createdAt:new Date().toISOString()};
     const lease=claimBrowser(store,row,()=>{});
-    worker=cp.fork(__filename,['worker',root],{execArgv:[],windowsHide:true,stdio:['ignore','ignore','ignore','ipc']});
+    worker=cp.fork(__filename,['worker',root],{execArgv:['--require',guardWorkerPath()],windowsHide:true,stdio:['ignore','ignore','ignore','ipc']});
     const witness=process.env.OPENSPEC_CRASH_WITNESS==='1'?prepareBrowserWitness(store):undefined;
     const guard=await guardBrowserProcess(worker,undefined,{browserProtocol:true,...(witness?{witness}:{})});
     if(witness)row.terminationWitness=bindBrowserWitness(store,witness,worker.pid,guard.pid);

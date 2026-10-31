@@ -485,3 +485,15 @@ $env:TMP = $env:TEMP
 - 읽기 전용 SQLite/Git/파일 대조 결과: 업무archived, workspace removed, 실제 업무 컨테이너 없음, 원본clean/HEAD1e36d1ba85b5fe131417ec67da790adbcddafb3d, code.txt qa-work 및 원본 전용 파일 보존, 업무 branch result5aff22e6218c3270de06d8c6072daad7750b7ea5 보존, candidate 폴더 보존, 완료 캡처1개(파일1·검증2), 반영 영수증1개applied/실제 종료true, 보관 시도1개archived/재확인시각, 정리 영수증1개removed/브랜치유지true를 확인했다.
 - 구조화 근거는 verification-2026-10-31.json에 고정했다. 실제 UI/스크린샷과 물리 대조이며 mocked fetch 회귀와 구분한다. 최초 설정부터의 전체 UI 경로는 첫 fixture에서, 최신 가드의 최종 후보→검증→반영→완료→보관/정리 경로는 별도 새 fixture에서 확인했다. 두 사본을 하나의 무중단 E2E처럼 합치지 않는다.
 -9.5만 추가 완료하여 apply 진행50/54를 확인했다.9.2·9.3·9.4·9.6은 아직 미완료다. 검증 탭을 닫고 자기 새 QA 세션72796의 diagnostics activeCount0/run148248-1793455546222 뒤 close/exit0을 확인했다. 예전 첫 fixture 세션74508의 stdin 제어 불가/종료 미확인은 그대로 보존한다. 전체 PC 프로세스 열거나 PID 추측 종료를 하지 않았다.
+
+### 2026-10-31 HANDLE과 실제 자식 IPC 신원 결합 (9.2 일부)
+
+- 새 계획 docs/superpowers/plans/2026-10-31-process-handle-identity.md에 세부 순서와 안전 경계를 기록했다. native CreateJob/Process HANDLE·직접 생성한 자식 IPC만 사용하며 이전 Win32_Process 거부를 다른 열거 경로나 상향으로 우회하지 않았다.
+- 실제 두 소유 자식 중 공개 pid만 다른 자식을 가리키게 한 회귀에서 기존 가드가 잘못 READY를 반환하는 RED138ms를 확인했다. 추가 mock 경계에서는 Windows stopOwnedProcess가 ChildProcess 핸들 대신 taskkill/PID를 호출하는 RED3ms를 확인했으며 실제 taskkill을 실행하지 않았다.
+- BrowserGuard는 HANDLE-PROOF-V1 요청에서 먼저 HANDLE을 열어 유지하고 BOUND nonce를 출력한다. 호스트는 직접 만든 자식의 전용 IPC에256비트 nonce를 보내 pid/nonce 응답이 일치할 때만 ASSIGN을 승인한다. 그 뒤 동일 HANDLE로만 Job 배정·감시한다. 살아 있는 실제 자식과 보유 객체 ID가 일치한 상태를 확인하므로 생성시각 추정/저장 PID 재조회로 동일성을 판단하지 않는다. Windows 프로세스 객체/ID 수명 근거는 계획의 Microsoft 공식 자료에 기록했다.
+- backend/scripts/guard-worker.cjs를 신뢰된 절대 preload로 브라우저·후보 명령·로컬 준비·HEAD 고정 Git의 대기 Node에 연결했다. 프로젝트 명령은 기존 Job/HEAD 준비와 새 HANDLE 준비가 모두 확인된 뒤에만 보낸다. 구형 가드를 성공으로 오인하지 않는다. 가드 전용 stdin EOF로 호스트 종료를 감시하므로 host PID 재사용을 대기 근거로 삼지 않는다.
+- Windows stopOwnedProcess는 ChildProcess.kill의 보유 native handle만 사용한다. 자손 전체 종료는 독립 Job의 실제 종료 확인을 거친다. taskkill/PID/T/F를 이 경로에서 제거했다. 저장 PID를 죽이거나 임의 Node/브라우저를 열거하지 않는다.
+- 직접 신원/종료 경계: actual mismatch 거부 및 generic/head/browser 정상4개372ms, PID 종료 제거 mock1개 통과. mismatch는 실제 살아 있는 타 시험 자식을 가리키게 한 것이며 OS가 같은 숫자 PID를 실제 재할당하는 장시간 stress를 실행한 것은 아니다.
+- 실제 통합 영향: 독립 Node 준비/비밀 환경 분리·준비 자손 종료2개(567/523ms), 실제 호스트 종료 두 경로(각854ms), 후보 cwd/업무 통과 비재사용·stale1개28.104초, 실제 ff-only 원본 반영1개18.724초, 구형 가드 미dispatch1개15.931초, 실제 Work/candidate Chromium 새 빌드/격리/종료1개88.708초 통과. 마지막 세 파일은 독립 실행 중이라 경과시간을 단일 성능 수치로 해석하지 않는다.
+- 기존 lifecycle mock은 새 경로 함수 export를 유지하도록 부분 mock으로 맞췄고 SQLite/소유·terminal DB 저장 실패·늦은 종료 명시 복구3개7.40초 통과했다. snapshot-service의 부분 mock은 import 호환만 수정했으며 그 파일 전체 통과를 주장하지 않는다. backend build exit0.
+- IAB 전체 동선 근거 JSON은931e018 제품 코드 시점이며, 이후 변경한 네이티브 실행 경계는 위 actual API/Job/Chromium 검사로 확인했다. 변경 없는 프런트/전체 IAB/전체 suite를 의례적으로 반복하지 않는다. 강제 OS 재부팅이나 legacy witness 없는 기록의 자동 해제는 수행·보장하지 않는다. OpenSpec9.2는 결합 장애 대조를 마치기 전 미완료로 유지한다.

@@ -1,5 +1,5 @@
 import { spawn, execFile, execFileSync } from 'node:child_process';
-import { guardBrowserProcess } from '../browser/browser-job';
+import { guardBrowserProcess, guardWorkerPath } from '../browser/browser-job';
 export class GitError extends Error {
     constructor(message: string, public status = 400, public uncertain = false, public terminationUnconfirmed = false, public confirmedRejection = false) {
         super(message);
@@ -129,7 +129,7 @@ async function runHeadPinnedGit(root: string, args: string[], options: RunnerOpt
     for (const key of Object.keys(workerEnv)) if (key.toUpperCase().startsWith('GIT_') || ['NODE_OPTIONS', 'NODE_PATH', 'DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY'].includes(key.toUpperCase())) delete workerEnv[key];
     for (const key of Object.keys(env)) if (['NODE_OPTIONS', 'NODE_PATH', 'DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY'].includes(key.toUpperCase())) delete env[key];
     const worker = "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',b=>{s+=b;if(s.length>2000000)process.exit(2)});process.stdin.on('end',()=>{try{const c=JSON.parse(s);const p=require('child_process').spawn('git',c.args,{cwd:process.cwd(),env:c.env,shell:false,windowsHide:true,stdio:['ignore','pipe','pipe']});p.stdout.pipe(process.stdout);p.stderr.pipe(process.stderr);p.once('error',()=>process.exit(127));p.once('close',n=>process.exit(Number.isInteger(n)?n:1));}catch{process.exit(2)}});";
-    const child = spawn(process.execPath, ['-e', worker], { cwd: root, env: workerEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--require', guardWorkerPath(), '-e', worker], { cwd: root, env: workerEnv, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
     let code: number | null = null, closedFlag = false, dispatched = false, total = 0, failure = '';
     const out: Buffer[] = [], err: Buffer[] = [];
     const closed = new Promise<void>(resolve => { child.once('error', () => { closedFlag = true; resolve(); }); child.once('close', value => { code = value; closedFlag = true; resolve(); }); });

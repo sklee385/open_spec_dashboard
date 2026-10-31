@@ -11,7 +11,7 @@ import { browserBuildFixture, browserFixtureConfig } from './fixtures/browser-bu
 import { liveBrowser } from '../src/browser/browser-lease';
 const mock = vi.hoisted(() => ({ fork: vi.fn(), guard: vi.fn(), stop: vi.fn() }));
 vi.mock('node:child_process', async original => ({ ...await original<any>(), fork: mock.fork }));
-vi.mock('../src/browser/browser-job', () => ({ guardBrowserProcess: mock.guard }));
+vi.mock('../src/browser/browser-job', async original => ({ ...await original<any>(), guardBrowserProcess: mock.guard }));
 vi.mock('../src/browser/browser-process', () => ({ stopOwnedProcess: mock.stop }));
 let store: WorkStore, browser: BrowserService, a: Work, b: Work, services: BrowserService[], other: WorkStore | undefined;
 let workers: any[];

@@ -20,7 +20,7 @@ import { browserDirectory } from './browser-runtime';
 import { localRuntimeDirectory } from '../runtime';
 import type { BrowserOutcome } from './browser-runner';
 import { prepareBrowserWitness, bindBrowserWitness, recoverBrowserWitness } from './browser-witness';
-import { guardBrowserProcess } from './browser-job';
+import { guardBrowserProcess, guardWorkerPath } from './browser-job';
 import { BrowserMailbox } from './browser-mailbox';
 import { desktopHealth } from '../desktop/health';
 import { VerificationSnapshots, type VerificationSnapshot } from './verification-snapshot';
@@ -215,7 +215,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         for (const key of ['SystemRoot', 'SYSTEMROOT', 'SystemDrive', 'COMSPEC', 'TEMP', 'TMP', 'PATHEXT', 'PATH', 'Path']) if (process.env[key]) env[key] = process.env[key];
         const runtime = localRuntimeDirectory(); if (runtime) env.OPENSPEC_NODE_DIRECTORY = runtime;
         resolvePreparation();
-        const child = active.child = fork(source, [], { execPath: process.execPath, execArgv: source.endsWith('.ts') ? ['--import', pathToFileURL(require.resolve('tsx')).href] : [], env, silent: true, windowsHide: true });
+        const child = active.child = fork(source, [], { execPath: process.execPath, execArgv: ['--require', guardWorkerPath(), ...(source.endsWith('.ts') ? ['--import', pathToFileURL(require.resolve('tsx')).href] : [])], env, silent: true, windowsHide: true });
         row.workerSpawned = true; row.processId = child.pid ?? null;
         child.once('close', () => { closed = true; row.workerClosed = true; lease.proof = observeTermination(); resolveClosed(); void finish(); });
         child.once('error', () => { void stop(); });

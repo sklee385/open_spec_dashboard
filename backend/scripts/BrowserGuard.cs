@@ -40,8 +40,12 @@ public static class BrowserGuard {
   public static int Main(string[] args) {
     IntPtr job=IntPtr.Zero, process=IntPtr.Zero, parent=IntPtr.Zero, buffer=IntPtr.Zero;
     FileStream witness=null; string witnessNonce=null; bool assigned=false;
-    FileStream head=null; bool pinned=false, browserJob=false; int result=1; uint owner=0, host=0;
+    FileStream head=null; bool pinned=false, browserJob=false, handleProof=false; string handleNonce=null; int result=1; uint owner=0, host=0;
     try {
+      if(args.Length>=4 && args[0]=="HANDLE-PROOF-V1") {
+        handleProof=true;handleNonce=args[1];if(!System.Text.RegularExpressions.Regex.IsMatch(handleNonce,"\\A[a-f0-9]{64}\\z"))return 2;
+        string[] request=new string[args.Length-2];Array.Copy(args,2,request,0,request.Length);args=request;
+      }
       browserJob=(args.Length==3 || args.Length==5) && args[2]=="BROWSER-JOB-V2";
       if((args.Length!=2 && args.Length!=4 && !browserJob) || !uint.TryParse(args[0], out owner) || !uint.TryParse(args[1], out host) || owner==0 || host==0) return 2;
       if(browserJob && args.Length==5) {
@@ -53,8 +57,10 @@ public static class BrowserGuard {
       Extended info=new Extended(); info.BasicLimitInformation.LimitFlags=0x2000;
       buffer=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Extended))); Marshal.StructureToPtr(info, buffer, false);
       if(!SetInformationJobObject(job, 9, buffer, (uint)Marshal.SizeOf(typeof(Extended)))) throw new Exception("job policy failed");
-      process=OpenProcess(0x00100101, false, owner); parent=OpenProcess(0x00100000, false, host);
-      if(process==IntPtr.Zero || parent==IntPtr.Zero || !AssignProcessToJobObject(job, process)) throw new Exception("job assignment failed");
+      process=OpenProcess(0x00100101, false, owner); if(!handleProof)parent=OpenProcess(0x00100000, false, host);
+      if(process==IntPtr.Zero || !handleProof && parent==IntPtr.Zero)throw new Exception("process handle failed");
+      if(handleProof){Console.WriteLine("BOUND HANDLE-PROOF-V1 "+handleNonce);Console.Out.Flush();if(Console.ReadLine()!="ASSIGN HANDLE-PROOF-V1 "+handleNonce)throw new Exception("process identity authorization failed");}
+      if(!AssignProcessToJobObject(job,process))throw new Exception("job assignment failed");
       assigned=true;
       if(witness!=null) WriteWitness(witness,"READY",witnessNonce,owner);
       if(args.Length==4) {
@@ -66,10 +72,11 @@ public static class BrowserGuard {
         if(offset!=bytes.Length || Encoding.UTF8.GetString(bytes).Trim()!="ref: "+args[3]) throw new Exception("head ref changed");
         pinned=true;
       }
+      if(handleProof){Console.WriteLine("READY HANDLE-PROOF-V1");Console.Out.Flush();}
       Console.WriteLine(browserJob ? "READY BROWSER-JOB-V2" : pinned ? "READY HEAD-PIN-V1" : "READY"); Console.Out.Flush();
-      if(browserJob) {
-        Thread input=new Thread(delegate() { try { string line; while((line=Console.ReadLine())!=null) if(line=="STOP BROWSER-JOB-V2") { Interlocked.Exchange(ref stopRequested,1); return; } Interlocked.Exchange(ref stopRequested,1); } catch { Interlocked.Exchange(ref stopRequested,1); } }); input.IsBackground=true; input.Start();
-        while(Interlocked.CompareExchange(ref stopRequested,0,0)==0) { uint wait=WaitForMultipleObjects(2,new IntPtr[]{process,parent},false,100); if(wait==0xffffffff) throw new Exception("job wait failed"); if(wait!=258) break; }
+      if(browserJob || handleProof) {
+        Thread input=new Thread(delegate() { try { string line; while((line=Console.ReadLine())!=null) if(line=="STOP BROWSER-JOB-V2" || line=="STOP HANDLE-PROOF-V1") { Interlocked.Exchange(ref stopRequested,1); return; } Interlocked.Exchange(ref stopRequested,1); } catch { Interlocked.Exchange(ref stopRequested,1); } }); input.IsBackground=true; input.Start();
+        while(Interlocked.CompareExchange(ref stopRequested,0,0)==0) { uint wait=WaitForMultipleObjects(handleProof ? 1U : 2U,handleProof ? new IntPtr[]{process} : new IntPtr[]{process,parent},false,100); if(wait==0xffffffff) throw new Exception("job wait failed"); if(wait!=258) break; }
       } else if(WaitForMultipleObjects(2, new IntPtr[]{ process, parent }, false, 0xffffffff)==0xffffffff) throw new Exception("job wait failed");
       result=0;
     } catch { Console.Error.WriteLine("browser process ownership failed: " + Marshal.GetLastWin32Error()); result=1; }
