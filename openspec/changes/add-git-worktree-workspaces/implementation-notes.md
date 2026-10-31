@@ -444,3 +444,10 @@ $env:TMP = $env:TEMP
 - Codex 내장 브라우저에서 준비 도중 WorkIntegration이 먼저 예약 사전 조회를 실행해 공간 식별 오류를 보이고, ready 후에도 같은 요청 목록이라 자동 재조회하지 않는 현상을 확인했다. 실제 Work GET의 recovery는정상/thread-unknown(required:false), WorkspaceService 소유 경계는 정상이었다. 수동 기준 재조회로 정상 HEAD가 표시됐다.
 - WorkRoom은 공간 종류 판정과 업무ID에 묶은 준비 상태를 따로 보존한다. 통합 패널의 읽기/poll은 같은 업무의 ready/removed 상태에서만 활성화하고 준비 완료 전환에서 다시 읽는다. mutation을 자동 요청하지 않는다.
 - 기존 active 중지→재개 read-only 회귀1개28ms 통과. frontend build18.78초 통과(index-DreLGNLD.js). 실제 브라우저는 새 정적 빌드를 reload해 이어서 확인 중이다. 백엔드/Chromium의 변경 없는 검사는 반복하지 않았다.
+
+### 2026-10-31 패키지의 오래된 네이티브 가드 차단 (9.3 일부)
+
+- 패키징은 BrowserGuard.exe의 존재만 검사하여 새 backend와 예전 가드를 묶을 수 있었다. 실제 회귀에서 source는 새 버전인데 old guard만 존재하는 fixture가 거부되지 않는 RED(예상 예외 없음)를 확인했다.
+- setup-browser.ps1의 가드 컴파일 성공 후 BrowserGuard.build.json(schema1/protocol browser-job-v2-witness-v1/sourceSha256/binarySha256)을 기록한다. desktop/browser-runtime.cjs는 현재 소스·실행 파일과 두 hash가 일치하지 않으면 복사·패키지 생성을 시작하지 않는다. 이전 가드로 fallback하거나 원본 runtime을 바꾸지 않는다.
+- 관련 desktop/test/browser-runtime.test.cjs의2개 통과(74.8914ms): Chromium/guard 누락 거부, 일치한 runtime 복사, 기록 누락·다른 소스·다른 바이너리 거부 및 실패 시 destination 미생성을 확인했다. fixture 검증이며 설치본/무설치 실행 smoke 성공으로 표현하지 않는다.
+- C 사본에는 Chromium 배포 폴더가 없고 운영 설치/활성화는 승인 범위 밖이다. 실제 패키지 실행/종료 smoke는 계속 미실시다. 기존 D Chromium은 읽기 전용 실행 근거에만 사용했다.

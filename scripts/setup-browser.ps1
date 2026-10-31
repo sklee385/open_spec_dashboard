@@ -14,4 +14,6 @@ try {
     New-Item -ItemType Directory -Force -Path $taskGuardDirectory | Out-Null
     & $taskGuardCompiler /nologo /target:exe "/out:$(Join-Path $taskGuardDirectory 'BrowserGuard.exe')" (Join-Path $taskProjectRoot 'backend/scripts/BrowserGuard.cs')
     if ($LASTEXITCODE -ne 0) { throw '브라우저 프로세스 가드 준비에 실패했습니다.' }
+    $taskGuardReceipt = @{ schemaVersion = 1; protocol = 'browser-job-v2-witness-v1'; sourceSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $taskProjectRoot 'backend/scripts/BrowserGuard.cs')).Hash.ToLowerInvariant(); binarySha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $taskGuardDirectory 'BrowserGuard.exe')).Hash.ToLowerInvariant() }
+    $taskGuardReceipt | ConvertTo-Json | Set-Content -Encoding utf8 -LiteralPath (Join-Path $taskGuardDirectory 'BrowserGuard.build.json')
 } finally { $env:PLAYWRIGHT_BROWSERS_PATH = $taskPreviousBrowserPath }
