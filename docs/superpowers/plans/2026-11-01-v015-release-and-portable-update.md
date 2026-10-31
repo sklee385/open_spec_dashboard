@@ -29,3 +29,11 @@
 지정0.1.3 portable의 실제 app.asar productName/정상 userData·config/data 계약과 바로가기 인자 부재를 확인했다. 같은 구형 앱의 데이터 소유 잠금을 배타적으로 확보하여 대상 프로필이 유휴임을 대조했다. 대상/다른 OpenSpecBoard 프로세스0개, 활성/대기 업무0개·pending 질문0개였다. 마지막 desktop-owner 기록은 다른 사본의 이력이므로 현재 대상 연결 증명으로 채택하지 않았다.
 
 앱25021개 파일과 프로필251개 파일(총10293233225bytes)의 전후/백업 SHA256 일치 및 WAL/SHM 포함을 확인했다. 별도 검증 DB의 quick_check는ok, 업무20개·이벤트310649개·기록173개였다. 실제 경로/파일별 manifest/데이터는 공개하지 않고 ignored .tools의 private 백업 기록에만 보관했다. 백업 후 대상 앱을 교체하지 않았으며 로컬 rollback 절차를 함께 남겼다.
+
+## 사전 CI와 검사 범위(2026-11-01)
+
+8193bac를 release/worktree-v0.1.15에 push하고 workflow_dispatch CI41249773899를1회만 요청했다. 정식 태그/릴리스는 만들지 않았다.07:47:57 KST 시작한 이 실행은 기존 desktop/backend/frontend 전체 검사와 빌드·패키지/교체 게이트를 포함한다. 사용자의 검사 범위 질문에 따라 추가 전체 실행/dispatch/job 재실행은 보류한다. 이미 실행 중인 CI는 임의 취소하지 않고 실제 결과를 확인한다. 게이트 삭제나 실패 무시는 하지 않는다.
+
+로컬은 backend/test/browser-snapshot-service.test.ts 한 파일15개만 검사했다. 최초 설정 로딩 및 전용 TEMP 쓰기 실패는 테스트가 시작되지 않은 환경 실패였다. workspace TEMP 실행의 사용자 상위 경로 realpath 제한도 별도로 구분했다. 기존 검증 환경에서12개 실패를 확인한 뒤, 준비 완료 전1초 대기/기본5초 예산·교차 시험 종료/닫힌 DB·구형 passed/status 계약의 fixture를 현재 계약에 맞췄다. 실제 호스트 빌드 산출물/identity를 생성하고 synthetic worker/Job과 실제 Chromium E2E 근거를 구분했다. 제품 종료/출처 보호는 변경하지 않았다. 수정 파일15/15가32초에 통과했다. 이 결과를 로컬 backend/frontend 전체 suite 성공으로 표현하지 않는다.
+
+현재 기존 CI8193bac의 나머지 결과는 진행 중이다. 추가 전체 실행이 필요해지면 먼저 범위를 명시하고 사용자 결정 범위에 맞춰 진행한다. 이후 오류 수정 검사는 영향을 받은 최소 파일/사례만 실행하고, 변하지 않은 성공 근거는 재사용한다.

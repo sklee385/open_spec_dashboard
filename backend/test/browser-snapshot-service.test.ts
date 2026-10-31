@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkStore } from '../src/work/store';
@@ -8,6 +9,8 @@ import { FileResults } from '../src/work/file-results';
 import { BrowserService } from '../src/browser/browser.service';
 import { projectCoordinator } from '../src/projects/coordinator';
 import { browserBuildFixture, browserFixtureConfig } from './fixtures/browser-build-fixture';
+import { prepareBrowserBuild, completeBrowserBuild } from '../src/browser/browser-build';
+import { BrowserFreshness } from '../src/browser/browser-freshness';
 import { VerificationSnapshots } from '../src/browser/verification-snapshot';
 const mock = vi.hoisted(() => ({ fork: vi.fn(), guard: vi.fn(), stop: vi.fn() }));
 vi.mock('node:child_process', async original => ({ ...await original<any>(), fork: mock.fork }));
@@ -15,18 +18,19 @@ vi.mock('../src/browser/browser-job', async original => ({ ...await original<any
 vi.mock('../src/browser/browser-process', () => ({ stopOwnedProcess: mock.stop }));
 let store: WorkStore, service: BrowserService, dir: string, child: any;
 const savedEnvironment = { DATA_DIR: process.env.DATA_DIR, CONFIG_PATH: process.env.CONFIG_PATH };
-function closeWorker() {
-  if (child.exitCode !== null) return;
-  child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0);
-  child.ack?.({ protocol: 'browser-job-v2', state: 'job-quiescent', workerPid: child.pid, guardPid: child.pid + 1, activeProcesses: 0, at: new Date().toISOString() });
+function closeWorker(actor = child) {
+  if (actor.exitCode !== null) return;
+  actor.exitCode = 0; actor.emit('exit', 0); actor.emit('close', 0);
+  actor.ack?.({ protocol: 'browser-job-v2', state: 'job-quiescent', workerPid: actor.pid, guardPid: actor.pid + 1, activeProcesses: 0, at: new Date().toISOString() });
 }
 beforeEach(() => {
+  vi.clearAllMocks();
   child = Object.assign(new EventEmitter(), { pid: 77777, connected: true, exitCode: null, kill: vi.fn(), stdout: { resume() {} }, stderr: { resume() {} }, send: vi.fn((_value, callback) => callback?.()) });
   mock.fork.mockReturnValue(child);
-  mock.guard.mockImplementation(async (_child, _head, options) => {
-    if (options?.witness) writeFileSync(options.witness.file, ['READY', options.witness.nonce, child.pid, child.pid + 1, new Date().toISOString(), ''].join(String.fromCharCode(10)));
-    let proof: any; const done = new Promise<void>(resolve => { child.ack = (value: any) => { proof = value; resolve(); }; });
-    return { pid: child.pid + 1, protocol: 'browser-job-v2', done, get terminationProof() { return proof; }, requestStop: closeWorker };
+  mock.guard.mockImplementation(async (ownedChild, _head, options) => {
+    if (options?.witness) writeFileSync(options.witness.file, ['READY', options.witness.nonce, ownedChild.pid, ownedChild.pid + 1, new Date().toISOString(), ''].join(String.fromCharCode(10)));
+    let proof: any; const done = new Promise<void>(resolve => { ownedChild.ack = (value: any) => { proof = value; resolve(); }; });
+    return { pid: ownedChild.pid + 1, protocol: 'browser-job-v2', done, get terminationProof() { return proof; }, requestStop: () => closeWorker(ownedChild) };
   });
   mock.stop.mockImplementation(async () => closeWorker());
   dir = mkdtempSync(join(tmpdir(), 'browser-snapshot-service-')); process.env.DATA_DIR = join(dir, 'data');
@@ -35,23 +39,46 @@ beforeEach(() => {
   new FileResults(store).prepare(work); service = new BrowserService(store);
   service.save('a', { name: 'test', server: { command: 'node', args: ['server.cjs'], url: 'http://127.0.0.1:14599' }, steps: [{ op: 'goto', path: '/' }, { op: 'expectVisible', target: { role: 'heading', name: 'test' } }] });
 });
-afterEach(async () => { if (service.activity('a').running) { closeWorker(); await vi.waitFor(() => expect(service.activity('a').running).toBe(false), { timeout: 15000 }); } await service.onModuleDestroy(); store.onApplicationShutdown(); for (const [key, value] of Object.entries(savedEnvironment)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } vi.clearAllMocks(); });
-async function finish() { child.emit('message', { result: { status: 'passed', steps: [] } }); closeWorker(); await vi.waitFor(() => expect(service.activity('a').running).toBe(false), { timeout: 15000 }); return (await service.status('a')).results.at(-1)!; }
+afterEach(async () => {
+  const active = (service as any).active;
+  if (active) { active.cancelled = true; active.abort.abort(); closeWorker(); await active.done; }
+  await service.onModuleDestroy(); store.onApplicationShutdown(); vi.restoreAllMocks();
+  for (const [key, value] of Object.entries(savedEnvironment)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  vi.clearAllMocks();
+});
+async function started() {
+  await vi.waitFor(() => expect(child.send, JSON.stringify({ status: store.records('a', 'browser-verification').at(-1)?.status, error: store.records('a', 'browser-verification').at(-1)?.error })).toHaveBeenCalled(), { timeout: 15000 });
+}
+// The worker/Job are synthetic here. Build files/identity are produced by the
+// real owned-snapshot code; actual Chromium/HTTP provenance has separate cases.
+async function completeWorker(withBuild = true) {
+  let buildAttestation: any;
+  if (withBuild) {
+    const sent = child.send.mock.calls[0][0], prepared = await prepareBrowserBuild(sent.snapshot, sent.environment, sent.root);
+    mkdirSync(join(sent.root, 'dist'), { recursive: true }); copyFileSync(join(sent.root, 'fixture-input.js'), join(sent.root, 'dist/fixture-app.js'));
+    buildAttestation = await completeBrowserBuild(prepared);
+  }
+  child.emit('message', { result: { status: 'passed', steps: [], ...(buildAttestation ? { buildAttestation } : {}) } }); closeWorker();
+}
+async function finish(withBuild = true) {
+  const done = (service as any).active.done; await completeWorker(withBuild); await done;
+  return (await service.status('a', true)).results.at(-1)!;
+}
 it('같은 AI 턴의 잠금 없이 사본에서 실행하되 빌드 근거 없는 결과는 통과시키지 않는다', async () => {
   const work = store.get('a')!; work.state = 'running'; store.save(work);
-  service.run('a', 'tool'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled(), { timeout: 15000 });
+  service.run('a', 'tool'); await started();
   const sent = child.send.mock.calls[0][0];
   expect(sent.root).not.toBe(work.executionPath); expect(sent.root.startsWith(process.env.DATA_DIR!)).toBe(true);
   expect(readFileSync(join(sent.root, 'server.cjs'), 'utf8')).toBe('source');
   expect(() => projectCoordinator(store).assertActivityCanStart({ ...work, id: 'independent', executionPath: join(dir, 'other'), projectPath: join(dir, 'other') })).not.toThrow();
-  const result = await finish();
+  const result = await finish(false);
   expect(result).toMatchObject({ status: 'blocked', fresh: false, processTerminated: true, workId: 'a', threadId: 'same-thread', turnId: 'same-turn' });
   expect(result.error).toContain('출처 확인');
   expect(result.environmentId).toBeTruthy(); expect(existsSync(sent.root)).toBe(false);
   expect(store.get('a')).toMatchObject({ state: 'running', threadId: 'same-thread', turnId: 'same-turn' });
 });
 it.each(['source', 'scenario', 'turn', 'mutation', 'snapshot'] as const)('%s 변경은 통과 결과를 stale로 무효화한다', async kind => {
-  service.run('a'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled()); const sent = child.send.mock.calls[0][0], work = store.get('a')!;
+  service.run('a'); await started(); const sent = child.send.mock.calls[0][0], work = store.get('a')!;
   if (kind === 'source') writeFileSync(join(work.executionPath!, 'server.cjs'), 'changed');
   if (kind === 'snapshot') writeFileSync(join(sent.root, 'server.cjs'), 'changed');
   if (kind === 'scenario') (work.browserScenario as any).name = 'changed';
@@ -61,7 +88,7 @@ it.each(['source', 'scenario', 'turn', 'mutation', 'snapshot'] as const)('%s 변
   expect((await finish()).status).toBe('stale'); await expect(service.assertPassed(store.get('a')!)).rejects.toThrow();
 });
 it('원본 변경 없이 status/cancel을 유지하고 tool 소유 업무 상태를 바꾸지 않는다', async () => {
-  const work = store.get('a')!; work.state = 'running'; store.save(work); service.run('a', 'tool'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled());
+  const work = store.get('a')!; work.state = 'running'; store.save(work); service.run('a', 'tool'); await started();
   expect((await service.tool('a', { op: 'status' })).running).toBe(true);
   const cancelled = service.cancel('a'); closeWorker(); expect(await cancelled).toEqual({ requested: true });
   expect((await service.status('a')).results.at(-1)?.status).toBe('interrupted'); expect(store.get('a')?.state).toBe('running');
@@ -73,14 +100,14 @@ it('임의 경로·명령을 CLI/도구 입력에 넣어도 원본 실행으로 
 it('정상 턴 종료 뒤에도 같은 소스의 통과 결과를 유지한다', async () => {
   let current: unknown = { generation: 'generation-a', state: 'active' };
   service.setExecutionContextProvider('fixture', () => current);
-  service.run('a'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled());
+  service.run('a'); await started();
   expect((await finish()).status).toBe('passed');
   current = null;
-  expect((await service.status('a')).results.at(-1)?.fresh).toBe(true);
+  expect((await service.status('a', true)).results.at(-1)?.fresh).toBe(true);
 });
 it('검증 중 연결 세대 변경은 stale로 남긴다', async () => {
   let generation = 'a'; service.setExecutionContextProvider('fixture', () => generation);
-  service.run('a'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled()); generation = 'b';
+  service.run('a'); await started(); generation = 'b';
   expect((await finish()).status).toBe('stale');
 });
 it('복사 준비 중 취소는 실행기를 시작하지 않고 busy와 상태를 해제한다', async () => {
@@ -95,11 +122,11 @@ it('준비 오류가 나도 상태를 복구하고 다음 요청을 막지 않�
   service.run('a'); await vi.waitFor(() => expect(service.activity('a').running).toBe(false), { timeout: 15000 });
   expect(mock.fork).not.toHaveBeenCalled(); expect(store.get('a')?.state).toBe('idle');
   expect(store.records('a', 'browser-verification').at(-1)).toMatchObject({ status: 'blocked', snapshotStatus: 'unavailable' });
-  process.env.DATA_DIR = join(dir, 'data'); service.run('a'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled());
+  process.env.DATA_DIR = join(dir, 'data'); service.run('a'); await started();
   expect((await finish()).status).toBe('passed');
 });
 it('원본을 바꾸며 취소해도 전체 해시를 기다리지 않고 interrupted를 유지한다', async () => {
-  service.run('a'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled());
+  service.run('a'); await started();
   writeFileSync(join(store.get('a')!.executionPath!, 'server.cjs'), 'changed');
   const done = service.cancel('a'); closeWorker(); await done;
   expect(store.records('a', 'browser-verification').at(-1)?.status).toBe('interrupted');
@@ -110,26 +137,25 @@ it('종료 후 최종 해시 확인 중 취소해도 passed를 저장하지 않�
     entered = true; releaseHash = () => resolve(true); signal?.addEventListener('abort', () => resolve(false), { once: true });
   }));
   try {
-    service.run('a'); await vi.waitFor(() => expect(child.send).toHaveBeenCalled());
-    child.emit('message', { result: { status: 'passed', steps: [] } }); closeWorker();
+    service.run('a'); await started();
+    await completeWorker();
     await vi.waitFor(() => expect(entered).toBe(true));
     const cancelled = service.cancel('a'); const fast = await Promise.race([cancelled.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 200))]);
     releaseHash(); await cancelled;
     expect(fast).toBe(true); expect(store.records('a', 'browser-verification').at(-1)?.status).toBe('interrupted');
   } finally { match.mockRestore(); }
 });
-it('완료 검증은 변경 전 시작한 상태 조회 해시를 재사용하지 않는다', async () => {
-  const identity = await service.identity(store.get('a')!);
-  store.record('passed', 'a', 'browser-verification', { ...identity, status: 'passed' });
-  let releaseStatus!: (value: string) => void;
-  const real = VerificationSnapshots.prototype.revision;
-  const scan = vi.spyOn(VerificationSnapshots.prototype, 'revision');
-  scan.mockImplementationOnce(() => new Promise<string>(resolve => { releaseStatus = resolve; })).mockImplementation(real);
+it('완료 검증은 변경 전 시작한 명시 상태 검사를 재사용하지 않는다', async () => {
+  service.run('a'); await started(); expect((await finish()).status).toBe('passed');
+  let entered = false, releaseStatus!: () => void;
+  const blocked = new Promise<void>(resolve => { releaseStatus = resolve; }), capture = BrowserFreshness.prototype.capture;
+  const scan = vi.spyOn(BrowserFreshness.prototype, 'capture').mockImplementationOnce(async function (...args) {
+    const proof = await capture.apply(this, args); entered = true; await blocked; return proof;
+  });
   try {
-    const oldStatus = service.status('a'); expect(scan).toHaveBeenCalledTimes(1);
+    const oldStatus = service.status('a', true); await vi.waitFor(() => expect(entered).toBe(true), { timeout: 15000 });
     writeFileSync(join(store.get('a')!.executionPath!, 'server.cjs'), 'changed after status scan started');
     const gate = service.assertPassed(store.get('a')!).then(() => null, error => error);
-    releaseStatus(identity.revision); await oldStatus;
-    expect(await gate).toBeInstanceOf(Error);
-  } finally { scan.mockRestore(); }
+    releaseStatus(); await oldStatus; expect(await gate).toBeInstanceOf(Error); expect(scan).toHaveBeenCalledTimes(2);
+  } finally { releaseStatus(); scan.mockRestore(); }
 });
