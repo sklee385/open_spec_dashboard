@@ -61,8 +61,9 @@ export class WorkspaceCleanup {
       const plan = { kind: 'management' as const, root: work.projectPath, commonDir: target.commonDir, spaces: [target.path], refs: ['refs/heads/' + target.branch] };
       try { if (!held) projectCoordinator(this.store).assertOperationCanStart(plan); } catch { block('space-busy', '해당 공간·관리 범위가 사용 중이거나 복구가 필요합니다'); }
       const tree = await cleanupManifest(target.path), identity = await cleanupManifest(target.container, ['project']);
-      target = { path: target.path, container: target.container, branch: target.branch, commonDir: target.commonDir, rootId: target.rootId, head: target.head, sourceHead: source.observation.head, ignored, unknownIgnored, disposablePaths: permitted, files: tree.count, bytes: tree.bytes, treeVersion: tree.version, identityVersion: identity.version, cleanVersion: observed.observation.version, captureId: retained?.retained.captureId };
-      if (identity.names.some(name => name !== 'identity.json') || identity.directories.some(name => name !== '' && name !== 'disabled-hooks')) block('unknown-container-files', '컨테이너에 소유가 확인되지 않은 파일이 있어 보존합니다');
+      const runtimeData = !candidateId && identity.directories.includes('runtime-data') && await this.emptyRuntimeData(work, target.container);
+      target = { runtimeData, path: target.path, container: target.container, branch: target.branch, commonDir: target.commonDir, rootId: target.rootId, head: target.head, sourceHead: source.observation.head, ignored, unknownIgnored, disposablePaths: permitted, files: tree.count, bytes: tree.bytes, treeVersion: tree.version, identityVersion: identity.version, cleanVersion: observed.observation.version, captureId: retained?.retained.captureId };
+      if (identity.names.some(name => name !== 'identity.json' && !(runtimeData && name === 'runtime-data/identity.json')) || identity.directories.some(name => !['', 'disabled-hooks', ...(runtimeData ? ['runtime-data', 'runtime-data/tmp', 'runtime-data/home', 'runtime-data/npm-cache'] : [])].includes(name))) block('unknown-container-files', '컨테이너에 소유가 확인되지 않은 파일이 있어 보존합니다');
     } catch (error) { block('ownership-unavailable', error instanceof Error ? error.message : '공간의 실제 소유를 확인할 수 없습니다'); target = undefined; }
     const version = blockers.length ? null : hash([work, target, this.controlVersion(work)]);
     let token: string | undefined;
@@ -110,6 +111,13 @@ export class WorkspaceCleanup {
         if(present||registrations.some(path=>path.replaceAll('\\','/').toLowerCase()===target.path.replaceAll('\\','/').toLowerCase()))throw new Error('Git 공간 제거 결과를 확인할 수 없습니다');
         if((await cleanupManifest(target.container,['project'])).version!==target.identityVersion)throw new Error('컨테이너 소유 또는 파일이 변경되어 보존했습니다');
         inspectWorkspacePath(target.container,this.settings.protectedPaths());
+        if(target.runtimeData){
+          if(!await this.emptyRuntimeData(work,target.container))throw new Error('로컬 준비 데이터가 변경되어 보존했습니다');
+          const runtime=join(target.container,'runtime-data');inspectWorkspacePath(runtime,this.settings.protectedPaths());
+          for(const name of ['tmp','home','npm-cache']){const path=join(runtime,name);let stat;try{stat=await lstat(path);}catch(error:any){if(error.code==='ENOENT')continue;throw error;}if(!stat.isDirectory()||stat.isSymbolicLink()||(await readdir(path)).length)throw new Error('빈 로컬 준비 폴더가 변경되어 보존했습니다');await rmdir(path);}
+          if(!await this.emptyRuntimeData(work,target.container))throw new Error('로컬 준비 소유 표시가 변경되어 보존했습니다');
+          await unlink(join(runtime,'identity.json'));await rmdir(runtime);
+        }
         const hooks=join(target.container,'disabled-hooks');let hookStat;try{hookStat=await lstat(hooks);}catch(error:any){if(error.code!=='ENOENT')throw error;}
         if(hookStat){if(!hookStat.isDirectory()||hookStat.isSymbolicLink()||(await readdir(hooks)).length)throw new Error('훅 차단 폴더의 소유 또는 빈 상태가 달라 보존했습니다');await rmdir(hooks);}
         await unlink(join(target.container,'identity.json'));await rmdir(target.container);
@@ -129,6 +137,15 @@ export class WorkspaceCleanup {
         return result;
       }finally{release();settle?.();}
     });
+  }
+  private async emptyRuntimeData(work: Work, container: string) {
+    const space=work.workspace,prepared=this.store.records(work.id,'workspace-local-preparation')[0];
+    if(!space||!space.preparationPolicyDigest||!prepared||prepared.status!=='ready'||prepared.workspaceId!==space.workspaceId||prepared.rootId!==space.rootId||prepared.projectId!==space.projectId||prepared.executionPath!==work.executionPath||prepared.policyDigest!==space.preparationPolicyDigest)return false;
+    const root=join(container,'runtime-data'),tree=await cleanupManifest(root);
+    if(tree.names.length!==1||tree.names[0]!=='identity.json'||tree.directories.some(name=>!['','tmp','home','npm-cache'].includes(name)))return false;
+    const path=join(root,'identity.json'),before=await lstat(path);if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.size>8192)return false;
+    const fd=await open(path,'r');
+    try{const opened=await fd.stat();if(opened.dev!==before.dev||opened.ino!==before.ino||opened.nlink!==1||!opened.isFile())return false;const bytes=Buffer.alloc(8193),part=await fd.read(bytes,0,bytes.length,0),after=await fd.stat();if(part.bytesRead!==before.size||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs)return false;const identity=JSON.parse(bytes.subarray(0,part.bytesRead).toString('utf8'));return Object.keys(identity).sort().join(',')==='schemaVersion,workId,workspaceId'&&identity.schemaVersion===1&&identity.workId===work.id&&identity.workspaceId===space.workspaceId;}finally{await fd.close();}
   }
   private controlVersion(work: Work) {
     return this.store.db.prepare("SELECT id,kind,json_extract(data,'$.status') status,json_extract(data,'$.owner') owner,json_extract(data,'$.runGeneration') runGeneration,json_extract(data,'$.processTerminated') processTerminated,json_extract(data,'$.candidateMutationVersion') candidateMutationVersion FROM records WHERE work_id=? ORDER BY id").all(work.id);

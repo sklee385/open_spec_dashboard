@@ -68,3 +68,25 @@ it('확인 뒤 실제 공간 경로가 교체되면 기존 폴더와 새 폴더�
  await expect(cleanup.remove(work.id,{requestKey:randomUUID(),token:preview.token,expectedVersion:preview.version,confirmed:true})).rejects.toThrow();
  expect(readFileSync(join(preserved,'code.txt'),'utf8')).toBe('base');expect(readFileSync(join(old,'new-user-file.txt'),'utf8')).toBe('new path content');expect(store.records(work.id,'workspace-cleanup')).toEqual([]);expect(git(source,'rev-parse','HEAD')).toBe(work.workspace!.baseCommit);
 });
+
+function preparedRuntimeData() {
+ const container=dirname(work.executionPath!),root=join(container,'runtime-data'),space=work.workspace!,policyDigest='a'.repeat(64);
+ mkdirSync(root);for(const name of ['tmp','home','npm-cache'])mkdirSync(join(root,name));writeFileSync(join(root,'identity.json'),JSON.stringify({schemaVersion:1,workId:work.id,workspaceId:space.workspaceId}));
+ space.preparationPolicyDigest=policyDigest;store.save(work);store.record(work.id+':local-preparation',work.id,'workspace-local-preparation',{status:'ready',workspaceId:space.workspaceId,rootId:space.rootId,projectId:space.projectId,executionPath:work.executionPath,policyDigest});return root;
+}
+it('로컬 준비가 만든 소유 identity와 빈 runtime 폴더만 개별 정리하고 데이터 파일은 보존한다',async()=>{
+ const runtime=preparedRuntimeData(),preview=await cleanup.preview(work.id);expect(preview,JSON.stringify(preview.blockers)).toMatchObject({canRemove:true,target:{runtimeData:true}});
+ const result=await cleanup.remove(work.id,{requestKey:randomUUID(),token:preview.token,expectedVersion:preview.version,confirmed:true});expect(result.status).toBe('removed');expect(existsSync(runtime)).toBe(false);expect(existsSync(dirname(work.executionPath!))).toBe(false);expect(readFileSync(join(source,'code.txt'),'utf8')).toBe('base');expect(new CompletedResults(store).header(work.id)).not.toBeNull();
+});
+it('미리보기 뒤 runtime 자료가 생기면 삭제하지 않고 기존 데이터를 보존한다',async()=>{
+ const runtime=preparedRuntimeData(),preview=await cleanup.preview(work.id);expect(preview.canRemove).toBe(true);
+ writeFileSync(join(runtime,'home','keep.txt'),'keep');const blocked=await cleanup.preview(work.id);expect(blocked.canRemove).toBe(false);await expect(cleanup.remove(work.id,{requestKey:randomUUID(),token:preview.token,expectedVersion:preview.version,confirmed:true})).rejects.toThrow();expect(readFileSync(join(runtime,'home','keep.txt'),'utf8')).toBe('keep');
+});
+it('runtime 소유 불일치와 Git 제거 도중 생긴 자료는 보존하고 미확인 결과로 남긴다',async()=>{
+ const runtime=preparedRuntimeData(),identity=join(runtime,'identity.json'),original=readFileSync(identity,'utf8'),record=store.records(work.id,'workspace-local-preparation')[0];
+ writeFileSync(identity,JSON.stringify({schemaVersion:1,workId:work.id,workspaceId:randomUUID()}));expect((await cleanup.preview(work.id)).canRemove).toBe(false);writeFileSync(identity,original);
+ store.record(record.id,work.id,'workspace-local-preparation',{...record,policyDigest:'b'.repeat(64)});expect((await cleanup.preview(work.id)).canRemove).toBe(false);store.record(record.id,work.id,'workspace-local-preparation',record);
+ const preview=await cleanup.preview(work.id);expect(preview.canRemove).toBe(true);const head=git(source,'rev-parse','HEAD'),actual=gitRunner.runGit;
+ vi.spyOn(gitRunner,'runGit').mockImplementation(async(root,args,options,optional)=>{const output=await actual(root,args,options,optional);if(args.includes('remove'))writeFileSync(join(runtime,'home','late.txt'),'preserve');return output;});
+ const result=await cleanup.remove(work.id,{requestKey:randomUUID(),token:preview.token,expectedVersion:preview.version,confirmed:true});expect(result).toMatchObject({status:'uncertain',processTerminated:true});expect(readFileSync(join(runtime,'home','late.txt'),'utf8')).toBe('preserve');expect(readFileSync(identity,'utf8')).toBe(original);expect(git(source,'rev-parse','HEAD')).toBe(head);expect(new CompletedResults(store).header(work.id)).not.toBeNull();
+});

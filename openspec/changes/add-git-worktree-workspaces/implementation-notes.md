@@ -468,3 +468,13 @@ $env:TMP = $env:TEMP
 - 새 C 전용 가드 폴더 .tools/qa-head-runtime/guard를 준비하고 별도 fixture c-njOwJP를 만들었다. 초기 업무·검증·커밋·후보 준비는 실제 서비스/API를 사용했고 결과를 fake pass로 주입하지 않았다. 해당 부분은 최종 UI 검증의 trusted 시작 fixture이며 실제 UI 수행과 구분한다. initial source HEAD2f383361410914937844538a6d7ffe99016125dd, result5aff22e6218c3270de06d8c6072daad7750b7ea5, candidate07fa237d6761c186ea6e150cb2dfdf2b229bc61e, candidateId2c4aa24b-98fe-4667-b5c3-87d979300476이다.
 - 새 helper의 stdin close 자동 종료와 이전56257 origin의 저장 초안 충돌 가능성을 확인했다. 데이터는 보존하고 새 helper만 정확한 소유 PTY/협조 종료 파일과 임의 origin으로 바꿨다. 세션80266은 exit1로 종료됐고28612는 diagnostics activeCount0 뒤 명시 close/exit0을 확인했다. 현재 새 fixture 실행은 세션7373, gateway60378/backend60377이다. 과거 구형 fixture/운영 서비스를 재시작하지 않았다.
 - setup-browser.ps1 빌드 JSON은 Windows PowerShell5에서도 BOM 없이 쓰도록 UTF8Encoding(false)로 고정했다. 스크립트 Parser 오류0, preamble0byte를 확인했다. 다운로드/설치를 실행한 근거가 아니다.
+
+### 2026-10-31 실제 완료 공간의 빈 runtime-data 정리 보강
+
+- 실제 IAB 정리 사전점검에서 사용자 파일이 없는 정상 준비 공간도 runtime-data 때문에 unknown-container-files로 막히는 결함을 발견했다. LocalPreparation은 명령이 없어도 identity.json과 tmp/home/npm-cache 빈 폴더를 항상 만들지만 기존 Cleanup은 이 관리 구조를 인식하지 않았다.
+- 새 허용은 업무의 준비 ready 기록·고정 경로·root/project/workspace ID·policy digest와 일치하는 runtime-data에 한정한다. identity는8192byte 이하·단일 regular file·FD 신원과 읽기 전후 상태를 대조하고 정확한 schema/work/workspace 필드만 허용한다. 예상한 빈 폴더와 identity 외의 자료·폴더는 계속 보존/차단한다. candidate나 미등록 폴더를 이 규칙으로 채택하지 않는다.
+- 정리 전 전체 raw manifest/version과 기존 완료·종료·소유 확인을 그대로 유지한다. 정상 Git remove 뒤에도 전체 manifest가 같고 runtime 소유가 다시 확인될 때만 빈 폴더를 개별 rmdir한다. 재귀 삭제·force·prune를 추가하지 않았다. 새 파일이 생기면 uncertain으로 보존한다. UI 삭제 범위에 runtime-data의 소유 표시와 빈 폴더를 명시했다.
+- 실제 경계 형태 RED1(unknown-container-files)을 확인한 뒤 관련 기존/신규4개16.24초 통과, 소유ID/정책 불일치 및 정상 Git remove 직후 runtime 파일 주입 결합1개6.635초 통과. 원본 HEAD·완료 기록과 추가된 파일을 보존했다. UI의 범위 안내·취소/응답 유실·만료3개314ms 통과. mock UI와 실제 Git/SQLite/파일 근거를 구분한다.
+- 새 fixture c-njOwJP의 실제 IAB에서 candidate07fa237d6761c186ea6e150cb2dfdf2b229bc61e, 검증 요청7dfb7526-1c88-439d-a062-c24a84264f40, 반영 요청3d63c6ba-6ebe-462b-b5f5-7c560f0fac5a가 통과/반영됨으로 표시됐다. 별도 결과 확인·완료 후 실제 CLI 보관은 dirty를 보존·차단했고, 시험 원본의 보관 문서만 명시 커밋1e36d1ba85b5fe131417ec67da790adbcddafb3d한 뒤 같은 화면에서 재확인하여 archived가 됐다. 새로운 CLI 보관 재실행을 요청하지 않았다.
+-6.5의 실제 UI 동선을 완료하여 OpenSpec apply 진행49/54를 확인했다.9.2~9.6은 이 시점 미완료다. cleanup 수정 반영을 위해 자기 새 fixture 세션7373만 정상 close/exit0 했으며 현재 backend build 통과, frontend build 결과를 회수 중이다. 운영 서비스/기존 D runtime은 변경하지 않았다.
+- 최종 runtime 정리 수정 뒤 backend build exit0, frontend build15.47초 exit0(index-BR2HcEWg.js)을 확인했다. 기존 Chromium/호스트 종료 검사는 관련 코드가 바뀌지 않아 반복하지 않았다.
