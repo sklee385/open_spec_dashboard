@@ -54,12 +54,41 @@ export class IntegrationVerification {
   private save(row: any) { this.store.record(row.id, row.workId, 'candidate-verification', row); }
   private read(root: string, args: string[]) { return runGit(root, ['-c', 'core.fsmonitor=false', ...args]).then(buffer => buffer.toString()); }
   private source(work: Work, root: string) {
-    const files = collectFiles(root, path => workspaceResourcePath(work, path), true);
+    const files = collectFiles(root, () => false, true);
     return hash([files, Object.keys(files).map(path => [path, lstatSync(join(root, path)).mode & 0o777])]);
   }
   /** Conversation state and updatedAt do not change the candidate's execution policy. */
   private workPolicy(work: Work) {
-    return [work.id, work.sourceId, work.projectPath, work.changeName, work.phase, work.executionPath, work.workspace, work.reviewedVersion, work.reviewedPlanRevision, work.sourceMutationVersion, work.verificationCommands, work.completedCommands, work.browserScenario];
+    return [work.id, work.sourceId, work.projectPath, work.changeName, work.phase, work.executionPath, work.workspace, work.reviewedVersion, work.reviewedPlanRevision, work.sourceMutationVersion, work.verificationScope, work.workVerificationCommands, work.verificationCommands, work.completedCommands, work.browserScenario];
+  }
+  private verificationPlan(work: Work, request: IntegrationRequest) {
+    const changed = request.candidateCommit ? readGitSync(request.executionPath, ['diff', '--name-only', '-z', request.targetHead, request.candidateCommit, '--']).split('\0').filter(Boolean).map(path => {
+      if (/(^|\/)package\.json$/.test(path)) try { return { path, before: readGitSync(request.executionPath, ['show', request.targetHead + ':' + path]), after: readGitSync(request.executionPath, ['show', request.candidateCommit + ':' + path]) }; } catch { /* New or deleted package changes require the broader plan. */ }
+      return { path };
+    }) : [];
+    return { ...this.works.execution.requiredPlan(work, changed, request.executionPath, request.verificationScope), choiceVersion: hash([this.workPolicy(work), request]) };
+  }
+  async selectPlan(workId: string, candidateId: string, body: any) {
+    if (!body || Object.keys(body).some(key => !['requestKey', 'confirmed', 'choiceVersion', 'scope'].includes(key)) || typeof body.requestKey !== 'string' || !/^[a-zA-Z0-9:_-]{1,160}$/.test(body.requestKey) || body.confirmed !== true || !['work', 'full'].includes(body.scope) || typeof body.choiceVersion !== 'string') throw new BadRequestException('검증 범위와 현재 선택 기준을 확인해 주세요');
+    const id = 'verification-plan:' + hash([workId, candidateId, body.requestKey]), fingerprint = hash(body);
+    const prior = this.store.records(workId, 'candidate-verification-plan').find(row => row.id === id);
+    if (prior) { if (prior.fingerprint !== fingerprint) throw new ConflictException('같은 요청 키의 내용이 다릅니다'); return prior; }
+    this.lifecycle.assertUnlocked(); desktopHealth(this.store).assertExecutionAllowed();
+    const { work, request } = this.request(workId, candidateId);
+    if (!['validating', 'ready'].includes(request.status) || this.rows(workId, candidateId).some(row => row.status === 'running' || row.processTerminated !== true)) throw new ConflictException('후보 실행·종료 확인을 마친 뒤 범위를 선택해 주세요');
+    if (this.verificationPlan(work, request).choiceVersion !== body.choiceVersion) throw new ConflictException('검증 선택 기준이 변경되었습니다. 다시 조회해 주세요');
+    const release = projectCoordinator(this.store).acquireOperation(this.plan(request));
+    try {
+      projectCoordinator(this.store).assertRecovery(this.plan(request));
+      const row = { id, fingerprint, status: 'selected', scope: body.scope };
+      this.store.transaction(() => {
+        const current = this.request(workId, candidateId);
+        if (hash([this.workPolicy(current.work), current.request]) !== body.choiceVersion) throw new ConflictException('검증 선택 기준이 변경되었습니다');
+        this.store.record(request.id, workId, 'integration-request', { ...current.request, verificationScope: body.scope, status: 'validating', verificationRefs: [], updatedAt: new Date().toISOString() });
+        this.store.record(id, workId, 'candidate-verification-plan', row);
+      });
+      return row;
+    } finally { release(); }
   }
   private preparation(work: Work) {
     const records = ['workspace-preparation', 'workspace-local-policy', 'workspace-local-preparation', 'workspace-local-private'].map(kind => [kind, this.store.records(work.id, kind)]);
@@ -97,7 +126,7 @@ export class IntegrationVerification {
     const packedPath = join(request.commonDir, 'packed-refs'); file(packedPath);
     const packed = existsSync(packedPath) ? readFileSync(packedPath, 'utf8').split('\n').filter(line => refs.has(line.trim().split(' ')[1])) : [];
     const owners = [join(request.managedPath, 'identity.json'), join(dirname(request.executionPath), 'identity.json'), join(dirname(request.workExecutionPath), 'identity.json')].map(path => [path, file(path)]);
-    const commands = this.works.execution.commands(work, 'full', undefined, request.executionPath);
+    const commands = this.verificationPlan(work, request).commands;
     return hash([this.workPolicy(work), this.preparation(work), this.works.execution.candidateCommandContext(commands), request, metadata, related, packed, owners, roots.map(root => this.source(work, root)), commands, ['integration-preparation', 'integration-edit'].map(kind => this.store.records(work.id, kind))]);
   }
   private async capture(workId: string, candidateId: string, requireClean: boolean) {
@@ -109,8 +138,8 @@ export class IntegrationVerification {
     const preparation = this.store.records(workId, 'integration-preparation').find(row => row.candidateId === candidateId && ['validating', 'conflicted'].includes(row.status));
     const edits = this.store.records(workId, 'integration-edit');
     if (!preparation || preparation.commit !== request.candidateCommit && !edits.some(row => row.candidateId === candidateId && row.status === 'committed' && row.commit === request.candidateCommit)) throw new ConflictException('후보 커밋의 준비·편집 소유 근거가 없습니다');
-    const commands = this.works.execution.commands(work, 'full', undefined, request.executionPath);
-    if (!commands.length) throw new ConflictException('필수 전체 검증 명령을 등록해 주세요. 미실행은 통과가 아닙니다');
+    const commands = this.verificationPlan(work, request).commands;
+    if (!commands.length) throw new ConflictException('변경 관련 검증 명령을 등록하거나 전체 검증을 명시적으로 선택해 주세요. 미실행은 통과가 아닙니다');
     const planRevision = this.works.planVersion(work, request.workExecutionPath);
     if (!work.reviewedVersion || planRevision !== work.reviewedVersion || request.reviewedVersion !== work.reviewedVersion) throw new ConflictException('최신 계획 검토가 필요합니다');
     if (snapshotRevision(this.works.execution.snapshot(work, request.workExecutionPath)) !== request.sourceRevision) throw new ConflictException('업무 결과 커밋 밖의 실제 소스가 변경되었습니다');
@@ -142,12 +171,12 @@ export class IntegrationVerification {
     ]);
     if (hash(again) !== hash([workIndex, originalIndex, workHead, originalHead, targetHead])) throw new ConflictException('후보 검증 확인 중 원본·업무 index 또는 HEAD가 변경되었습니다');
     const current = this.request(workId, candidateId);
-    if (fixed !== hash([this.workPolicy(current.work), current.request.id, current.request.fingerprint, current.request.candidateId, current.request.candidateCommit, current.request.candidateMutationVersion, current.request.targetHead, current.request.resultCommit, this.works.execution.commands(current.work, 'full', undefined, checkpoint.path)]) || hash(before) !== hash([this.source(work, request.executionPath), this.source(work, request.workExecutionPath), this.source(work, request.projectPath)]) || this.stamp(work, request) !== startingStamp) throw new ConflictException('후보 검증 기준을 읽는 중 소스·소유·명령이 변경되었습니다');
+    if (fixed !== hash([this.workPolicy(current.work), current.request.id, current.request.fingerprint, current.request.candidateId, current.request.candidateCommit, current.request.candidateMutationVersion, current.request.targetHead, current.request.resultCommit, this.verificationPlan(current.work, current.request).commands]) || hash(before) !== hash([this.source(work, request.executionPath), this.source(work, request.workExecutionPath), this.source(work, request.projectPath)]) || this.stamp(work, request) !== startingStamp) throw new ConflictException('후보 검증 기준을 읽는 중 소스·소유·명령이 변경되었습니다');
     const runtime = this.works.execution.candidateCommandContext(commands);
     const readPolicy = { attributesVersion: attributes.version, textConfigVersion: hash(textConfig), objectFormat: format.trim() };
     const checkPublication = () => this.stamp(work, request) === startingStamp && readGitTextAttributes(request.executionPath, tracked).version === attributes.version && readGitSync(request.executionPath, ['-c', 'core.fsmonitor=false', 'config', '--null', '--get-regexp', '^core[.](autocrlf|filemode|eol|safecrlf)$']) === textConfig;
     if (!checkPublication()) throw new ConflictException('후보 속성 또는 텍스트 정책이 수집 중 변경되었습니다');
-    const basis = { targetKind: 'integration-candidate', candidateId, candidateEpoch: request.candidateMutationVersion ?? null, candidateCommit: checkpoint.head, workHead: workHead.trim(), targetRef: `refs/heads/${request.targetBranch}`, targetHead: targetHead.trim(), originalHead: originalHead.trim(), source: before, index: hash(index), workIndex: hash(workIndex), originalIndex: hash(originalIndex), planRevision, reviewedVersion: work.reviewedVersion, sourceMutationVersion: work.sourceMutationVersion ?? null, workPolicyVersion: hash(this.workPolicy(work)), preparation: this.preparation(work), runtime, runtimeVersion: hash(runtime), candidatePlan: collectWorkspaceDocuments(request.executionPath, work.changeName).planRevision, originalPlan: collectWorkspaceDocuments(request.projectPath, work.changeName).planRevision, commandVersion: hash(commands), browserVersion: hash(work.browserScenario ?? null), readPolicy, clean };
+    const basis = { verificationScope: this.verificationPlan(work, request).scope, targetKind: 'integration-candidate', candidateId, candidateEpoch: request.candidateMutationVersion ?? null, candidateCommit: checkpoint.head, workHead: workHead.trim(), targetRef: `refs/heads/${request.targetBranch}`, targetHead: targetHead.trim(), originalHead: originalHead.trim(), source: before, index: hash(index), workIndex: hash(workIndex), originalIndex: hash(originalIndex), planRevision, reviewedVersion: work.reviewedVersion, sourceMutationVersion: work.sourceMutationVersion ?? null, workPolicyVersion: hash(this.workPolicy(work)), preparation: this.preparation(work), runtime, runtimeVersion: hash(runtime), candidatePlan: collectWorkspaceDocuments(request.executionPath, work.changeName).planRevision, originalPlan: collectWorkspaceDocuments(request.projectPath, work.changeName).planRevision, commandVersion: hash(commands), browserVersion: hash(work.browserScenario ?? null), readPolicy, clean };
     return { work, request, commands, basis, version: hash(basis), checkPublication };
   }
   private publish(work: Work, request: IntegrationRequest, ready: boolean, refs: string[], records: any[], check?: () => boolean) {
@@ -183,7 +212,8 @@ export class IntegrationVerification {
     let accepted = true;
     if (!running) try { accepted = this.publish(work, request, ready, verificationRefs, records, publication); } catch { accepted = false; }
     if (!accepted) { ready = cliPassed = false; for (const row of runs) row.fresh = false; error = '검증 조회 뒤 후보 세대·소스·정책 또는 새 검증 근거가 변경되었습니다'; }
-    return { candidateId, targetKind: 'integration-candidate', runs, ready, cliPassed: !!cliPassed, browserRequired, browserStatus, browserRunId: browserProof?.row.id ?? null, ...(error ? { error } : {}) };
+    let verificationPlan: ReturnType<IntegrationVerification['verificationPlan']> | undefined; try { verificationPlan = this.verificationPlan(this.request(workId, candidateId).work, this.request(workId, candidateId).request); } catch { /* Missing candidate remains blocked. */ }
+    return { candidateId, verificationPlan, targetKind: 'integration-candidate', runs, ready, cliPassed: !!cliPassed, browserRequired, browserStatus, browserRunId: browserProof?.row.id ?? null, ...(error ? { error } : {}) };
   }
   async preview(workId: string, candidateId: string) {
     const captured = await this.capture(workId, candidateId, true);
@@ -231,6 +261,13 @@ export class IntegrationVerification {
         const plan = this.plan(captured.request); release = projectCoordinator(this.store).acquireOperation(plan);
         const checked = await this.capture(workId, candidateId, true);
         if (checked.version !== captured.version) throw new ConflictException('후보 검증 준비 중 기준이 변경되었습니다');
+        const latest = this.rows(workId, candidateId).at(-1);
+        if (latest?.status === 'passed' && latest.processTerminated === true && latest.candidateVersion === checked.version && latest.commands?.length === checked.commands.length && latest.commands.every((result: any, index: number) => result.status === 'passed' && result.cacheable === true && result.processTerminated === true && result.terminationEvidence === 'job-and-worker-closed' && result.commandVersion === JSON.stringify(checked.commands[index]))) {
+          if (!checked.checkPublication()) throw new ConflictException('재사용 확인 중 검증 기준이 변경되었습니다');
+          const receipt = { ...latest, id, fingerprint, requestKey: input.requestKey, reusedFrom: latest.id, createdAt: new Date().toISOString() };
+          this.store.transaction(() => { admission.admit(); this.save(receipt); });
+          return receipt;
+        }
         const row: any = { id, workId, candidateId, fingerprint, requestKey: input.requestKey, targetKind: 'integration-candidate', candidateVersion: checked.version, basis: checked.basis, commands: [], status: 'running', processTerminated: false, owner: host, ownerProcessId: process.pid, runGeneration: randomUUID(), createdAt: new Date().toISOString(), intentId: `${id}:scope` };
         this.store.transaction(() => {
           projectCoordinator(this.store).assertRecovery(plan); if (!checked.checkPublication()) throw new ConflictException('검증 예약 직전 기준이 변경되었습니다'); admission.admit(); this.save(row);

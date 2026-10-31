@@ -81,7 +81,7 @@ export class CompletedResults {
   workRefs(work:Work):Ref[] {
     const refs:Ref[]=[];const commands=Array.isArray(work.completedCommands)?work.completedCommands:Array.isArray(work.verificationCommands)?work.verificationCommands:[];
     if(commands.length>256)throw new PayloadTooLargeException('완료 검증 요약 한도를 초과했습니다');
-    for(const command of commands){const row=this.store.db.prepare("SELECT id FROM records WHERE work_id=? AND kind='verification' AND json_extract(data,'$.commandId')=? AND json_extract(data,'$.scope')='full' ORDER BY rowid DESC LIMIT 1").get(work.id,command.id) as any;if(row)refs.push({id:row.id,kind:'verification'});}
+    for(const command of commands){const row=this.store.db.prepare("SELECT id FROM records WHERE work_id=? AND kind='verification' AND json_extract(data,'$.commandId')=? AND COALESCE(json_extract(data,'$.scope'),'full')=? ORDER BY rowid DESC LIMIT 1").get(work.id,command.id,work.verificationScope==='work'?'work':'full') as any;if(row)refs.push({id:row.id,kind:'verification'});}
     if(work.browserScenario){const row=this.store.db.prepare("SELECT id FROM records WHERE work_id=? AND kind='browser-verification' AND json_extract(data,'$.candidateId') IS NULL ORDER BY rowid DESC LIMIT 1").get(work.id) as any;if(row)refs.push({id:row.id,kind:'browser-verification'});}
     return refs;
   }

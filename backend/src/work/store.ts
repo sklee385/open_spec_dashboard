@@ -25,7 +25,7 @@ export interface IntegrationRequest extends IntegrationCandidate {
   commonDir: string; targetBranch: string; targetHead: string; workHead: string; reviewedVersion: string; sourceRevision: string; workVerificationRefs: string[];
   status: 'queued' | 'preparing' | 'conflicted' | 'validating' | 'ready' | 'applying' | 'uncertain' | 'failed' | 'cancelled' | 'applied' | 'removed';
   createdAt: string; updatedAt: string; appliedCommit?: string; error?: string;
-  resultCommit?: string; resultTree?: string;
+  resultCommit?: string; resultTree?: string; verificationScope?: 'work' | 'full';
 }
 export interface Work {
   id: string; sourceId: string; projectPath: string; changeName: string; requestKey: string;

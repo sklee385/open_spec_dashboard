@@ -149,7 +149,7 @@ it('소스 화면 변경은 원본 해시가 같아도 별도 업무 검증의 �
   const command = { id: 'test', command: process.execPath, args: ['-e', 'process.exit(0)'] }; current.verificationCommands = [command]; store.save(current);
   execution.prepare(current);
   const revision = execution.revision(current);
-  store.record('source-change-check', work.id, 'verification', { commandId: 'test', status: 'passed', revision, sourceMutationVersion: current.sourceMutationVersion, commandVersion: JSON.stringify(command) });
+  store.record('source-change-check', work.id, 'verification', { commandId: 'test', status: 'passed', revision, sourceMutationVersion: current.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: execution.verificationContext(current, command) });
   expect(execution.results(current, revision).at(-1).fresh).toBe(true);
   const file = (await request('projects/demo/file?path=code.json')).data;
   expect((await request('projects/demo/file', 'PUT', file)).status).toBe(200);

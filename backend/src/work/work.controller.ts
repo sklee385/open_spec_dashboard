@@ -24,7 +24,7 @@ export class WorkController {
     return { ...this.toolInfo(work), recovery, reviewRequired, reviewedVersion: unavailable || reviewRequired ? null : work.reviewedVersion,
       documents: unavailable ? [] : this.service.documents(work), events: this.service.store.events(id), questions: this.service.store.records(id, 'question'),
       queuedMessages: this.service.store.records(id, 'queued-message'), verifications: changeReport.retained ? new CompletedResults(this.service.store).verifications(id, changeReport.retained.captureId, 0, 25).results.filter(record => record.kind === 'verification').map(record => ({ ...record, fresh: false })) : unavailable ? this.service.store.records(id, 'verification').map(record => ({ ...record, fresh: false })) : this.service.execution.results(work, 'revision' in changeReport && typeof changeReport.revision === 'string' ? changeReport.revision : undefined, commands),
-      verificationCommands: commands.full, workVerificationCommands: commands.work, changes: changeReport.files, changeReport };
+      verificationPlan: unavailable || changeReport.retained ? undefined : this.service.execution.requiredPlan(work, changeReport.files, undefined, undefined, commands), verificationCommands: commands.full, workVerificationCommands: commands.work, changes: changeReport.files, changeReport };
   }
   @Get(':id/document') document(@Param('id') id: string, @Query('path') path: string) { return this.service.document(id, path); }
   @Put(':id/document') save(@Param('id') id: string, @Body() body: unknown) { return this.service.saveDocument(id, body); }

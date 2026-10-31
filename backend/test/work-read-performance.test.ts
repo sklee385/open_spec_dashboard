@@ -34,7 +34,7 @@ beforeAll(async () => {
     verificationCommands: [{ id: 'fixture', command: 'fixture', args: [] }], workVerificationCommands: [] };
   identityPath = join(container, 'identity.json'); identity = JSON.stringify({ schemaVersion: 1, workId: 'a', projectPath: source, ...original.workspace }); writeFileSync(identityPath, identity);
   docs = join(executionPath, 'openspec/changes/a'); store.save(original); original.reviewedVersion = works.planVersion(original); store.save(original); work = structuredClone(original);
-  const command = (work.verificationCommands as any[])[0]; store.record('baseline-verification', 'a', 'verification', { commandId: command.id, status: 'passed', scope: 'full', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command) });
+  const command = (work.verificationCommands as any[])[0]; store.record('baseline-verification', 'a', 'verification', { commandId: command.id, status: 'passed', scope: 'full', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(work, command) });
 });
 afterEach(() => { vi.restoreAllMocks(); work = structuredClone(original); store.save(work); writeFileSync(identityPath, identity); writeFileSync(join(docs, 'tasks.md'), '- [ ] task\n'); writeFileSync(join(docs, 'design.md'), '# Plan\n'); writeFileSync(join(work.executionPath!, 'code.ts'), 'export const value = 1;\n'); store.record('race-question', 'a', 'question', { status: 'answered' }); });
 afterAll(async () => { await app?.close(); delete process.env.CONFIG_PATH; delete process.env.DATA_DIR; });
@@ -90,7 +90,7 @@ it('full 검증 gate는 기본 작업 명령을 유도하거나 변경 보고서
   expect(result.workVerificationRefs).toEqual(['baseline-verification']); expect(report).not.toHaveBeenCalled(); expect(commands.mock.calls.every(call => call[1] !== 'work')).toBe(true);
 });
 it('내부에서 캡처한 revision은 버릴 snapshot을 만들지 않고 freshness에 사용한다', () => {
-  const command = { id: 'captured-command', command: 'fixture', args: [] }; work.verificationCommands = [command]; store.record('verified', 'a', 'verification', { commandId: command.id, status: 'passed', scope: 'full', revision: 'captured', sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command) });
+  const command = { id: 'captured-command', command: 'fixture', args: [] }; work.verificationCommands = [command]; store.record('verified', 'a', 'verification', { commandId: command.id, status: 'passed', scope: 'full', revision: 'captured', sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(work, command) });
   const snapshot = vi.spyOn(works.execution, 'revision'); expect(works.execution.results(work, 'captured').find(row => row.id === 'verified')!.fresh).toBe(true); expect(snapshot).not.toHaveBeenCalled();
   works.execution.results(work); expect(snapshot).toHaveBeenCalledTimes(1);
 });
@@ -111,4 +111,11 @@ it('완료·보관 문서는 현재 공간이 없어도 저장된 내용과 해�
     const historical = { ...work, phase, executionPath: 'missing', completedDocuments: { 'proposal.md': saved } }; store.save(historical);
     expect(works.document('a', 'proposal.md')).toEqual(saved); expect(works.documents(historical)).toEqual(['proposal.md']); expect(works.planVersion(historical)).toBe(hash('proposal.md\n# Saved\n'));
   }
+});
+
+it('명시한 작업 검증을 완료 조건과 통합 예약 근거에 동일하게 사용한다', async () => {
+  const command = { id: 'focused-plan', command: process.execPath, args: ['-e', 'process.exit(0)'] };
+  work.verificationScope = 'work'; work.workVerificationCommands = [command]; store.save(work);
+  store.record('focused-proof', work.id, 'verification', { commandId: command.id, scope: 'work', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(work, command) });
+  expect((await works.integrationReadiness(work.id, work.reviewedVersion!)).workVerificationRefs).toEqual(['focused-proof']);
 });

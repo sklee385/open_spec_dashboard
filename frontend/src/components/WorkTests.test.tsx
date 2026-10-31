@@ -29,3 +29,14 @@ it('실패 로그와 소요 시간을 표시하고 수정 요청을 준비한다
   expect(onFix).toHaveBeenCalledWith(expect.stringContaining('broken'));
   expect(screen.getByRole('heading', { name: '작업 테스트 · 미검증' })).toBeInTheDocument();
 });
+
+it('과거 실패와 최신 결과에 가려진 실패는 기본 수정 요청에서 제외한다', () => {
+  const onFix = vi.fn();
+  render(<WorkTestResults workCommands={commands} fullCommands={commands} results={[
+    { id: 'old', commandId: 'test', scope: 'full', status: 'failed', fresh: false, stdout: '', stderr: 'old failure', code: 1 },
+    { id: 'earlier', commandId: 'test', scope: 'work', status: 'failed', fresh: true, stdout: '', stderr: 'earlier failure', code: 1 },
+    { id: 'latest', commandId: 'test', scope: 'work', status: 'passed', fresh: true, stdout: '', stderr: '', code: 0 },
+  ]} onFix={onFix} />);
+  expect(screen.queryByRole('button', { name: '실패 결과로 수정 요청' })).not.toBeInTheDocument();
+  expect(screen.getByText(/old failure/)).toBeInTheDocument();
+});

@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from '../test/render';
 import { CandidateLifecycle } from './CandidateLifecycle';
 const candidate = { id: 'integration', candidateId: 'c', status: 'ready', version: 1, targetBranch: 'main', targetHead: 'target', workHead: 'work', candidateCommit: 'candidate', executionPath: 'C:/owned/c', conflicts: [] };
-const verification = { candidateId: 'c', candidateVersion: 'version', executionPath: 'C:/owned/c', commands: [{ id: 'test', command: 'npm', args: ['test'] }], runs: [], cliPassed: true, browserRequired: false, browserStatus: 'not-required', ready: true };
+const verification = { verificationPlan: { scope: 'full', reason: '명시적으로 선택한 전체 계획', choiceVersion: 'choice-version' }, candidateId: 'c', candidateVersion: 'version', executionPath: 'C:/owned/c', commands: [{ id: 'test', command: 'npm', args: ['test'] }], runs: [], cliPassed: true, browserRequired: false, browserStatus: 'not-required', ready: true };
 const status = { candidateId: 'c', receipt: null, receipts: [], live: { state: 'settled' }, observation: { state: 'not-checked' } };
 beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
 function api(values: { browser?: boolean; applied?: boolean } = {}) {
@@ -126,4 +126,15 @@ it('keeps a running verification readable without requesting a conflicting new p
   expect(fetcher.mock.calls.some(([url])=>url.endsWith('/verification/preview'))).toBe(false);
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.getByRole('button',{name:'원본에 명시적으로 반영'})).toBeDisabled();
+});
+
+it('후보의 검사 범위를 현재 선택 기준으로만 변경하고 재확인한다', async () => {
+  const fetcher = api(); render(<CandidateLifecycle workId="w" candidate={candidate} />);
+  await screen.findByText('현재 관측');
+  fireEvent.click(screen.getByRole('button', { name: '후보 검증 기준·결과 확인' }));
+  await screen.findByText('명시적으로 선택한 전체 계획');
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'work' } });
+  await waitFor(() => expect(fetcher.mock.calls.some(([url, init]) => url.endsWith('/verification/plan') && init?.method === 'POST')).toBe(true));
+  const call = fetcher.mock.calls.find(([url, init]) => url.endsWith('/verification/plan') && init?.method === 'POST')!;
+  expect(JSON.parse(String(call[1]?.body))).toMatchObject({ confirmed: true, scope: 'work', choiceVersion: 'choice-version' });
 });

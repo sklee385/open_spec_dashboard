@@ -23,7 +23,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 let app: any, base: string, source: string, store: WorkStore, work: Work, works: WorkService, reserved: any;
 const savedEnv = { CONFIG_PATH: process.env.CONFIG_PATH, DATA_DIR: process.env.DATA_DIR, WORKSPACE_ROOT: process.env.WORKSPACE_ROOT };
 async function api(path: string, body?: unknown) { const r = await fetch(`${base}/api/work/a/integration/${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: r.status, data: await r.json() }; }
-function verified() { const command = works.execution.commands(work)[0]; store.record('verified', 'a', 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command) }); }
+function verified() { const command = works.execution.commands(work)[0]; store.record('verified', 'a', 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(work, command) }); }
 beforeEach(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'c-')); source = join(dir, 's'); mkdirSync(source); mkdirSync(join(dir, 'c'));
   git(source, 'init', '-b', 'main'); git(source, 'config', 'core.autocrlf', 'false'); git(source, 'config', 'user.name', 'Fixture'); git(source, 'config', 'user.email', 'fixture@example.test');
@@ -74,6 +74,9 @@ it('후보 CLI는 실제 후보 cwd를 사용하며 업무 통과를 재사용�
   for (let n = 0; n < 100; n++) { status = await api(`${reserved.candidateId}/verification/status`); if (status.data.runs.at(-1)?.status !== 'running') break; await new Promise(resolve => setTimeout(resolve, 100)); }
   expect(status.data.runs.at(-1).status).toBe('passed'); expect(status.data.runs.at(-1).commands[0].stdout).toContain(path);
   expect(status.data.ready).toBe(true); expect(store.get('a')?.state).toBe('idle'); expect(git(source, 'rev-parse', 'HEAD')).toBe(sourceHead); expect(git(work.executionPath!, 'rev-parse', 'HEAD')).toBe(workHead);
+  const samePreview = await api(`${reserved.candidateId}/verification/preview`);
+  const reused = await api(`${reserved.candidateId}/verification/run`, { ...input, requestKey: 'reuse', candidateVersion: samePreview.data.candidateVersion });
+  expect(reused.data).toMatchObject({ status: 'passed', reusedFrom: run.data.id });
   writeFileSync(join(path, 'code.txt'), 'external candidate edit');
   const stale = await api(`${reserved.candidateId}/verification/results`); expect(stale.data.runs.at(-1).fresh).toBe(false); expect(stale.data.ready).toBe(false); expect(store.integrationRequests()[0].status).toBe('validating');
   expect((await api(`${reserved.candidateId}/verification/run`, { ...input, requestKey: 'dirty' })).status).toBe(409);
@@ -294,4 +297,16 @@ it('종료 receipt 유실: 같은 live owner의 확인된 종료만 명시 recon
   rejectWrites = false;
   const reconciled = await api(`${reserved.candidateId}/verification/reconcile`, { runId: row.id, confirmed: true }); expect(reconciled.data.status).toBe('interrupted'); expect(reconciled.data.processTerminated).toBe(true); expect(app.get(DesktopLifecycle).requests).toBe(0);
   expect(store.records('a', 'candidate-verification')).toHaveLength(1); expect(store.integrationRequests()[0].status).toBe('validating');
+});
+
+it('후보 계획이 비었으면 전체로 자동 확대하지 않고 명시 선택과 현재 기준을 요구한다', async () => {
+  await seed();
+  const request = store.integrationRequests()[0]; store.record(request.id, 'a', 'integration-request', { ...request, verificationScope: 'work' });
+  const missing = await api(`${reserved.candidateId}/verification/results`);
+  expect(missing.data.ready).toBe(false); expect(missing.data.verificationPlan).toMatchObject({ scope: 'work' });
+  const body = { requestKey: 'full-plan', scope: 'full', confirmed: true, choiceVersion: missing.data.verificationPlan.choiceVersion };
+  expect((await api(`${reserved.candidateId}/verification/plan`, { ...body, choiceVersion: 'stale' })).status).toBe(409);
+  const selected = await api(`${reserved.candidateId}/verification/plan`, body); expect(selected.status).toBe(200);
+  expect((await api(`${reserved.candidateId}/verification/plan`, body)).data.id).toBe(selected.data.id);
+  const preview = await api(`${reserved.candidateId}/verification/preview`); expect(preview.status).toBe(200); expect(preview.data.verificationPlan.scope).toBe('full');
 });

@@ -36,7 +36,7 @@ type Room = { id: string; changeName: string; phase: string; state: string; thre
   recovery?: RecoveryStatus;
   sessionRecovery?: SessionRecoveryStatus;
   toolId?: string; toolConfigSnapshot?: { name: string; kind: string }; toolCapabilities?: { conversation: boolean; questions: boolean; approval: boolean; interrupt: boolean; nativeResume: boolean }; toolReadiness?: { ready: boolean; message: string };
-  documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationCommands: Command[]; workVerificationCommands?: Command[];
+  documents: string[]; events: Entry[]; questions: Question[]; verifications: Verification[]; verificationPlan?: { scope: TestScope; reason: string }; verificationCommands: Command[]; workVerificationCommands?: Command[];
   queuedMessages?: { id: string; text: string; status: string; error?: string }[];
   executionPath?: string; changeReport?: ChangeReport; changes: (FileDiffProps & { status: string })[] };
 type Doc = { path: string; content: string; version: string };
@@ -456,7 +456,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
           {!room?.documents.length && <p className="work-hint">{t('workRoom.createHint')}</p>}
         </>}
         {tab === 'results' && <div className="work-result-list"><h2>{t('workRoom.verification')}</h2>
-          <WorkTestResults workCommands={room?.workVerificationCommands || []} fullCommands={room?.verificationCommands || []} results={room?.verifications || []} onFix={text => { setMessage(text); setPane('chat'); }} />
+          <WorkTestResults plan={room?.verificationPlan} workCommands={room?.workVerificationCommands || []} fullCommands={room?.verificationCommands || []} results={room?.verifications || []} onFix={text => { setMessage(text); setPane('chat'); }} />
           <details><summary>{t('workRoom.addCommand')}</summary><select aria-label={t('tests.scope')} value={commandScope} onChange={event => setCommandScope(event.target.value as TestScope)}><option value="work">{t('tests.work')}</option><option value="full">{t('tests.full')}</option></select><input aria-label={t('workRoom.commandName')} placeholder={t('workRoom.commandName')} value={commandId} onChange={event => setCommandId(event.target.value)} /><input aria-label={t('workRoom.executable')} placeholder={t('workRoom.executableHint')} value={command} onChange={event => setCommand(event.target.value)} /><textarea aria-label={t('workRoom.args')} placeholder={t('workRoom.argsHint')} value={args} onChange={event => setArgs(event.target.value)} /><button disabled={busy || !room || !['idle', 'failed', 'interrupted'].includes(room.state) || ['completed', 'archived'].includes(room.phase)} onClick={() => room && void run(() => api(`work/${room.id}/verification-plan`, 'PUT', { scope: commandScope, commands: [...(commandScope === 'work' ? room.workVerificationCommands || [] : room.verificationCommands).filter(x => x.id !== commandId), { id: commandId, command, args: args.split('\n').filter(Boolean) }] }))}>{t('workRoom.saveCommand')}</button></details>
           {room && <ChangeResults workId={room.changeName} files={room.changes} report={room.changeReport} busy={busy} applyDisabled={gitManaged || room.phase !== 'verification'} onApply={gitManaged ? undefined : () => action('apply-changes')} onIsolate={!gitManaged && !room.executionPath && ['implementation', 'verification'].includes(room.phase) ? () => action('isolate-workspace') : undefined} />}
         </div>}

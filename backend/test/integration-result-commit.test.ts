@@ -25,7 +25,7 @@ async function fixture(id: string) {
   work.workspace!.status = 'ready'; work.workspace!.workspaceBaselineCommit = head; work.workspace!.sourcePlanRevision = collectWorkspaceDocuments(source, id).planRevision; store.save(work);
   work.reviewedVersion = works.planVersion(work); store.save(work);
   const command = { id: 'fixture', command: 'fixture-command', args: [] }; work.verificationCommands = [command]; store.save(work);
-  store.record(`verified-${id}`, id, 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command) });
+  store.record(`verified-${id}`, id, 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(work, command) });
   return work;
 }
 const input = (work: Work, key = 'integrate') => ({ requestKey: key, confirmed: true, targetBranch: 'main', expectedWorkHead: git(work.executionPath!, 'rev-parse', 'HEAD'), expectedTargetHead: git(source, 'rev-parse', 'main'), reviewedVersion: work.reviewedVersion });
@@ -41,7 +41,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await app?.close(); for (const key of ['CONFIG_PATH', 'DATA_DIR', 'OPENSPEC_WORKTREE_EXPERIMENTAL']) delete process.env[key]; vi.restoreAllMocks(); });
 const api = async (path: string, input?: any) => { const response = await fetch(`${base}/api/work/a/integration/${path}`, { method: input === undefined ? 'GET' : 'POST', headers: { 'content-type': 'application/json' }, ...(input === undefined ? {} : { body: JSON.stringify(input) }) }); return { status: response.status, data: await response.json() }; };
-function verified() { const command = works.execution.commands(a)[0]; store.record('verified-a', 'a', 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(a), sourceMutationVersion: a.sourceMutationVersion, commandVersion: JSON.stringify(command) }); }
+function verified() { const command = works.execution.commands(a)[0]; store.record('verified-a', 'a', 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(a), sourceMutationVersion: a.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(a, command) }); }
 async function preview() { verified(); const reserved = await request('a', body); expect(reserved.status).toBe(200); const view = await api('commit-preview'); expect(view.status).toBe(200); return { integrationId: reserved.data.id, requestKey: 'result', confirmed: true, previewVersion: view.data.version, paths: view.data.entries.filter((x: any) => x.selectable).map((x: any) => x.path), message: '선택한 업무 결과 반영' }; }
 it('선택한 전체 파일과 untracked를 정확히 커밋하고 원본·예약 기준을 보존한다', async () => {
   writeFileSync(join(a.executionPath!, 'code.txt'), 'changed'); writeFileSync(join(a.executionPath!, '한글 [x].txt'), 'new');

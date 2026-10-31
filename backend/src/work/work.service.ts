@@ -246,8 +246,8 @@ export class WorkService {
     const expected = JSON.stringify(work), snapshot = this.execution.snapshot(work, validatedRoot), sourceRevision = snapshotRevision(snapshot);
     await this.requireVerifications(work, sourceRevision, validatedRoot);
     this.assertVerificationUnchanged(work, expected, snapshot, validatedRoot);
-    const commands = this.execution.commands(work, 'full', undefined, validatedRoot), results = this.execution.results(work, sourceRevision, { full: commands, work: [] });
-    const workVerificationRefs = commands.map(command => results.filter(row => row.commandId === command.id && row.scope === 'full').at(-1)!.id);
+    const { commands, scope } = this.execution.requiredPlan(work, undefined, validatedRoot), results = this.execution.results(work, sourceRevision, { full: scope === 'full' ? commands : [], work: scope === 'work' ? commands : [] });
+    const workVerificationRefs = commands.map(command => results.filter(row => row.commandId === command.id && row.scope === scope).at(-1)!.id);
     if (work.browserScenario) workVerificationRefs.push(this.store.records(id, 'browser-verification').at(-1)!.id);
     return { work, sourceRevision, workVerificationRefs };
   }
@@ -255,8 +255,8 @@ export class WorkService {
     await this.browser.assertPassed(work);
     new FileResults(this.store).assertSourcePlan(work);
     if (this.store.records(work.id, 'question').some(unresolvedQuestion)) throw new ConflictException('미해결 질문이 있습니다');
-    const commands = this.execution.commands(work, 'full', undefined, validatedRoot), results = this.execution.results(work, revision, { full: commands, work: [] });
-    if (!commands.length || commands.some(command => { const result = results.filter(r => r.commandId === command.id && r.scope === 'full').at(-1); return !result || result.status !== 'passed' || !result.fresh; })) throw new ConflictException('모든 필수 검증이 최신 버전에서 통과해야 합니다');
+    const { commands, scope } = this.execution.requiredPlan(work, undefined, validatedRoot), results = this.execution.results(work, revision, { full: scope === 'full' ? commands : [], work: scope === 'work' ? commands : [] });
+    if (!commands.length || commands.some(command => { const result = results.filter(r => r.commandId === command.id && r.scope === scope).at(-1); return !result || result.status !== 'passed' || !result.fresh; })) throw new ConflictException('소스·계획·명령·실행 환경 변경을 확인하고 모든 필수 검증이 최신 버전에서 통과해야 합니다');
   }
   private async startGuidedReview(id: string) {
     const validate = () => {

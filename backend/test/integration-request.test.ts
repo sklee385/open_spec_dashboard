@@ -22,7 +22,7 @@ async function fixture(id: string) {
   work.workspace!.status = 'ready'; work.workspace!.workspaceBaselineCommit = head; work.workspace!.sourcePlanRevision = collectWorkspaceDocuments(source, id).planRevision; store.save(work);
   work.reviewedVersion = works.planVersion(work); store.save(work);
   const command = { id: 'fixture', command: 'fixture-command', args: [] }; work.verificationCommands = [command]; store.save(work);
-  store.record(`verified-${id}`, id, 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command) });
+  store.record(`verified-${id}`, id, 'verification', { commandId: command.id, scope: 'full', status: 'passed', revision: works.execution.revision(work), sourceMutationVersion: work.sourceMutationVersion, commandVersion: JSON.stringify(command), evidenceVersion: 1, processTerminated: true, terminationEvidence: 'job-and-worker-closed', contextVersion: works.execution.verificationContext(work, command) });
   return work;
 }
 const input = (work: Work, key = 'integrate') => ({ requestKey: key, confirmed: true, targetBranch: 'main', expectedWorkHead: git(work.executionPath!, 'rev-parse', 'HEAD'), expectedTargetHead: git(source, 'rev-parse', 'main'), reviewedVersion: work.reviewedVersion });

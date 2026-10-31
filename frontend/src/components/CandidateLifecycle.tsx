@@ -16,6 +16,7 @@ function LifecycleContent({ workId, candidate, phase = 'verification', state = '
   const [status, setStatus] = useState<CandidateApplyStatus | null>(null), [verification, setVerification] = useState<CandidateVerification | null>(null), [expectedVersion, setExpectedVersion] = useState('');
   const [confirmRun, setConfirmRun] = useState(false), [confirmApply, setConfirmApply] = useState(false), [confirmCancel, setConfirmCancel] = useState(false), [loading, setLoading] = useState(false);
   const [readError, setReadError] = useState(''), [verifyError, setVerifyError] = useState(''), [guardError, setGuardError] = useState(''); const generation = useRef(0);
+  const selectPlan = useExactMutation(`verification-plan:${scope}`);
   const run = useExactMutation(`verification-run:${scope}`), apply = useExactMutation(`candidate-apply:${scope}`), cancel = useExactMutation(`candidate-cancel:${scope}`);
   const savedKey = status?.receipt?.requestKey ?? (typeof apply.receipt?.body.requestKey === 'string' ? apply.receipt.body.requestKey : '');
   const reconcile = useExactMutation(`candidate-apply-reconcile:${scope}:${savedKey}`);
@@ -56,7 +57,7 @@ function LifecycleContent({ workId, candidate, phase = 'verification', state = '
     } catch (error) { setGuardError(error instanceof Error ? error.message : String(error)); return false; }
   };
   const applied = candidate.status === 'applied' || status?.receipt?.status === 'applied', cancelled = candidate.status === 'cancelled';
-  const busy = loading || run.busy || apply.busy || reconcile.busy || cancel.busy;
+  const busy = loading || selectPlan.busy || run.busy || apply.busy || reconcile.busy || cancel.busy;
   const running = verification?.runs.some(row => row.status === 'running') ?? false;
   const unknown = !status || !!readError || status.live.state !== 'settled';
   const ready = verification?.ready === true;
@@ -72,6 +73,7 @@ function LifecycleContent({ workId, candidate, phase = 'verification', state = '
     {loading && <p role="status">{t('flow.loading')}</p>}{[readError, verifyError, guardError].filter(Boolean).map((error, index) => <p role="alert" key={index}>{error}</p>)}{workDirty && <p role="status">{t('life.unsaved')}</p>}
     <button disabled={loading} onClick={() => void inspectVerification()}>{t('life.verifyInspect')}</button>
     {verification && <><p>{t(verification.cliPassed ? 'life.cliPassed' : 'life.cliMissing')}</p>{verification.browserRequired && <p>{t('life.browserRequired')}</p>}<p>{t(verification.ready ? 'life.ready' : 'life.notReady')}</p>{verification.error && <p role="status">{verification.error}</p>}
+      {verification.verificationPlan && <><p role="status">{verification.verificationPlan.reason}</p><label>{t('tests.scope')}<select aria-label={t('tests.scope')} value={verification.verificationPlan.scope} disabled={busy || workDirty || running || applied || cancelled || unknown} onChange={event => { if (guarded()) void selectPlan.run(`${base}/verification/plan`, { requestKey: crypto.randomUUID(), confirmed: true, choiceVersion: verification.verificationPlan!.choiceVersion, scope: event.target.value }).then(ok => { if (ok) void inspectVerification(); }); }}><option value="work">{t('tests.work')}</option><option value="full">{t('tests.full')}</option></select></label><MutationStatus {...selectPlan} retry={() => void selectPlan.run().then(ok => { if (ok) void inspectVerification(); })} /></>}
       <ul>{verification.commands?.map(command => <li key={command.id}>{command.id}: <code>{command.command}</code><ol>{command.args.map((arg, index) => <li key={index}>{arg}</li>)}</ol></li>)}</ul></>}
     {candidate.candidateCommit && <BrowserVerification workId={workId} candidateId={cid} phase={phase} state={state} active={active} canRun={!workDirty && ['validating', 'ready'].includes(candidate.status)} beforeRun={guarded} revision={candidate.candidateMutationVersion ?? candidate.candidateCommit} />}
     <label><input type="checkbox" checked={confirmRun} disabled={busy || workDirty || running} onChange={event => setConfirmRun(event.target.checked)} />{t('life.confirmRun')}</label>
