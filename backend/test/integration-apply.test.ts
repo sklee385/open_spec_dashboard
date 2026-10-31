@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, copyFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, copyFileSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { candidateIdentity } from '../src/work/integration-candidate';
@@ -13,6 +13,10 @@ import { WorkspaceSettingsService } from '../src/work/workspace-settings.service
 import { WorktreeManager } from '../src/work/worktree-manager';
 import { collectWorkspaceDocuments } from '../src/work/workspace-documents';
 import * as runner from '../src/projects/git-runner';
+import { WorkspaceService } from '../src/work/workspace.service';
+import { WorkspacePreparation } from '../src/work/workspace-preparation';
+import { WorkspaceCleanup } from '../src/work/workspace-cleanup';
+import { CompletedResults } from '../src/work/completed-results';
 import { DesktopLifecycle } from '../src/desktop/lifecycle';
 import { fileURLToPath } from 'node:url';
 vi.setConfig({ testTimeout: 60000, hookTimeout: 30000 });
@@ -238,3 +242,74 @@ it('ff 진입 직전 혼합case Git index env도 원본 밖 index를 쓰지 못�
   } finally { delete process.env.GIT_INDEX_FILE; delete process.env.git_index_file; if (priorKey && priorValue !== undefined) process.env[priorKey] = priorValue; }
   expect(git(source, 'rev-parse', 'HEAD')).toBe(reserved.candidateCommit); expect(git(source, 'diff', '--cached', '--name-only')).toBe('');
 });
+
+
+it('복합 장애 전체 흐름은 질문·원본·부분 파일을 보존하고 생성·반영·제거를 중복 실행하지 않는다', async () => {
+  // beforeEach/ready retain trusted document/verification seeds; mutations below
+  // use actual Git, SQLite, native Job and app HTTP, without an AI/model call.
+  const settings = app.get(WorkspaceSettingsService), root = dirname(source), rootA = work.workspace!.rootPath, aPath = work.executionPath!;
+  const spaces = new WorkspaceService(store, { protectedPaths: () => settings.protectedPaths() });
+  const question = { kind: 'input', status: 'pending', prompt: '설정 전환 동안 보존', threadId: work.threadId };
+  store.record('fault-question', work.id, 'question', question);
+  const questionBefore = store.records(work.id, 'question'), originalHead = git(source, 'rev-parse', 'HEAD');
+  const selected = settings.read(), check = settings.check({ version: selected.version, path: join(root, 'second-root') });
+  settings.save({ version: selected.version, token: check.token, confirmed: true });
+  const b: Work = { ...work, id: 'fault-b', changeName: 'fault-b', requestKey: 'fault-b', threadId: 'fault-thread-b', workspace: undefined, executionPath: undefined, phase: 'reviewed' }; store.save(b);
+  let creates = 0;
+  const broken = new WorktreeManager({ store, run: async (path, args) => {
+    const output = await runner.runGit(path, args, args.includes('worktree') && args.includes('add') ? { ownedJob: true } : {});
+    if (args.includes('worktree') && args.includes('add') && ++creates === 1) throw new Error('lost create response');
+    return output;
+  } });
+  const creation = { requestKey: 'fault-create', selectedBranch: 'main', baseCommit: originalHead, sourceHead: originalHead };
+  try { await expect(broken.create(b, settings, creation)).rejects.toThrow('lost create response'); } finally { await broken.close(); }
+  const bPath = store.get(b.id)!.executionPath!;
+  await new WorktreeManager({ store }).create(store.get(b.id)!, settings, creation);
+  expect(store.get(b.id)?.executionPath).toBe(bPath); expect(creates).toBe(1);
+  expect(git(source, 'worktree', 'list', '--porcelain').match(/^worktree /gm)).toHaveLength(3);
+  const offline = join(root, 'offline-a'); expect(dirname(rootA)).toBe(root); expect(dirname(offline)).toBe(root);
+  renameSync(rootA, offline);
+  try {
+    expect(() => spaces.path(store.get(work.id)!)).toThrow(/복구/);
+    expect(store.get(work.id)).toMatchObject({ executionPath: aPath, threadId: 'fixture' });
+    expect(store.records(work.id, 'question')).toEqual(questionBefore);
+    expect(existsSync(bPath)).toBe(true); expect(git(source, 'rev-parse', 'HEAD')).toBe(originalHead);
+  } finally { renameSync(offline, rootA); }
+  expect(spaces.path(store.get(work.id)!)).toBe(aPath);
+  let free = 1000; const partial = join(bPath, 'partial-install.txt');
+  const capacity = new WorkspacePreparation(store, { policy: () => ({ maxActiveWorks: 3, minimumFreeBytes: 100, retentionDays: 14 }), freeBytes: () => free });
+  await expect(capacity.run(store.get(b.id)!, bPath, 'install', async () => { writeFileSync(partial, 'keep partial'); free = 0; })).rejects.toThrow(/용량/);
+  expect(() => spaces.path(store.get(b.id)!)).toThrow(/복구/); expect(store.records(b.id, 'isolated-baseline')).toHaveLength(0);
+  expect(store.records(work.id, 'question')).toEqual(questionBefore);
+  // Explicit fixture answer ends the pending question; no automatic reply/replay.
+  store.record('fault-question', work.id, 'question', { ...question, status: 'answered', answer: 'continue fixture' });
+  await ready(); const body = await input('fault-apply'), actual = runner.runGit; let applied = 0;
+  let spy = vi.spyOn(runner, 'runGit').mockImplementation(async (path, args, options, optional) => {
+    const output = await actual(path, args, options, optional);
+    if (ff(args)) { applied++; throw new runner.GitError('lost ff response', 409, true, false); }
+    return output;
+  });
+  const response = await api(reserved.candidateId + '/apply', body); expect(response.data).toMatchObject({ status: 'applied', processTerminated: true });
+  expect((await api(reserved.candidateId + '/apply', body)).data.id).toBe(response.data.id); expect(applied).toBe(1); spy.mockRestore();
+  expect(git(source, 'rev-parse', 'HEAD')).toBe(reserved.candidateCommit);
+  // Seed only the already separately verified completion capture to isolate
+  // removal failure from the completion UI contract covered by actual IAB.
+  const completed = store.get(work.id)!; new CompletedResults(store).capture(completed, { files: [], source: 'completed' }, []); completed.phase = 'completed'; completed.state = 'idle'; store.save(completed);
+  const cleanup = new WorkspaceCleanup(store, settings), preview = await cleanup.preview(work.id);
+  expect(preview.canRemove, JSON.stringify(preview.blockers)).toBe(true);
+  const removal = { requestKey: randomUUID(), token: preview.token, expectedVersion: preview.version, confirmed: true };
+  const retained = new CompletedResults(store).header(work.id).retained.captureId, userFile = join(dirname(aPath), 'new-user-file.txt'); let removes = 0;
+  spy = vi.spyOn(runner, 'runGit').mockImplementation(async (path, args, options, optional) => {
+    const output = await actual(path, args, options, optional);
+    if (args.includes('worktree') && args.includes('remove')) { removes++; writeFileSync(userFile, 'keep concurrent file'); }
+    return output;
+  });
+  const result = await cleanup.remove(work.id, removal); expect(result).toMatchObject({ status: 'uncertain', processTerminated: true });
+  expect(await cleanup.remove(work.id, removal)).toEqual(result); expect(removes).toBe(1); spy.mockRestore();
+  expect(readFileSync(userFile, 'utf8')).toBe('keep concurrent file'); expect(readFileSync(partial, 'utf8')).toBe('keep partial');
+  expect(new CompletedResults(store).header(work.id).retained.captureId).toBe(retained);
+  expect(git(source, 'rev-parse', 'HEAD')).toBe(reserved.candidateCommit); expect(readFileSync(join(source, 'code.txt'), 'utf8')).toBe('base\n');
+  expect(git(source, 'show-ref', '--verify', 'refs/heads/' + work.workspace!.branch)).toBeTruthy();
+  expect(store.records(work.id, 'integration-apply')).toHaveLength(1); expect(store.records(work.id, 'workspace-cleanup')).toHaveLength(1);
+  expect(store.get(work.id)?.threadId).toBe('fixture'); expect(store.get(b.id)?.threadId).toBe('fault-thread-b');
+}, 180000);

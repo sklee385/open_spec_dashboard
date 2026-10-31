@@ -497,3 +497,15 @@ $env:TMP = $env:TEMP
 - 실제 통합 영향: 독립 Node 준비/비밀 환경 분리·준비 자손 종료2개(567/523ms), 실제 호스트 종료 두 경로(각854ms), 후보 cwd/업무 통과 비재사용·stale1개28.104초, 실제 ff-only 원본 반영1개18.724초, 구형 가드 미dispatch1개15.931초, 실제 Work/candidate Chromium 새 빌드/격리/종료1개88.708초 통과. 마지막 세 파일은 독립 실행 중이라 경과시간을 단일 성능 수치로 해석하지 않는다.
 - 기존 lifecycle mock은 새 경로 함수 export를 유지하도록 부분 mock으로 맞췄고 SQLite/소유·terminal DB 저장 실패·늦은 종료 명시 복구3개7.40초 통과했다. snapshot-service의 부분 mock은 import 호환만 수정했으며 그 파일 전체 통과를 주장하지 않는다. backend build exit0.
 - IAB 전체 동선 근거 JSON은931e018 제품 코드 시점이며, 이후 변경한 네이티브 실행 경계는 위 actual API/Job/Chromium 검사로 확인했다. 변경 없는 프런트/전체 IAB/전체 suite를 의례적으로 반복하지 않는다. 강제 OS 재부팅이나 legacy witness 없는 기록의 자동 해제는 수행·보장하지 않는다. OpenSpec9.2는 결합 장애 대조를 마치기 전 미완료로 유지한다.
+
+### 2026-11-01 일반 Git 변경의 실제 Job 종료와 9.2 결합 장애
+
+- 일반 Git 변경의 Windows taskkill/PID 종료와 manager/result/preparation/editing의 PID 부재·주기적 잠금 해제를 발견했다. Windows 중단은 직접 만든 ChildProcess의 보유 핸들만 사용하고, 워크트리 생성·결과 커밋·후보 준비/수정·개별 정리에는 ownedJob을 명시하여 기존 HANDLE IPC 신원 확인과 독립 Job active=0 뒤에만 반환한다. 원본 반영은 기존 HEAD pin을 함께 유지한다. 읽기 명령에는 Job을 추가하지 않았다.
+- native 종료 callback을 단계별로 저장하고 성공 응답 유실의 catch가 이미 확인된 종료를 false로 덮어쓰지 않게 했다. 종료/claim 증거가 없는 과거 기록은 PID 부재·TTL로 해제하지 않는다. 일반 Git 실행 중 호스트가 종료되어 callback이 저장되지 않은 경우의 자동 해제나 예전 recovery claim 양도는 보장하지 않는다. 별도 원격 Git 기능 전체를 Job으로 이행했다는 뜻도 아니다.
+- 실제 Git alias가 독립 자손을 만든 뒤 먼저 끝나는 검사에서 기존 실행은 종료 근거를 반환하지 않는 RED193ms였다. owned Job 적용 후 403ms 통과했고 반환 뒤 heartbeat가 변하지 않았다. 첫 fixture의 JS 줄바꿈/Windows 경로 오류에 의한 timeout은 제품 RED로 계산하지 않았다. 시험 자식 자체에도 유한 종료를 두었다.
+- 생성/결과 커밋 대표 2개46.50초, 후보 수정의 PID 부재/claim 보존·quit 응답 유실 관련3개180.10초, 후보 정상/종료 미확인과 정리 정상/새 파일 보존4개82.18초, 실제 ff 전후 오류2개(같은 실행의 다른 snapshot 실패와 분리), 마지막 결과/후보 CAS 후 오류 관찰 복구2개61.01초가 통과했다. 전체 파일 또는 전체 suite 통과를 뜻하지 않는다.
+- snapshot 부분 mock의 실제 확인에서는 예전 fixture에 등록 프로젝트·새 빌드 계약과 child close/Job ack가 없어 실패했다. 현재 계약으로 synthetic fixture를 맞추고 같은 AI 턴 사본/독립 업무 접근/원본 상태 보존과 buildAttestation 없는 passed 거부를 확인했다(선택1개1.95초). 실제 Chromium 성공 근거와 구분하며 그 파일의 나머지14개는 실행하지 않았다.
+- 9.2의 새 단일 결합 흐름은 실제 Git/SQLite/Job/임시 앱 HTTP를 사용해 설정 A→B, pending 질문/기존 thread/path 보존, 생성 응답 유실→같은 고정 공간 회복, A 루트 경로 단절→복원, B 설치 중 용량 부족/부분 파일 보존, 실제 원본 ff 성공 응답 유실→동일 키 재조회, Git 제거 직후 새 사용자 파일 주입→uncertain 보존을 연속 확인했다(1개21.23초). 원본 코드·완료 capture·브랜치·B 부분 파일·각 요청1개를 대조했다. 정리 키가 UUID가 아니었던 최초 시도는 fixture 계약 오류로 구분한다.
+- 경로 단절은 검증한 자기 임시 루트를 rename/복원한 것이며 실제 드라이브 탈착/OS 재부팅이 아니다. 이 흐름의 beforeEach/ready 문서/업무·후보 검증 seed와 완료 capture는 trusted fixture이고, AI 호출·전체 검증 명령·실제 완료 UI를 실행한 것으로 합치지 않는다. 그 동선은 기존 A/B 실제 명령과 IAB 근거를 유지한다. 별도 provisioner 결합1개18.87초에서도 실제 문서/로컬 준비와 같은 공간 복구를 확인했다.
+- 변경된 backend 최종 build exit0. 변경 없는 frontend build15.47초/index-BR2HcEWg.js 및 IAB931e018 근거는 재사용한다. 전체suite는 명시 요청이 없어 실행하지 않았고 관련 실행 경계·오류 복구만 분할 검증했다.9.2를 완료하여51/54이며 패키지/최종 범위/strict 보고는 계속한다.
+- 운영 D runtime을 수정하지 않고 기존 chromium-1248/ffmpeg/winldd를 새 C .tools/browser-runtime으로 읽기 전용 복사했다. 현재 C 컴파일 guard와 소스/바이너리 hash 기록을 조립했으며 설치·다운로드·운영 활성화가 아니다. 이전의 C runtime 부재 설명은 이 조립 전 이력이다. 실제 설치/무설치 실행 성공은 아직 주장하지 않는다.

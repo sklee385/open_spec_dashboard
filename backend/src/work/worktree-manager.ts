@@ -31,22 +31,19 @@ export class WorktreeManager {
   private async text(root: string, args: string[]) { return (await (this.options.run ? this.options.run(root, args) : runGit(root, args, { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024 }))).toString('utf8'); }
   private async mutateGit(work: Work, name: string, args: string[], request: OperationRequest) {
     const store = this.options.store!, coordinator = projectCoordinator(store), resources = coordinator.operationPlan(request), id = `${work.id}:git-${name}`;
-    const record = { scope: request.kind, root: request.root, commonDir: resources[0]?.commonDir, refs: resources.filter(row => row.kind === 'ref').map(row => row.ref!), affectedRoots: request.spaces ?? [request.root], status: 'running', terminationUnconfirmed: false, processId: undefined as number | undefined };
+    const record = { scope: request.kind, root: request.root, commonDir: resources[0]?.commonDir, refs: resources.filter(row => row.kind === 'ref').map(row => row.ref!), affectedRoots: request.spaces ?? [request.root], status: 'running', terminationUnconfirmed: false, processTerminated: false, terminationProof: undefined as unknown, processId: undefined as number | undefined };
     store.record(id, work.id, 'workspace-git-intent', record);
     try {
-      const output = this.options.run ? await this.options.run(request.root, args) : await runGit(request.root, args, { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024, onSpawn: pid => { record.processId = pid; store.record(id, work.id, 'workspace-git-intent', record); } });
+      const output = this.options.run ? await this.options.run(request.root, args) : await runGit(request.root, args, { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024, ownedJob: true, onTermination: evidence => { record.processTerminated = true; record.terminationProof = evidence; store.record(id, work.id, 'workspace-git-intent', record); }, onSpawn: pid => { record.processId = pid; store.record(id, work.id, 'workspace-git-intent', record); } });
       store.record(id, work.id, 'workspace-git-intent', { ...record, status: 'passed' }); return output;
     } catch (error: any) {
-      store.record(id, work.id, 'workspace-git-intent', { ...record, status: error instanceof GitError && !error.uncertain ? 'failed' : 'uncertain', terminationUnconfirmed: error?.terminationUnconfirmed === true }); throw error;
+      store.record(id, work.id, 'workspace-git-intent', { ...record, status: error instanceof GitError && !error.uncertain ? 'failed' : 'uncertain', terminationUnconfirmed: error?.terminationUnconfirmed === true && !record.processTerminated }); throw error;
     }
   }
   private recoverGitIntent(work: Work, name: string) {
     const store = this.options.store!, record = store.records(work.id, 'workspace-git-intent').find(row => row.id === `${work.id}:git-${name}`);
     if (!record || !['running', 'uncertain'].includes(record.status)) return;
-    if (record.terminationUnconfirmed || record.status === 'running') {
-      if (!Number.isSafeInteger(record.processId) || record.processId <= 0) throw new ConflictException('Git 프로세스 종료를 확인할 수 없습니다. 실제 상태 복구가 필요합니다.');
-      try { process.kill(record.processId, 0); throw new ConflictException('기존 Git 프로세스 종료 확인이 필요합니다.'); } catch (error: any) { if (error.code !== 'ESRCH') throw error; }
-    }
+    if ((record.terminationUnconfirmed || record.status === 'running') && record.processTerminated !== true) throw new ConflictException('소유 Git Job의 실제 종료 근거가 필요합니다. PID 부재로 해제하지 않습니다.');
     store.record(record.id, work.id, 'workspace-git-intent', { ...record, status: 'recovered', terminationUnconfirmed: false });
   }
   async close() { return this.local?.close(); }

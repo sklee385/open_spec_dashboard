@@ -1,4 +1,4 @@
-import { spawn, execFile, execFileSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { guardBrowserProcess, guardWorkerPath } from '../browser/browser-job';
 export class GitError extends Error {
     constructor(message: string, public status = 400, public uncertain = false, public terminationUnconfirmed = false, public confirmedRejection = false) {
@@ -11,10 +11,11 @@ export function scrub(value: string) {
 export interface RunnerOptions {
     timeoutMs?: number;
     maxOutputBytes?: number;
+    ownedJob?: true;
     onSpawn?: (pid: number) => void | Promise<void>;
     /** Internal-only: the caller pins this path/ref from its owned source checkpoint. */
     headPin?: { file: string; ref: string; beforeDispatch: () => void | Promise<void> };
-    onTermination?: (evidence: { protocol: 'head-pin-job-v1'; state: 'job-quiescent' | 'not-dispatched'; workerPid: number | null; guardPid?: number; at: string }) => void | Promise<void>;
+    onTermination?: (evidence: { protocol: 'head-pin-job-v1' | 'owned-git-job-v1'; state: 'job-quiescent' | 'not-dispatched'; workerPid: number | null; guardPid?: number; at: string }) => void | Promise<void>;
 }
 export function gitEnvironment() {
     const env = { ...process.env };
@@ -30,7 +31,7 @@ export function readGitBufferSync(root: string, args: string[], input?: Buffer) 
 export function readGitSync(root: string, args: string[]) { return readGitBufferSync(root, args).toString('utf8'); }
 /** Arguments are produced by the service; user paths always follow -- with literal pathspecs. */
 export function runGit(root: string, args: string[], options: RunnerOptions = {}, optional = false): Promise<Buffer> {
-    if (options.headPin) return runHeadPinnedGit(root, args, options, optional);
+    if (options.headPin || options.ownedJob) return runOwnedGit(root, args, options, optional);
     return new Promise((resolve, reject) => {
         const env = gitEnvironment();
         const child = spawn('git', ['--no-optional-locks', '--literal-pathspecs', ...args], { cwd: root, shell: false, windowsHide: true, detached: process.platform !== 'win32', env });
@@ -46,11 +47,12 @@ export function runGit(root: string, args: string[], options: RunnerOptions = {}
                 return;
             stopReason = reason;
             termination = new Promise<void>(done => {
-                if (process.platform === 'win32' && child.pid) {
-                    execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 4000 }, error => {
-                        terminationUnconfirmed = !!error;
-                        done();
-                    });
+                if (process.platform === 'win32') {
+                    // A retained ChildProcess handle identifies only this child; its exit
+                    // cannot prove termination of descendants of an unguarded read.
+                    terminationUnconfirmed = true;
+                    try { child.kill(); } catch { /* Keep uncertainty. */ }
+                    done();
                 }
                 else if (child.pid) {
                     try {
@@ -122,9 +124,9 @@ export function runGit(root: string, args: string[], options: RunnerOptions = {}
     });
 }
 
-/** Git starts only after PID persistence, Job assignment, native HEAD pin and final fence. */
-async function runHeadPinnedGit(root: string, args: string[], options: RunnerOptions, optional: boolean): Promise<Buffer> {
-    if (process.platform !== 'win32') throw new GitError('원본 Git 반영의 native HEAD 보호는 현재 Windows에서만 지원합니다', 409);
+/** Git starts after owned-worker persistence and Job identity; source apply also pins HEAD. */
+async function runOwnedGit(root: string, args: string[], options: RunnerOptions, optional: boolean): Promise<Buffer> {
+    if (process.platform !== 'win32') throw new GitError('소유 Git Job과 native HEAD 보호는 현재 Windows에서만 지원합니다', 409);
     const env = gitEnvironment(), workerEnv = { ...env };
     for (const key of Object.keys(workerEnv)) if (key.toUpperCase().startsWith('GIT_') || ['NODE_OPTIONS', 'NODE_PATH', 'DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY'].includes(key.toUpperCase())) delete workerEnv[key];
     for (const key of Object.keys(env)) if (['NODE_OPTIONS', 'NODE_PATH', 'DATA_DIR', 'CONFIG_PATH', 'WORKSPACE_ROOT', 'DESKTOP_TOKEN', 'OPENSPEC_NODE_DIRECTORY'].includes(key.toUpperCase())) delete env[key];
@@ -138,18 +140,18 @@ async function runHeadPinnedGit(root: string, args: string[], options: RunnerOpt
     const output = (target: Buffer[], bytes: Buffer) => { total += bytes.length; if (total > (options.maxOutputBytes ?? 8 * 1024 * 1024)) { failure = 'Git 출력 제한을 초과했습니다'; stop(); } else target.push(bytes); };
     child.stdout!.on('data', bytes => output(out, bytes)); child.stderr!.on('data', bytes => output(err, bytes)); child.stdin!.on('error', () => { failure ||= 'Git 대기 실행기 전송을 확인하지 못했습니다'; stop(); });
     const timer = setTimeout(() => { failure = 'Git 실행 시간 제한을 초과했습니다'; stop(); }, options.timeoutMs ?? 30000);
-    const guard = guardBrowserProcess(child, { file: options.headPin!.file, ref: options.headPin!.ref }); void guard.catch(() => {});
+    const guard = options.headPin ? guardBrowserProcess(child, { file: options.headPin.file, ref: options.headPin.ref }) : guardBrowserProcess(child, undefined, { browserProtocol: true }); void guard.catch(() => {});
     let owned: Awaited<typeof guard> | undefined, quiescent = false, reported = false;
     const report = async () => {
         if (reported || dispatched && !quiescent) return;
         reported = true;
-        await options.onTermination?.({ protocol: 'head-pin-job-v1', state: quiescent ? 'job-quiescent' : 'not-dispatched', workerPid: child.pid ?? null, ...(owned?.pid ? { guardPid: owned.pid } : {}), at: new Date().toISOString() });
+        await options.onTermination?.({ protocol: options.headPin ? 'head-pin-job-v1' : 'owned-git-job-v1', state: quiescent ? 'job-quiescent' : 'not-dispatched', workerPid: child.pid ?? null, ...(owned?.pid ? { guardPid: owned.pid } : {}), at: new Date().toISOString() });
     };
     try {
         if (!child.pid) throw new GitError('Git 대기 실행기 PID가 없습니다', 409);
         await options.onSpawn?.(child.pid);
         owned = await guard;
-        await options.headPin!.beforeDispatch();
+        await options.headPin?.beforeDispatch();
         if (closedFlag || failure) throw new GitError(failure || 'Git 대기 실행기가 종료되었습니다', 409);
         dispatched = true; child.stdin!.end(JSON.stringify({ args: ['--no-optional-locks', '--literal-pathspecs', ...args], env }));
         await closed; await owned.done; quiescent = true; await report();

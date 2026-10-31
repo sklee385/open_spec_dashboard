@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, openSync, ftruncateSync, closeSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, openSync, ftruncateSync, closeSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -8,6 +8,7 @@ import { LegacyService } from '../src/legacy/legacy.service';
 import { WorkspaceSettingsService } from '../src/work/workspace-settings.service';
 import { WorkspaceProvisioner } from '../src/work/workspace-provisioner';
 import { WorktreeManager } from '../src/work/worktree-manager';
+import { WorkspacePreparation } from '../src/work/workspace-preparation';
 import { FileResults } from '../src/work/file-results';
 import { WorkspaceService } from '../src/work/workspace.service';
 import { GitError, runGit } from '../src/projects/git-runner';
@@ -174,3 +175,67 @@ it('unrelated 준비 흔적이 뒤늦게 생겨도 terminal rejected key의 fenc
   expect(rejected).toBeInstanceOf(ConflictException); expect(rejected.getResponse()).not.toHaveProperty('mutationOutcome');
   expect(store.get(work.id)?.workspace).toBeUndefined(); expect(store.records(work.id, 'workspace-request')).toEqual([]); expect(store.records(work.id, 'workspace-creation')).toEqual([]);
 });
+
+
+it('결합 장애: 설정 전환과 질문을 유지하며 생성 응답 유실·루트 단절·용량 소진을 원본 대체 없이 복구한다', async () => {
+  for (const change of ['feature-b', 'feature-c']) {
+    const path = join(source, 'openspec/changes', change); mkdirSync(join(path, 'specs', change), { recursive: true });
+    for (const name of ['proposal.md', 'design.md', 'tasks.md', 'specs/' + change + '/spec.md']) writeFileSync(join(path, name), '# reviewed\n');
+  }
+  repository();
+  const request = async (target: Work, key: string) => {
+    const preview = await provisioner.preview(target, 'main');
+    return { requestKey: key, previewToken: preview.documents!.confirmationToken, excludedConfirmed: true,
+      policy: { version: 1, projectId: preview.projectId, planRevision: preview.documents!.planRevision, confirmed: true, runtime: 'none', dependencies: 'none', paths: [], generatedPaths: [], commands: [] } };
+  };
+  await provisioner.prepare(work, await request(work, 'combined-a'));
+  const a = store.get(work.id)!, aPath = a.executionPath!, sourceHead = git(source, 'rev-parse', 'HEAD');
+  const question = { status: 'pending', kind: 'input', threadId: a.threadId, prompt: '보존할 실제 저장 질문', createdAt: new Date().toISOString() };
+  store.record('combined-question-a', a.id, 'question', question);
+  const questionBefore = store.records(a.id, 'question');
+  const rootA = a.workspace!.rootPath, offline = join(dir, 'offline-root-a');
+  expect(dirname(rootA)).toBe(dir); expect(dirname(offline)).toBe(dir);
+  const current = settings.read(), check = settings.check({ version: current.version, path: join(dir, 'second-root') });
+  settings.save({ version: current.version, token: check.token, confirmed: true });
+  expect(settings.history().roots).toHaveLength(2);
+  const b: Work = { ...work, id: 'b', changeName: 'feature-b', requestKey: 'b', threadId: 'thread-b', workspace: undefined, executionPath: undefined, state: 'idle' };
+  store.save(b); const body = await request(b, 'combined-b'); let adds = 0;
+  const losing = new WorkspaceProvisioner(store, settings, { enabled: () => true, manager: new WorktreeManager({ store, run: async (root, args) => {
+    const output = await runGit(root, args);
+    if (args.includes('worktree') && args.includes('add') && ++adds === 1) throw new Error('combined creation response lost');
+    return output;
+  } }) });
+  try { await expect(losing.prepare(b, body)).rejects.toThrow('combined creation response lost'); } finally { await losing.close(); }
+  const failedB = store.get(b.id)!, bPath = failedB.executionPath!;
+  expect(failedB.workspace).toMatchObject({ status: 'recovery-required', rootPath: join(dir, 'second-root') });
+  const renewed = await provisioner.preview(failedB, 'main');
+  await provisioner.prepare(failedB, { ...body, previewToken: renewed.documents!.confirmationToken });
+  expect(store.get(b.id)?.executionPath).toBe(bPath); expect(adds).toBe(1);
+  expect(git(source, 'worktree', 'list', '--porcelain').match(/^worktree /gm)).toHaveLength(3);
+  const spaces = new WorkspaceService(store, { protectedPaths: () => settings.protectedPaths() });
+  renameSync(rootA, offline);
+  try {
+    expect(() => spaces.path(store.get(a.id)!)).toThrow(/복구/);
+    expect(provisioner.status(store.get(a.id)!)).toMatchObject({ available: false, executionPath: aPath });
+    expect(spaces.path(store.get(b.id)!)).toBe(bPath);
+    expect(store.get(a.id)).toMatchObject({ threadId: 'same-thread', executionPath: aPath });
+    expect(store.records(a.id, 'question')).toEqual(questionBefore);
+    expect(git(source, 'rev-parse', 'HEAD')).toBe(sourceHead);
+  } finally { renameSync(offline, rootA); }
+  expect(spaces.path(store.get(a.id)!)).toBe(aPath);
+  const c: Work = { ...b, id: 'c', changeName: 'feature-c', requestKey: 'c', threadId: 'thread-c', workspace: undefined, executionPath: undefined };
+  store.save(c); spaces.reserve(c, settings, 'copy');
+  const partial = join(c.executionPath!, 'partial-install.txt'); let free = 1000;
+  const capacity = new WorkspacePreparation(store, { policy: () => ({ maxActiveWorks: 3, minimumFreeBytes: 100, retentionDays: 14 }), freeBytes: () => free });
+  await expect(capacity.run(c, c.executionPath!, 'install', async () => {
+    mkdirSync(c.executionPath!, { recursive: true }); writeFileSync(partial, 'preserve partial output'); free = 0;
+  })).rejects.toThrow(/용량/);
+  expect(readFileSync(partial, 'utf8')).toBe('preserve partial output');
+  expect(store.get(c.id)).toMatchObject({ state: 'failed', threadId: 'thread-c', workspace: { status: 'failed' } });
+  expect(store.records(c.id, 'isolated-baseline')).toHaveLength(0);
+  expect(() => spaces.path(store.get(c.id)!)).toThrow(/복구/);
+  expect(() => new FileResults(store, spaces).prepare(store.get(c.id)!)).toThrow(/복구/);
+  expect(spaces.path(store.get(a.id)!)).toBe(aPath); expect(spaces.path(store.get(b.id)!)).toBe(bPath);
+  expect(store.records(a.id, 'question')).toEqual(questionBefore);
+  expect(git(source, 'rev-parse', 'HEAD')).toBe(sourceHead); expect(readFileSync(join(source, 'code.txt'), 'utf8')).toBe('base');
+}, 120000);

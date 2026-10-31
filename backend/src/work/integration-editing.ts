@@ -21,8 +21,8 @@ import { MutationAdmission } from './mutation-admission';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const oid = (value: string) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
 const sourceHash = (source: Record<string, unknown>) => hash(Object.entries(source).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
-// PID-only observations never release a live/reused PID. Group 9.2 can enrich this versioned
-// owner evidence with kernel creation time/executable identity without adopting legacy claims.
+// Host instance identifies a recovery claim; neither PID presence nor absence
+// authorizes adopting a legacy claim or proving child/descendant termination.
 const hostOwner = { version: 1, processId: process.pid, instanceId: randomUUID(), evidence: 'pid-only', recordedAt: new Date().toISOString() };
 const requestProof = Symbol('candidate-edit-request-proof');
 type Mode = 'conflict' | 'revision';
@@ -349,22 +349,8 @@ export class IntegrationEditing {
     if (observed.status !== 'uncertain') return observed;
     if (row.status === 'committed') return observed;
     if (!row.commitObject) return observed;
-    if (!row.processTerminated || row.recoveryToken) {
-      // A missing PID is evidence; liveness, EPERM and an absent saved PID never authorize guessing.
-      if (row.recoveryToken) {
-        if (!row.recoveryOwnerProcessId) return observed;
-        try { process.kill(row.recoveryOwnerProcessId, 0); return observed; } catch (error: any) { if (error.code !== 'ESRCH') return observed; }
-      }
-      if (!row.processTerminated) {
-        if (!row.processId) return observed;
-        try { process.kill(row.processId, 0); return observed; } catch (error: any) { if (error.code !== 'ESRCH') return observed; }
-        if (row.status === 'running' && row.ownerProcessId) try { process.kill(row.ownerProcessId, 0); return observed; } catch (error: any) { if (error.code !== 'ESRCH') return observed; }
-      }
-      this.store.transaction(() => {
-        if (hash(this.store.records(workId, 'integration-edit').find(item => item.id === id)) !== hash(row)) throw new ConflictException('소유 프로세스 확인 중 기록이 변경되었습니다');
-        row.processTerminated = true; delete row.recoveryToken; delete row.recoveryOwnerProcessId; this.save(row);
-      });
-    }
+    // Missing/reused PIDs never authorize a second writer or clear a claim.
+    if (row.processTerminated !== true || row.recoveryToken) return observed;
     const token = randomUUID(), intentId = `${id}:observe:${token}`;
     let reserved = false, directory: string | undefined, owned: { dev: number; ino: number } | undefined;
     takeOwnership();
@@ -388,9 +374,9 @@ export class IntegrationEditing {
         assertCandidateProgress(row.request.executionPath, row.request.resultCommit); assertCandidateAutoMerge(row.request.executionPath, row);
         row.processTerminated = false; this.save(row);
         try {
-          await runGit(row.request.executionPath, ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${directory}`, 'merge', '--quit'], { timeoutMs: 10000, onSpawn: pid => { row.processId = pid; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', { ...this.intent(row.request), status: 'running', stage: 'explicit-merge-finalization', processId: pid }); }); } });
+          await runGit(row.request.executionPath, ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${directory}`, 'merge', '--quit'], { timeoutMs: 10000, ownedJob: true, onTermination: evidence => { row.processTerminated = true; row.terminationProof = evidence; this.save(row); }, onSpawn: pid => { row.processId = pid; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', { ...this.intent(row.request), status: 'running', stage: 'explicit-merge-finalization', processId: pid }); }); } });
           row.processTerminated = true; row.mergeFinished = true; this.save(row);
-        } catch (error) { row.processTerminated = error instanceof GitError && !error.terminationUnconfirmed; throw error; }
+        } catch (error) { row.processTerminated = row.processTerminated === true || error instanceof GitError && !error.terminationUnconfirmed; throw error; }
       }
       await this.observeCommit(row, false); row.status = 'committed'; row.commit = row.commitObject; delete row.recoveryToken; delete row.recoveryOwnerProcessId; this.finish(row); return row;
     } catch (error: any) {
@@ -412,7 +398,7 @@ export class IntegrationEditing {
         });
       } catch { /* An unconfirmed DB write never clears another observer or child intent. */ }
       if (directory && owned && row.processTerminated !== false) try { const stat = lstatSync(directory); if (stat.dev === owned.dev && stat.ino === owned.ino && !stat.isSymbolicLink() && realpathSync(directory) === resolve(directory)) rmdirSync(directory); } catch { /* Never recursively remove unknown recovery contents. */ }
-      if (row.processTerminated === false && row.processId) { const pid = row.processId; const timer = setInterval(() => { try { process.kill(pid, 0); } catch (error: any) { if (error.code === 'ESRCH') { clearInterval(timer); settle(); } } }, 1000); timer.unref(); } else settle();
+      if (row.processTerminated !== false) settle();
     }
   }
   private finish(row: any) {
@@ -457,10 +443,10 @@ export class IntegrationEditing {
         const intent: any = { ...this.intent(state.request), stage, status: 'running' };
         this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); });
         try {
-          const output = await runGit(state.request.executionPath, ['-c', 'core.fsmonitor=false', '-c', 'gc.auto=0', '-c', `core.hooksPath=${directory}`, '-c', 'commit.gpgSign=false', '-c', 'user.name=OpenSpecBoard', '-c', 'user.email=integration@openspecboard.local', ...args], { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024, onSpawn: pid => { row.processId = intent.processId = pid; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); }); } });
+          const output = await runGit(state.request.executionPath, ['-c', 'core.fsmonitor=false', '-c', 'gc.auto=0', '-c', `core.hooksPath=${directory}`, '-c', 'commit.gpgSign=false', '-c', 'user.name=OpenSpecBoard', '-c', 'user.email=integration@openspecboard.local', ...args], { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024, ownedJob: true, onTermination: evidence => { row.processTerminated = true; row.terminationProof = evidence; this.save(row); }, onSpawn: pid => { row.processId = intent.processId = pid; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); }); } });
           row.processTerminated = true; if (stage === 'merge-finish') row.mergeFinished = true;
           this.store.record(intentId, workId, 'workspace-git-intent', { ...intent, status: 'passed' }); this.save(row); return output;
-        } catch (error: any) { row.processTerminated = error instanceof GitError && !error.terminationUnconfirmed; this.store.record(intentId, workId, 'workspace-git-intent', { ...intent, status: error instanceof GitError && !error.uncertain ? 'failed' : 'uncertain', terminationUnconfirmed: error?.terminationUnconfirmed === true }); throw error; }
+        } catch (error: any) { row.processTerminated = row.processTerminated === true || error instanceof GitError && !error.terminationUnconfirmed; this.store.record(intentId, workId, 'workspace-git-intent', { ...intent, status: error instanceof GitError && !error.uncertain ? 'failed' : 'uncertain', terminationUnconfirmed: row.processTerminated === false }); throw error; }
       };
       const result = await action(row, state, mutate);
       if (await this.observed(row.request) !== row.observed) throw new ConflictException('원본·업무 ref/index가 변경되었습니다');
@@ -478,8 +464,7 @@ export class IntegrationEditing {
     } finally {
       try { if (directory && owned && row?.processTerminated !== false) try { const stat = lstatSync(directory); if (stat.dev === owned.dev && stat.ino === owned.ino && !stat.isSymbolicLink() && realpathSync(directory) === resolve(directory)) { const path = join(directory, 'paths.nul'), file = lstatSync(path); if (ownedFile && file.dev === ownedFile.dev && file.ino === ownedFile.ino && file.isFile() && !file.isSymbolicLink() && file.nlink === 1) { unlinkSync(path); rmdirSync(directory); } } } catch { /* Preserve changed private contents; lifecycle release is unconditional. */ } }
       finally {
-        if (row?.processTerminated === false && row.processId) { const finish = release, pid = row.processId; const timer = setInterval(() => { try { process.kill(pid, 0); } catch (error: any) { if (error.code === 'ESRCH') { clearInterval(timer); try { finish?.(); } finally { settle(); } } } }, 1000); timer.unref(); }
-        else { try { release?.(); } finally { settle(); } }
+        if (row?.processTerminated !== false) { try { release?.(); } finally { settle(); } }
       }
     }
   }

@@ -108,14 +108,21 @@ it('CAS 뒤 응답 유실은 자동 입력 없이 정확한 증거와 명시 rec
   expect((await editing('commit', input)).data.status).toBe('uncertain'); const result = await editing('reconcile', { requestKey: input.requestKey, confirmed: true }); expect(result.data).toMatchObject({ status: 'committed', commit: committed }); expect(store.integrationRequests()[0]).toMatchObject({ status: 'validating', candidateCommit: committed });
   await vi.waitFor(() => expect(app.get(DesktopLifecycle).requests).toBe(0), { timeout: 4000 });
 });
-it('종료된 재시작 PID와 stale recovery claim만 재확인하고 살아있는 claim은 유지한다', async () => {
+it('PID 부재와 stale recovery claim은 실제 종료 근거 없이 복구·해제하지 않는다', async () => {
   const input = await resolved(), actual = runner.runGit; let injected = false;
   const spy = vi.spyOn(runner, 'runGit').mockImplementation(async (root, args, options, optional) => { const output = await actual(root, args, options, optional); if (!injected && root === reserved.executionPath && args.includes('update-ref')) { injected = true; throw new runner.GitError('restart fixture', 409, true, true); } return output; });
   await editing('commit', input); spy.mockRestore(); const row = store.records('a', 'integration-edit').find(row => row.kind === 'commit')!;
   store.record(row.id, 'a', 'integration-edit', { ...row, recoveryToken: 'live', recoveryOwnerProcessId: process.pid });
   expect((await editing('reconcile', { requestKey: input.requestKey, confirmed: true })).data.status).toBe('uncertain'); expect(git(reserved.executionPath, 'rev-parse', 'MERGE_HEAD')).toBe(reserved.resultCommit);
-  const dead = 2147483646, kill = process.kill.bind(process), probe = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => { if (pid === dead) throw Object.assign(new Error('gone'), { code: 'ESRCH' }); return kill(pid, signal); });
-  try { store.record(row.id, 'a', 'integration-edit', { ...row, processTerminated: false, processId: dead, recoveryToken: 'stale', recoveryOwnerProcessId: dead }); const response = await editing('reconcile', { requestKey: input.requestKey, confirmed: true }); expect(response.data.status).toBe('committed'); } finally { probe.mockRestore(); }
+  const dead = 2147483646, probe = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+  try {
+    const saved = { ...row, processTerminated: false, processId: dead, recoveryToken: 'stale', recoveryOwnerProcessId: dead };
+    store.record(row.id, 'a', 'integration-edit', saved);
+    const response = await editing('reconcile', { requestKey: input.requestKey, confirmed: true });
+    expect(response.data.status).toBe('uncertain'); expect(probe).not.toHaveBeenCalled();
+    expect(store.records('a', 'integration-edit').find(item => item.id === row.id)).toMatchObject(saved);
+    expect(git(reserved.executionPath, 'rev-parse', 'MERGE_HEAD')).toBe(reserved.resultCommit);
+  } finally { probe.mockRestore(); }
 });
 it('다른 후보 epoch·미소유 MERGE_HEAD·비밀 파일 저장을 거부한다', async () => {
   await candidate(); const read = await file(); expect((await file({ path: '.env', content: 'secret', version: read.data.version })).status).toBeGreaterThanOrEqual(400);
@@ -272,7 +279,7 @@ it('명시 reconcile quit의 성공 응답 유실 뒤에도 두 번째 reconcile
   });
   expect((await editing('reconcile', { requestKey: input.requestKey, confirmed: true })).data.status).toBe('uncertain'); spy.mockRestore(); expect(quits).toBe(1);
   const row = store.records('a', 'integration-edit').find(item => item.kind === 'commit')!, intent = store.records('a', 'workspace-git-intent').find(item => item.id === row.intentIds.at(-1));
-  expect(intent?.stage).toBe('explicit-merge-finalization'); expect(row).not.toHaveProperty('recoveryToken'); expect(row.processTerminated).toBe(false); expect(intent.terminationUnconfirmed).toBe(true);
+  expect(intent?.stage).toBe('explicit-merge-finalization'); expect(row).not.toHaveProperty('recoveryToken'); expect(row.processTerminated).toBe(true); expect(row.terminationProof).toMatchObject({ protocol: 'owned-git-job-v1', state: 'job-quiescent' }); expect(intent.terminationUnconfirmed).toBe(false);
   const finalizer = vi.spyOn(runner, 'runGit');
   const observed = await editing('reconcile', { requestKey: input.requestKey, confirmed: true }); expect(observed.data.status, observed.data.error).toBe('committed');
   expect(finalizer.mock.calls.some(([, args]) => args.includes('--quit') || args.includes('update-ref') || args.includes('commit-tree'))).toBe(false);

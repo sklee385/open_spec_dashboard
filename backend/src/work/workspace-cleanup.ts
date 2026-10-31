@@ -104,7 +104,7 @@ export class WorkspaceCleanup {
           admission.admit();this.store.record(id,workId,'workspace-cleanup',result);this.store.record(intentId,workId,'workspace-git-intent',intent);started=true;
         });
         // Normal removal only. No force, prune, branch removal or recursive root deletion.
-        await runGit(work.projectPath,['-c','core.fsmonitor=false','worktree','remove','--',target.path],{timeoutMs:30000,onSpawn:pid=>{intent={...intent,processId:pid};this.store.record(intentId,workId,'workspace-git-intent',intent);}});
+        await runGit(work.projectPath,['-c','core.fsmonitor=false','worktree','remove','--',target.path],{ownedJob:true,timeoutMs:30000,onTermination:evidence=>{terminated=true;intent={...intent,terminationProof:evidence,terminationUnconfirmed:false};this.store.record(intentId,workId,'workspace-git-intent',intent);},onSpawn:pid=>{intent={...intent,processId:pid};this.store.record(intentId,workId,'workspace-git-intent',intent);}});
         terminated=true;
         let present=true;try{await lstat(target.path);}catch(error:any){if(error.code==='ENOENT')present=false;else throw error;}
         const registrations=readGitSync(work.projectPath,['worktree','list','--porcelain','-z']).split('\0').filter(value=>value.startsWith('worktree ')).map(value=>value.slice(9));

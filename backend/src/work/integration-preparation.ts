@@ -213,10 +213,7 @@ export class IntegrationPreparation {
   private async replay(request: IntegrationRequest, row: any) {
     if (row.status === 'failed') return { ...request, status: 'failed', error: row.error };
     let terminated = row.processTerminated === true;
-    if (!terminated) {
-      if (!Number.isSafeInteger(row.processId) || row.processId <= 0) return { ...request, status: 'uncertain', error: '저장된 소유 Git 프로세스 종료 근거를 확인해 주세요.' };
-      try { process.kill(row.processId, 0); return { ...request, status: 'uncertain', error: '기존 후보 Git 프로세스의 종료 확인이 필요합니다.' }; } catch (error: any) { if (error.code !== 'ESRCH') return { ...request, status: 'uncertain' }; terminated = true; }
-    }
+    if (!terminated) return { ...request, status: 'uncertain', error: '소유 Git Job의 실제 종료 근거가 없습니다. PID 부재로 복구하지 않습니다.' };
     try {
       if ((await this.basis(request)).context !== row.basisContext) throw new ConflictException('후보 준비 당시의 업무 소스·계획·검증이 변경되었습니다.');
       if (row.commit || row.commitObject) {
@@ -273,15 +270,15 @@ export class IntegrationPreparation {
         row.stage = stage; row.intentIds.push(intentId); row.processTerminated = false;
         this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); });
         try {
-          const output = await runGit(root, ['-c', 'core.fsmonitor=false', '-c', 'gc.auto=0', '-c', `core.hooksPath=${join(location.container, 'disabled-hooks')}`, '-c', 'commit.gpgSign=false', '-c', 'user.name=OpenSpecBoard', '-c', 'user.email=integration@openspecboard.local', ...args], { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024, onSpawn: pid => { row.processId = intent.processId = lifetime.processId = pid; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); this.store.record(reservationIntentId, workId, 'workspace-git-intent', lifetime); }); } });
+          const output = await runGit(root, ['-c', 'core.fsmonitor=false', '-c', 'gc.auto=0', '-c', `core.hooksPath=${join(location.container, 'disabled-hooks')}`, '-c', 'commit.gpgSign=false', '-c', 'user.name=OpenSpecBoard', '-c', 'user.email=integration@openspecboard.local', ...args], { timeoutMs: 10000, maxOutputBytes: 4 * 1024 * 1024, ownedJob: true, onTermination: evidence => { row.processTerminated = true; row.terminationProof = evidence; this.save(row); }, onSpawn: pid => { row.processId = intent.processId = lifetime.processId = pid; this.store.transaction(() => { this.save(row); this.store.record(intentId, workId, 'workspace-git-intent', intent); this.store.record(reservationIntentId, workId, 'workspace-git-intent', lifetime); }); } });
           row.processTerminated = true;
           if (stage === 'merge') { row.autoMerge = candidateAutoMerge(root); row.autoMergeCaptured = true; }
           if (stage === 'merge-finish') row.mergeFinished = true;
           this.store.record(intentId, workId, 'workspace-git-intent', { ...intent, status: 'passed' }); this.save(row); return output;
         } catch (error: any) {
           if (stage === 'merge' && error instanceof GitError && !error.uncertain) { row.autoMerge = candidateAutoMerge(root); row.autoMergeCaptured = true; }
-          row.processTerminated = error instanceof GitError && !error.terminationUnconfirmed;
-          this.store.record(intentId, workId, 'workspace-git-intent', { ...intent, status: error instanceof GitError && !error.uncertain ? 'failed' : 'uncertain', terminationUnconfirmed: error?.terminationUnconfirmed === true }); throw error;
+          row.processTerminated = row.processTerminated === true || error instanceof GitError && !error.terminationUnconfirmed;
+          this.store.record(intentId, workId, 'workspace-git-intent', { ...intent, status: error instanceof GitError && !error.uncertain ? 'failed' : 'uncertain', terminationUnconfirmed: row.processTerminated === false }); throw error;
         }
       };
       mkdirSync(join(location.container, '..'), { recursive: true }); candidateLocation(request, this.settings.protectedPaths()); mkdirSync(location.container);
@@ -330,10 +327,7 @@ export class IntegrationPreparation {
       });
       return { ...this.request(workId, candidateId), error: row.error };
     } finally {
-      if (row?.processTerminated === false && row.processId) {
-        const finish = release, pid = row.processId;
-        const timer = setInterval(() => { try { process.kill(pid, 0); } catch (error: any) { if (error.code === 'ESRCH') { clearInterval(timer); try { finish?.(); } finally { settle(); } } } }, 1000); timer.unref();
-      } else { try { release?.(); } finally { settle(); } }
+      if (row?.processTerminated !== false) { try { release?.(); } finally { settle(); } }
     }
   }
 }

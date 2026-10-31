@@ -112,9 +112,7 @@ export class WorktreeResultCommit {
     if (!['running', 'uncertain', 'committed', 'noop'].includes(row.status)) return row;
     try { if (this.works.execution.executionPath(this.works.get(workId)) !== row.root) throw new Error('path'); }
     catch { return { ...row, status: 'uncertain', error: '소유 업무 공간의 identity와 실행 경로를 다시 확인해 주세요.' }; }
-    if (row.status !== 'committed' && row.processId && !row.processTerminated) {
-      try { process.kill(row.processId, 0); return { ...row, status: 'uncertain', error: '기존 Git 프로세스의 종료 확인이 필요합니다.' }; } catch (error: any) { if (error.code !== 'ESRCH') return { ...row, status: 'uncertain' }; }
-    }
+    if (!['committed', 'noop'].includes(row.status) && row.processTerminated !== true) return { ...row, status: 'uncertain', error: '기존 소유 Git Job의 실제 종료 근거가 필요합니다.' };
     const head = await this.text(row.root, ['rev-parse', 'HEAD']), tree = await this.text(row.root, ['rev-parse', 'HEAD^{tree}']);
     const request = this.store.integrationRequests().find(x => x.id === row.integrationId)!;
     if (row.status === 'noop' && head === row.startHead && tree === row.tree && await this.text(row.root, ['symbolic-ref', 'HEAD']) === row.ref) return row;
@@ -186,9 +184,9 @@ export class WorktreeResultCommit {
         if (currentDir.dev !== owned!.dev || currentDir.ino !== owned!.ino || currentDir.isSymbolicLink() || currentFile.dev !== fileStat.dev || currentFile.ino !== fileStat.ino || currentFile.isSymbolicLink() || currentFile.nlink !== 1 || !readFileSync(pathspec).equals(Buffer.from(paths.join('\0') + '\0'))) throw new ConflictException('호스트 선택 파일의 소유 또는 내용이 변경되었습니다.');
         row.processTerminated = false;
         try {
-          const output = await runGit(view.root, ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${directory}`, '-c', 'commit.gpgSign=false', ...args], { onSpawn: pid => { row.processId = intent.processId = pid; this.store.transaction(() => { this.save(recordId, id, row); this.store.record(intentId, id, 'workspace-git-intent', intent); }); } });
+          const output = await runGit(view.root, ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${directory}`, '-c', 'commit.gpgSign=false', ...args], { ownedJob: true, onTermination: evidence => { row.processTerminated = true; row.terminationProof = evidence; this.save(recordId, id, row); }, onSpawn: pid => { row.processId = intent.processId = pid; this.store.transaction(() => { this.save(recordId, id, row); this.store.record(intentId, id, 'workspace-git-intent', intent); }); } });
           row.processTerminated = true; return output;
-        } catch (error) { row.processTerminated = error instanceof GitError && !error.terminationUnconfirmed; throw error; }
+        } catch (error) { row.processTerminated = row.processTerminated === true || error instanceof GitError && !error.terminationUnconfirmed; throw error; }
       };
       if (!paths.length) {
         await this.assertIdentity(work, request, view.head);
@@ -230,7 +228,7 @@ export class WorktreeResultCommit {
     } catch (error: any) {
       if (!reserved) throw error;
       row.status = row.refUpdateCompleted ? 'uncertain' : error instanceof GitError && !error.uncertain ? 'failed' : row.commitStarted || error instanceof GitError && error.uncertain ? 'uncertain' : 'failed'; row.error = error instanceof Error ? error.message : '커밋 결과 확인이 필요합니다.';
-      this.store.transaction(() => { this.save(recordId, id, row); this.store.record(row.intentId, id, 'workspace-git-intent', { ...row.intent, status: row.status, terminationUnconfirmed: error instanceof GitError && error.terminationUnconfirmed }); }); return row;
+      this.store.transaction(() => { this.save(recordId, id, row); this.store.record(row.intentId, id, 'workspace-git-intent', { ...row.intent, status: row.status, terminationUnconfirmed: row.processTerminated === false }); }); return row;
     } finally {
       try {
         if (directory && owned && row?.processTerminated !== false) {
@@ -238,10 +236,7 @@ export class WorktreeResultCommit {
           catch { if (reserved && row) { row.cleanupWarning = '호스트 임시 경로의 정리를 확인하지 못해 보존했습니다.'; try { this.save(row.id, id, row); } catch { /* Preserve durable Git uncertainty. */ } } }
         }
       } finally {
-        if (row?.processTerminated === false && row.processId) {
-          const finish = release, pid = row.processId;
-          const timer = setInterval(() => { try { process.kill(pid, 0); } catch (error: any) { if (error.code === 'ESRCH') { clearInterval(timer); try { finish?.(); } finally { settle(); } } } }, 1000); timer.unref();
-        } else { try { release?.(); } finally { settle(); } }
+        if (row?.processTerminated !== false) { try { release?.(); } finally { settle(); } }
       }
     }
   }
