@@ -451,3 +451,11 @@ $env:TMP = $env:TEMP
 - setup-browser.ps1의 가드 컴파일 성공 후 BrowserGuard.build.json(schema1/protocol browser-job-v2-witness-v1/sourceSha256/binarySha256)을 기록한다. desktop/browser-runtime.cjs는 현재 소스·실행 파일과 두 hash가 일치하지 않으면 복사·패키지 생성을 시작하지 않는다. 이전 가드로 fallback하거나 원본 runtime을 바꾸지 않는다.
 - 관련 desktop/test/browser-runtime.test.cjs의2개 통과(74.8914ms): Chromium/guard 누락 거부, 일치한 runtime 복사, 기록 누락·다른 소스·다른 바이너리 거부 및 실패 시 destination 미생성을 확인했다. fixture 검증이며 설치본/무설치 실행 smoke 성공으로 표현하지 않는다.
 - C 사본에는 Chromium 배포 폴더가 없고 운영 설치/활성화는 승인 범위 밖이다. 실제 패키지 실행/종료 smoke는 계속 미실시다. 기존 D Chromium은 읽기 전용 실행 근거에만 사용했다.
+
+### 2026-10-31 후보 실행 중 상태 조회의 자기 충돌 제거
+
+- 실제 IAB에서 후보 명령 실행 뒤 결과 조회는 running을 반환했는데, 같은 화면이 곧바로 verification/preview까지 호출하여 실행 자신의 미확인 Git intent와 충돌하는 오류를 표시했다. 실제 DB에는 잠시 뒤 passed/processTerminated:true/명령 stdout이 저장됨을 확인했다.
+- CandidateLifecycle은 결과에 실행 중이거나 종료 미확인인 run이 있으면 결과·제어 UI를 유지하고 새 preview를 요청하지 않는다. 현재 실행 종료 후의 명시 조회에서는 기존 사전검사·반영 확인 계약을 유지한다.
+- 신규 회귀에서 preview가 불필요하게 호출되는 RED(120ms)를 확인한 뒤 수정했다. 신규 running 조회 및 기존 명시 preview/확인/반영 조건의2개 통과(199ms). mock HTTP+컴포넌트 검사이며 실제 실행 근거와 구분한다. 최신 프런트 빌드와 실제 IAB 최종 흐름 확인을 계속한다.
+
+- 최종 프런트 빌드16.63초 통과(index-5oSjklHY.js). 변경한 프런트 정적 파일만 시험 gateway에서 새로 읽었으며 운영 앱/13003을 재시작하지 않았다.

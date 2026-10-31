@@ -45,7 +45,7 @@ function LifecycleContent({ workId, candidate, phase = 'verification', state = '
     const gen = generation.current; setLoading(true); setVerifyError(''); setConfirmRun(false); setExpectedVersion(''); setConfirmApply(false);
     try {
       const results = await get<CandidateVerification>(`${base}/verification/results`); if (gen !== generation.current) return; setVerification(results); for (const row of results.runs) await observeRun(row);
-      if (['validating', 'ready'].includes(candidate.status)) { const preview = await get<CandidateVerification>(`${base}/verification/preview`); if (gen === generation.current) setVerification(preview); }
+      if (['validating', 'ready'].includes(candidate.status) && !results.runs.some(row => row.status === 'running' || row.processTerminated !== true)) { const preview = await get<CandidateVerification>(`${base}/verification/preview`); if (gen === generation.current) setVerification(preview); }
     } catch (error) { if (gen === generation.current) setVerifyError(String(error)); } finally { if (gen === generation.current) setLoading(false); }
   }, [base, candidate.status, get, observeRun]);
   const guarded = () => {

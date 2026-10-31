@@ -117,3 +117,13 @@ it('does not let an older POST finally release the busy state of a newer attempt
   expect(saved()).toEqual(newer); expect(screen.getByRole('button', { name: '원본에 명시적으로 반영' })).toBeDisabled();
   await act(async () => { replies[1]({ ok: true, json: async () => ({ status: 'failed' }) }); });
 });
+it('keeps a running verification readable without requesting a conflicting new preview', async () => {
+  const fetcher = vi.fn(async (url: string) => ({ok:!url.endsWith('/verification/preview'),status:url.endsWith('/verification/preview')?409:200,json:async()=>url.endsWith('/verification/results')?{...verification,ready:false,cliPassed:false,runs:[{id:'owned-run',status:'running',processTerminated:false,fresh:false}]}:url.endsWith('/verification/preview')?{message:'영향 공간의 Git 프로세스 또는 결과가 미확인입니다'}:status}));
+  vi.stubGlobal('fetch',fetcher);render(<CandidateLifecycle workId="w" candidate={{...candidate,status:'validating'}} />);
+  fireEvent.click(await screen.findByRole('button',{name:'후보 검증 기준·결과 확인'}));
+  await screen.findByText(/owned-run/);
+  await waitFor(()=>expect(screen.getByRole('button',{name:'후보 검증 기준·결과 확인'})).toBeEnabled());
+  expect(fetcher.mock.calls.some(([url])=>url.endsWith('/verification/preview'))).toBe(false);
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'원본에 명시적으로 반영'})).toBeDisabled();
+});
