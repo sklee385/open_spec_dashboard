@@ -1,0 +1,58 @@
+{
+  "at": "2026-10-31T14:13:01.661Z",
+  "fixture": "C:\\Windows\\Temp\\c-njOwJP",
+  "productVersion": "0.1.14",
+  "codeCommit": "931e018",
+  "browser": "Codex 내장 브라우저",
+  "scope": "별도 임시 Git/SQLite/로컬 앱. 초기 후보는 실제 서비스/API로 준비하고 UI에서 후보 검증·명시 반영·별도 완료·보관/dirty 재확인·정리 취소/확인을 수행했다.",
+  "phase": "archived",
+  "workspaceStatus": "removed",
+  "sourceHead": "1e36d1ba85b5fe131417ec67da790adbcddafb3d",
+  "resultCommit": "5aff22e6218c3270de06d8c6072daad7750b7ea5",
+  "candidateCommit": "07fa237d6761c186ea6e150cb2dfdf2b229bc61e",
+  "candidateId": "2c4aa24b-98fe-4667-b5c3-87d979300476",
+  "candidateRuns": [
+    {
+      "id": "candidate-verification:8e530eab768d86dbb3a52b6bdaca4c6ec2c64a5bd0a3696a4478abf5803b29db",
+      "status": "passed",
+      "processTerminated": true
+    }
+  ],
+  "applyReceipts": [
+    {
+      "requestKey": "3d63c6ba-6ebe-462b-b5f5-7c560f0fac5a",
+      "status": "applied",
+      "appliedCommit": "07fa237d6761c186ea6e150cb2dfdf2b229bc61e",
+      "processTerminated": true
+    }
+  ],
+  "archiveAttempts": [
+    {
+      "id": "archive:a8a76e72-8533-485d-9257-4638a3dd53f7",
+      "status": "archived",
+      "reconfirmedAt": "2026-10-31T13:53:56.597Z"
+    }
+  ],
+  "cleanupReceipts": [
+    {
+      "requestKey": "8267aa49-2527-4fc3-a673-1ab843da012e",
+      "status": "removed",
+      "processTerminated": true,
+      "keepBranch": true
+    }
+  ],
+  "captures": [
+    {
+      "id": "d2922729-c6de-4e3f-bd1a-ea662fa93485",
+      "file_count": 1,
+      "verification_count": 2
+    }
+  ],
+  "sourceCodePreserved": true,
+  "originalOnlyFilePreserved": true,
+  "sourceClean": true,
+  "workContainerRemoved": true,
+  "branchPreserved": true,
+  "candidatePreserved": true,
+  "operatingInstallOrDeployment": false
+}

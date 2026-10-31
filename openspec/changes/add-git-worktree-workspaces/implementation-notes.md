@@ -478,3 +478,10 @@ $env:TMP = $env:TEMP
 - 새 fixture c-njOwJP의 실제 IAB에서 candidate07fa237d6761c186ea6e150cb2dfdf2b229bc61e, 검증 요청7dfb7526-1c88-439d-a062-c24a84264f40, 반영 요청3d63c6ba-6ebe-462b-b5f5-7c560f0fac5a가 통과/반영됨으로 표시됐다. 별도 결과 확인·완료 후 실제 CLI 보관은 dirty를 보존·차단했고, 시험 원본의 보관 문서만 명시 커밋1e36d1ba85b5fe131417ec67da790adbcddafb3d한 뒤 같은 화면에서 재확인하여 archived가 됐다. 새로운 CLI 보관 재실행을 요청하지 않았다.
 -6.5의 실제 UI 동선을 완료하여 OpenSpec apply 진행49/54를 확인했다.9.2~9.6은 이 시점 미완료다. cleanup 수정 반영을 위해 자기 새 fixture 세션7373만 정상 close/exit0 했으며 현재 backend build 통과, frontend build 결과를 회수 중이다. 운영 서비스/기존 D runtime은 변경하지 않았다.
 - 최종 runtime 정리 수정 뒤 backend build exit0, frontend build15.47초 exit0(index-BR2HcEWg.js)을 확인했다. 기존 Chromium/호스트 종료 검사는 관련 코드가 바뀌지 않아 반복하지 않았다.
+
+### 2026-10-31 실제 IAB 최종 대조 완료 (9.5)
+
+- 최신 cleanup 코드의 새 fixture에서 소유·정책 일치/빈 runtime 범위 안내를 읽고 확인→취소를 수행했으며 실제 공간이 보존됐다. ‘처리 결과 다시 확인’으로 새 사전검사를 읽고 범위를 다시 확인한 뒤 업무 공간 하나만 정리했다. 화면에 정리됨/완료 영수증8267aa49-2527-4fc3-a673-1ab843da012e가 표시됐다. 통합 후보는 applied로 그대로 남았다.
+- 읽기 전용 SQLite/Git/파일 대조 결과: 업무archived, workspace removed, 실제 업무 컨테이너 없음, 원본clean/HEAD1e36d1ba85b5fe131417ec67da790adbcddafb3d, code.txt qa-work 및 원본 전용 파일 보존, 업무 branch result5aff22e6218c3270de06d8c6072daad7750b7ea5 보존, candidate 폴더 보존, 완료 캡처1개(파일1·검증2), 반영 영수증1개applied/실제 종료true, 보관 시도1개archived/재확인시각, 정리 영수증1개removed/브랜치유지true를 확인했다.
+- 구조화 근거는 verification-2026-10-31.json에 고정했다. 실제 UI/스크린샷과 물리 대조이며 mocked fetch 회귀와 구분한다. 최초 설정부터의 전체 UI 경로는 첫 fixture에서, 최신 가드의 최종 후보→검증→반영→완료→보관/정리 경로는 별도 새 fixture에서 확인했다. 두 사본을 하나의 무중단 E2E처럼 합치지 않는다.
+-9.5만 추가 완료하여 apply 진행50/54를 확인했다.9.2·9.3·9.4·9.6은 아직 미완료다. 검증 탭을 닫고 자기 새 QA 세션72796의 diagnostics activeCount0/run148248-1793455546222 뒤 close/exit0을 확인했다. 예전 첫 fixture 세션74508의 stdin 제어 불가/종료 미확인은 그대로 보존한다. 전체 PC 프로세스 열거나 PID 추측 종료를 하지 않았다.
