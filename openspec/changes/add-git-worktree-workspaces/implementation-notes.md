@@ -459,3 +459,12 @@ $env:TMP = $env:TEMP
 - 신규 회귀에서 preview가 불필요하게 호출되는 RED(120ms)를 확인한 뒤 수정했다. 신규 running 조회 및 기존 명시 preview/확인/반영 조건의2개 통과(199ms). mock HTTP+컴포넌트 검사이며 실제 실행 근거와 구분한다. 최신 프런트 빌드와 실제 IAB 최종 흐름 확인을 계속한다.
 
 - 최종 프런트 빌드16.63초 통과(index-5oSjklHY.js). 변경한 프런트 정적 파일만 시험 gateway에서 새로 읽었으며 운영 앱/13003을 재시작하지 않았다.
+
+### 2026-10-31 실제 IAB의 구형 가드 실패와 격리 재검증
+
+- 첫 실제 화면 fixture c-AD7H3e(gateway59901/backend59900)에서 초기 경로 검사/확인/저장→문서 검토→실제 워크트리 준비→업무 code.txt 편집→tasks 체크 저장/재검토→등록 단일 명령 통과→원본 전용 파일 보존 커밋→대상 main 예약→2개 파일 선택 결과 커밋→후보 생성→후보 별도 명령 통과→반영 사전검사 통과를 수행했다. 외부 AI 호출과 제품 저장소 전체 suite를 실행하지 않았다.
+- 실제 반영 요청 b9ce0fe5-a8b5-4115-800e-4b315ac99d1c는 failed/processTerminated:true/commandStarted 없음으로 저장됐고 원본 HEAD394033812b5fd42302b3dbfe0e2c5433b418b0b3을 유지했다. 기존 D runtime 가드의 UTF16 READY HEAD-PIN-V1 및 READY BROWSER-JOB-V2 토큰이 모두 없고 새 C 컴파일 가드에는 둘 다 있음을 읽기 전용 대조했다. 구형 가드 준비를 최신 HEAD 고정 성공으로 오인하지 않았으며 D 파일을 바꾸지 않았다.
+- 첫 fixture의 커밋/후보 준비 POST는 오래 걸렸으나 실제 DB와 영수증에서 완료를 확인했고 새 키로 중복 실행하지 않았다. 중간 pending 화면을 제품 실패로 확정하지 않는다. 첫 fixture는 stdin이 닫힌 실행 세션74508이라 정상 close 입력을 보낼 수 없었으며 PID 열거/강제 종료로 우회하지 않았다. 이 서버의 전체 종료는 아직 확인하지 않았다.
+- 새 C 전용 가드 폴더 .tools/qa-head-runtime/guard를 준비하고 별도 fixture c-njOwJP를 만들었다. 초기 업무·검증·커밋·후보 준비는 실제 서비스/API를 사용했고 결과를 fake pass로 주입하지 않았다. 해당 부분은 최종 UI 검증의 trusted 시작 fixture이며 실제 UI 수행과 구분한다. initial source HEAD2f383361410914937844538a6d7ffe99016125dd, result5aff22e6218c3270de06d8c6072daad7750b7ea5, candidate07fa237d6761c186ea6e150cb2dfdf2b229bc61e, candidateId2c4aa24b-98fe-4667-b5c3-87d979300476이다.
+- 새 helper의 stdin close 자동 종료와 이전56257 origin의 저장 초안 충돌 가능성을 확인했다. 데이터는 보존하고 새 helper만 정확한 소유 PTY/협조 종료 파일과 임의 origin으로 바꿨다. 세션80266은 exit1로 종료됐고28612는 diagnostics activeCount0 뒤 명시 close/exit0을 확인했다. 현재 새 fixture 실행은 세션7373, gateway60378/backend60377이다. 과거 구형 fixture/운영 서비스를 재시작하지 않았다.
+- setup-browser.ps1 빌드 JSON은 Windows PowerShell5에서도 BOM 없이 쓰도록 UTF8Encoding(false)로 고정했다. 스크립트 Parser 오류0, preamble0byte를 확인했다. 다운로드/설치를 실행한 근거가 아니다.
