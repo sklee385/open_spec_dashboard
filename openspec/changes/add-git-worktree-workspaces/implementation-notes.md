@@ -509,3 +509,36 @@ $env:TMP = $env:TEMP
 - 경로 단절은 검증한 자기 임시 루트를 rename/복원한 것이며 실제 드라이브 탈착/OS 재부팅이 아니다. 이 흐름의 beforeEach/ready 문서/업무·후보 검증 seed와 완료 capture는 trusted fixture이고, AI 호출·전체 검증 명령·실제 완료 UI를 실행한 것으로 합치지 않는다. 그 동선은 기존 A/B 실제 명령과 IAB 근거를 유지한다. 별도 provisioner 결합1개18.87초에서도 실제 문서/로컬 준비와 같은 공간 복구를 확인했다.
 - 변경된 backend 최종 build exit0. 변경 없는 frontend build15.47초/index-BR2HcEWg.js 및 IAB931e018 근거는 재사용한다. 전체suite는 명시 요청이 없어 실행하지 않았고 관련 실행 경계·오류 복구만 분할 검증했다.9.2를 완료하여51/54이며 패키지/최종 범위/strict 보고는 계속한다.
 - 운영 D runtime을 수정하지 않고 기존 chromium-1248/ffmpeg/winldd를 새 C .tools/browser-runtime으로 읽기 전용 복사했다. 현재 C 컴파일 guard와 소스/바이너리 hash 기록을 조립했으며 설치·다운로드·운영 활성화가 아니다. 이전의 C runtime 부재 설명은 이 조립 전 이력이다. 실제 설치/무설치 실행 성공은 아직 주장하지 않는다.
+
+### 2026-11-01 패키지 실행 근거와 최종 대조(제품119dc7a)
+
+- C에 Chromium/Electron 실행 배포가 없었으므로 설치나 다운로드 대신 D의 동일 revision/version 배포를 새 C QA 폴더로 읽기 복사했다. stage desktop-stage-worktreeqa-20261101은 로컬 업데이트 비활성이며 Node24.15.0/Electron45.0.0/Chromium1248을 사용한다. 첫 electronDist 누락 실패는 환경 준비 오류로 보존한다. 이후 Windows win-unpacked 패키지 조립 exit0이다.
+- staged service 및 실제 win-unpacked/resources/service 각각을 저장소 밖 새 임시 프로필과 임의 포트에서 실행했다. 동봉 Node/SQLite, 시스템 Node PATH 배제, 빈 프로젝트/CLI/SSE 종료/백업 복원/동일 대화 보존/중복 소유자 거부가 exit0이었다. 실제 package service 전후13001/13002/13003은 모두 false였고 운영 서비스를 시작/재시작하지 않았다.
+- 실제 패키지의 dist만 require하고 동봉 Node/가드/Chromium을 사용한 업무 시나리오4개가 passed/failed/blocked/interrupted로 각각 의도한 결과를 남겼다. 저장·새로고침·화면 JPEG·fresh 근거, busy 거부, 금지 origin 실제 요청0, 실제 Job 종료를 대조했다. source/backend 테스트 모듈은 제품 런타임으로 사용하지 않았다.
+- 같은 QA DB의 실제 등록된 Git 후보에서도 passed와 종료true를 확인했고 업무/후보 environmentId·dataPath·화면 경로와 저장 값(package value/candidate value)이 분리됐다. 원본/업무/후보 HEAD를 유지했다. 이 후보는 같은 HEAD의 소유 등록을 직접 만든 trusted seed이며 전체 통합 후보 준비/원본 반영 흐름의 실행 근거로 합치지 않는다. 첫 시도는 긴 경로를 사전 차단했고 짧은 자기 임시 루트로 선택을 바꿨다. 다음 시도의 누락 sourcePlanRevision은 실제 manifest에서 연결하여 기존 공간/후보를 재사용했다. 실패 요청을 새 공간으로 우회하지 않았다.
+- 사용자에게 구체적으로 질문한 격리 QA 앱의 읽기 전용 프로세스 메타데이터 조회에 대해 “나는 잘꺼야 니가 알아서 해” 답변이 전달됐다. 이 범위에서만 실제 새 QA Electron 앱을 별도 임시 복사/프로필로 실행했다. 기동/인증 API/빈 프로젝트/렌더러 sandbox·contextIsolation 및 메인 프레임 IPC/트레이/정상 종료·백업이 exit0이었다. 전체 메타데이터를 별도 수집·덤프하지 않았고 다른 프로세스 종료·보안/권한/인증 변경·운영 설치·외부 배포는 하지 않았다. 이전 Get-CimInstance 오류는 OS 액세스 거부 이력이지 자동 승인 심사 거부로 확정하지 않는다.
+- 소스 backend/dist의 변경6개와 scripts2개가 실제 패키지와 SHA256 일치했고 guard 소스/바이너리 build manifest 및 asar의 desktop/main.cjs도 일치했다. verification-2026-11-01.json에 코드119dc7a, 런타임/시나리오 ID·경로·hash와 정확한 한계를 기록했다. 0.1.14 QA 패키지이며 운영 최신 버전 업데이트나 배포 성공이 아니다.
+
+#### 9.4 분할 회귀 범위
+
+전체 suite는 명시 요청이 없으므로 실행하지 않았다. 이 작업의 실제 변경·확인한 위험에 한정한 선택16건(실제 Git/Job·HTTP와 synthetic snapshot을 구분), backend 최종 build exit0, 변경 없는 frontend build15.47초 exit0/index-BR2HcEWg.js 근거를 사용했다. 구체적인 명령/선택명은 바로 위9.2 기록과 verification JSON을 따른다. 실제 package service/업무·후보 Chromium/격리 Electron 검사는 별도 추가 근거다. snapshot 파일의 나머지14건이나 backend/frontend 전체를 통과한 것으로 표현하지 않는다. 동일 코드의 전체 IAB와 전체 A/B 검사를 다시 실행하지 않았다. 분할 사유와 범위를 명시하여9.4를 완료한다.
+
+#### 9.6 명세/구현 대조와 운영 상태
+
+| 명세 | 구현 및 근거 | 상태/한계 |
+| --- | --- | --- |
+| workspace-storage | settings/path/root/policy/preparation/cleanup, 실제 초기 설정 IAB, 새9.2 결합 및 파일 주입 보존 | 고정 루트·질문·용량·확인 후 개별 정리 대조. 실제 드라이브 탈착/OS 재부팅 아님 |
+| project-git-workspace | WorktreeManager/registration/coordinator, 실제 A/B 및 HANDLE IPC/Job | 종료 불명은 차단 유지. legacy 종료 증거/PID 부재를 정상 종료로 추정하지 않음 |
+| development-execution | WorkspaceService/execution/FileResults, 실제 업무/후보 cwd·검증 | 기존 copy 경로/대화 보존. 유실 공간은 원본으로 대체하지 않음 |
+| project-source-browser | workspace-bound source/file CAS/readonly checks, 관련 소유/변조 회귀와 실제 IAB | 다른 공간·소유 불명은 복구 필요로 남김 |
+| worktree-integration | 결과 commit·후보·검증·HEAD-pinned ff·완료 capture·archive, 기존 A/B/IAB와 새ff/정리 장애 | 반영/완료/보관은 별도 명시 동작. 새 결합의 seed 범위는 위 기록을 따름 |
+| browser-verification | 대상별 환경/새 빌드/출처·freshness/lease·witness, 실제 package 업무/후보/중단/금지 통신 | 패키지 payload 실행은 확인. 실제 설치 환경 및 정식 portable ZIP 변형의 전체 smoke는 미실시 |
+
+운영 세션 서버13003과 운영 앱/DB에 코드를 반영하지 않았다. 신규 생성 기본값은 여전히 OPENSPEC_WORKTREE_EXPERIMENTAL=1일 때만 켜지며 기본 활성화하지 않았다. 코드·검증 기록 생성은 사용자의 완료 확인/실제 운영 가용을 대신하지 않는다. 예전 QA 세션74508은 stdin 제어 불가/종료 미확인으로 남기고, 이번 새 QA 서비스·시나리오·Electron 종료 확인과 구분한다. 원본 D runtime/소유권/safe.directory·별도a16fa882·REA/RDP/4173을 변경하지 않았다.
+
+9.3의 실제 설치 환경/정식 portable 변형 smoke는 운영 설치·활성화 권한 또는 별도 격리 설치 환경이 없어 미완료로 유지한다. 로컬 패키지·ZIP/설치 파일 조립은 운영 설치/외부 배포가 아니다. 이 잔여 조건을 통과로 간주해 신규 기능을 기본 활성화하지 않는다.
+
+- 최종 로컬 QA ZIP OpenSpecBoard-0.1.14-win-x64-qa.zip(478270013bytes)과 NSIS 설치 파일 OpenSpecBoard-0.1.14-win-x64-qa-setup.exe(380684013bytes)의 빌드 exit0을 확인했다. ZIP 핵심 payload5개가 실제 실행한 win-unpacked와 hash 일치했다. 설치 파일을 사용자 PC에 설치/실행하지 않았고 정식 portable 업데이트 교체/채널도 검사하지 않았다. SHA256과 파일 경로는 verification-2026-11-01.json에 저장했다.
+- strict OpenSpec validate add-git-worktree-workspaces --strict exit0.9.6의 명세 대조·코드119dc7a/운영 미반영·기본 비활성·잔여 제한 보고를 완료하여53/54다.9.3은 실제 설치 환경과 정식 portable 변형의 미실시 조건 때문에 미완료로 유지한다. 별도 격리 설치 환경 또는 해당 운영 동작의 명시 승인이 필요하며 현재 운영 설치/활성화/재시작/외부 배포는 승인 범위 밖이다. 새 프로세스 조회나 권한 변경으로 이 제한을 우회하지 않았다.
+
+- QA 검증 입력의 fixture-input.js에 literal backslash-n이 들어간 문제를 추가 발견했다. 초기 정상 결과의 consoleErrors=0를 숨기지 않고 보존한다. 실제 저장/새로고침 판정과 별개이며 제품 소스 변경은 아니다. 올바른 JS와 저장 완료 대기를 사용한 정상 업무/후보2개만 추가 실행하여 각각 passed·실제 종료true·consoleErrors0을 확인했다. 새 정상 pair의 데이터/화면 분리 및 원본·업무·후보 HEAD 보존을 다시 대조했고 이전 의도 실패/금지 통신/중단 검사는 반복하지 않았다. 최신 정상 pair는 verification JSON의 normalCandidatePair를 따른다.

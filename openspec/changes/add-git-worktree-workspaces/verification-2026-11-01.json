@@ -1,0 +1,254 @@
+{
+  "date": "2026-11-01",
+  "sourceCommit": "119dc7a569f67561ee24e386d8d90e4168337096",
+  "version": "0.1.14",
+  "scope": "격리 C 개발 사본 및 로컬 QA 패키지. 운영 설치/활성화/배포 아님",
+  "selectedRegressionCasesPassed": 16,
+  "backendBuild": {
+    "exitCode": 0
+  },
+  "frontendBuild": {
+    "reused": true,
+    "productCommit": "931e018",
+    "asset": "index-BR2HcEWg.js",
+    "durationSeconds": 15.47
+  },
+  "combinedFaultCase": {
+    "file": "backend/test/integration-apply.test.ts",
+    "name": "복합 장애 전체 흐름",
+    "passed": true,
+    "durationSeconds": 21.23,
+    "trustedSeeds": [
+      "문서/준비 완료 기준",
+      "업무/후보 검증 근거",
+      "완료 capture"
+    ],
+    "actual": [
+      "Git/SQLite/native Job",
+      "설정 변경과 pending 질문 유지",
+      "자기 임시 루트 rename/복원",
+      "용량 부족 주입과 부분 파일 보존",
+      "생성 응답 유실과 같은 고정 공간 복구",
+      "ff 성공 응답 유실과 중복 방지",
+      "제거 도중 새 파일 보존"
+    ],
+    "notPerformed": [
+      "실제 드라이브 탈착",
+      "OS 재부팅",
+      "AI/model 호출"
+    ]
+  },
+  "packagedFiles": [
+    {
+      "file": "projects/git-runner.js",
+      "sha256": "f7f2c8b3bd862b86305a7c503f93d3c7c5e76f0d93434498801b4a4141a50888"
+    },
+    {
+      "file": "work/integration-editing.js",
+      "sha256": "573a2f97c11543fdea11033fba97df7ea163e7466cb14d29f6113304fd414c5a"
+    },
+    {
+      "file": "work/integration-preparation.js",
+      "sha256": "70c929661df49d751ab2f91c5cecdbc9c0befb93d2f303c9e5f96a5e3d0ec5b3"
+    },
+    {
+      "file": "work/workspace-cleanup.js",
+      "sha256": "f13486a6965f751dc6ce43af9f5673a7fb31509f2a762823b76e8be33e406861"
+    },
+    {
+      "file": "work/worktree-manager.js",
+      "sha256": "6ccfa7a4486846a4e70e7119643d30593f89ffd2a43db90f4479a5a6c4f41cbf"
+    },
+    {
+      "file": "work/worktree-result-commit.js",
+      "sha256": "a4e8ce497951651e29e32f7310909bc43b959ce56c4cf2d484e0eadd90939393"
+    },
+    {
+      "file": "scripts/guard-worker.cjs",
+      "sha256": "806978a2d56398b267f54921c371ed7f31acb09567be63f1f3f955e9e8729844"
+    },
+    {
+      "file": "scripts/BrowserGuard.cs",
+      "sha256": "e27dfa0dbae0583fc5dfb718ae7d2170ddf536dd259ebb3ab81068b7df18c352"
+    }
+  ],
+  "guardBuild": {
+    "schemaVersion": 1,
+    "protocol": "browser-job-v2-witness-v1",
+    "sourceSha256": "e27dfa0dbae0583fc5dfb718ae7d2170ddf536dd259ebb3ab81068b7df18c352",
+    "binarySha256": "b8b2e540915fa559cf6850ba92810390e02bf9bd318a308e09c3ebefbe6f8d4f"
+  },
+  "artifact": {
+    "directory": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked",
+    "appSha256": "bd02c026348852e7798cba421bd9104beaed4f25b689f9718137205da002c129",
+    "asarSha256": "0d90922025f771b9e2017f2f0a2385e6e0884df1c35311f0040c104c615654ca",
+    "policy": "로컬 QA 업데이트 비활성",
+    "buildExitCode": 0,
+    "zip": {
+      "file": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-artifacts-worktreeqa-20261101\\OpenSpecBoard-0.1.14-win-x64-qa.zip",
+      "size": 478270013,
+      "sha256": "d351df6f42a6081a1f815098109425184e0f60ec8e1a835ead8a8f93b2602d3a",
+      "buildExitCode": 0,
+      "verifiedPayloadFiles": [
+        {
+          "file": "OpenSpecBoard.exe",
+          "sha256": "bd02c026348852e7798cba421bd9104beaed4f25b689f9718137205da002c129"
+        },
+        {
+          "file": "resources/app.asar",
+          "sha256": "0d90922025f771b9e2017f2f0a2385e6e0884df1c35311f0040c104c615654ca"
+        },
+        {
+          "file": "resources/service/backend/dist/projects/git-runner.js",
+          "sha256": "f7f2c8b3bd862b86305a7c503f93d3c7c5e76f0d93434498801b4a4141a50888"
+        },
+        {
+          "file": "resources/service/backend/scripts/guard-worker.cjs",
+          "sha256": "806978a2d56398b267f54921c371ed7f31acb09567be63f1f3f955e9e8729844"
+        },
+        {
+          "file": "resources/service/browser-runtime/guard/BrowserGuard.exe",
+          "sha256": "b8b2e540915fa559cf6850ba92810390e02bf9bd318a308e09c3ebefbe6f8d4f"
+        }
+      ]
+    },
+    "installer": {
+      "file": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-installer-worktreeqa-20261101\\OpenSpecBoard-0.1.14-win-x64-qa-setup.exe",
+      "size": 380684013,
+      "sha256": "466a51a374282c3edb23354bf50913cbe709199a33e10bf1b14187f82059ff26",
+      "buildExitCode": 0,
+      "installedOrExecuted": false
+    }
+  },
+  "packagedWorkScenarios": {
+    "service": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service",
+    "node": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service\\runtime\\node.exe",
+    "root": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l",
+    "results": [
+      {
+        "runId": "20798f0e-e5f2-417b-a093-d0457d942038",
+        "status": "passed",
+        "environmentId": "82d294af-54d5-4596-b5ba-a2d51c75a31c",
+        "evidencePath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\82d294af-54d5-4596-b5ba-a2d51c75a31c\\evidence\\20798f0e-e5f2-417b-a093-d0457d942038.jpg",
+        "processTerminated": true
+      },
+      {
+        "runId": "d4ba551c-f4d5-494b-ace4-0ac093c94636",
+        "status": "failed",
+        "environmentId": "e8140381-6e83-4709-87f1-e044ce8ff6d0",
+        "evidencePath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\e8140381-6e83-4709-87f1-e044ce8ff6d0\\evidence\\d4ba551c-f4d5-494b-ace4-0ac093c94636.jpg",
+        "processTerminated": true
+      },
+      {
+        "runId": "788e68bd-c32e-4694-a76c-a4f8537d5859",
+        "status": "blocked",
+        "environmentId": "7ccb3bdb-b4c0-486c-ab42-2b543a4b7cfb",
+        "evidencePath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\7ccb3bdb-b4c0-486c-ab42-2b543a4b7cfb\\evidence\\788e68bd-c32e-4694-a76c-a4f8537d5859.jpg",
+        "processTerminated": true
+      },
+      {
+        "runId": "829cda40-2ee5-4b44-8030-75f0847c643c",
+        "status": "interrupted",
+        "processTerminated": true
+      }
+    ],
+    "outsideRequests": 0
+  },
+  "packagedCandidate": {
+    "service": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service",
+    "node": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service\\runtime\\node.exe",
+    "root": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l",
+    "candidateId": "27d8c257-026b-4fa3-a007-f6c589acf2f3",
+    "runId": "686c454b-c0de-41fe-8bc3-58a8dca9a8e9",
+    "status": "passed",
+    "environmentId": "e25de2e6-87c4-4eb2-b89f-3be04e8e80de",
+    "dataPath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\e25de2e6-87c4-4eb2-b89f-3be04e8e80de\\data",
+    "evidencePath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\e25de2e6-87c4-4eb2-b89f-3be04e8e80de\\evidence\\686c454b-c0de-41fe-8bc3-58a8dca9a8e9.jpg",
+    "processTerminated": true,
+    "workRunId": "20798f0e-e5f2-417b-a093-d0457d942038",
+    "workDataPath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\82d294af-54d5-4596-b5ba-a2d51c75a31c\\data",
+    "workEvidencePath": "C:\\Users\\NOVELPIA\\AppData\\Local\\Temp\\package-browser-L25Z7l\\data\\verification-environments\\82d294af-54d5-4596-b5ba-a2d51c75a31c\\evidence\\20798f0e-e5f2-417b-a093-d0457d942038.jpg",
+    "head": "bcc5a95560a51a602a4b0ed684ce51c176c62f2b",
+    "trustedSeed": "실제 등록된 동일 HEAD 후보 fixture; 후보 생성·반영 명령 흐름 전체가 아님"
+  },
+  "desktopSmoke": {
+    "session": 56776,
+    "exitCode": 0,
+    "profile": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-smoke-검증 공간-UnbJ44",
+    "passed": [
+      "실제 Electron 기동",
+      "인증 API",
+      "빈 프로젝트",
+      "정상 종료/백업",
+      "렌더러 격리/메인 프레임 IPC",
+      "트레이 아이콘"
+    ],
+    "metadataPermission": "사용자의 구체적 QA 질문에 대한 나는 잘꺼야 니가 알아서 해 답변으로 읽기 전용 조회를 위임받음; 전체 메타데이터 덤프/별도 수집하지 않음"
+  },
+  "packagedServiceSmoke": {
+    "session": 46800,
+    "exitCode": 0,
+    "profile": "C:/Users/NOVELPIA/AppData/Local/Temp/OpenSpecBoard-service-검증 공간-EcOEJv/profile",
+    "operatingPortsBefore": [
+      false,
+      false,
+      false
+    ],
+    "operatingPortsAfter": [
+      false,
+      false,
+      false
+    ]
+  },
+  "limitations": [
+    "실제 설치 환경의 GUI 실행 및 정식 portable 업데이트/교체 smoke 미실시; QA ZIP의 핵심 payload 5개는 실제 실행한 win-unpacked와 hash 일치",
+    "로컬 QA package 0.1.14이며 업데이트/외부 배포 산출물 아님",
+    "과거 QA 세션74508 종료 미확인; 새 QA 정상 종료와 구분",
+    "종료 증거가 저장되지 않은 legacy Git/recovery claim 자동 해제 없음",
+    "전체 suite 미실시; 관련 최소 회귀/기존 불변 코드 근거만 사용",
+    "운영 앱/DB/13003/원본D/별도a16fa882 반영·설치·재시작 안 함"
+  ],
+  "strictValidation": {
+    "state": "passed",
+    "command": "./scripts/node.ps1 node_modules/@fission-ai/openspec/bin/openspec.js validate add-git-worktree-workspaces --strict",
+    "exitCode": 0
+  },
+  "normalCandidatePair": {
+    "work": {
+      "service": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service",
+      "node": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service\\runtime\\node.exe",
+      "root": "C:\\Windows\\Temp\\package-browser-IaocxI",
+      "results": [
+        {
+          "runId": "57bf1393-c882-4a43-b8df-c4b00cc6ab0b",
+          "status": "passed",
+          "environmentId": "aff6a66a-e8bf-4216-a63a-c8457343af43",
+          "evidencePath": "C:\\Windows\\Temp\\package-browser-IaocxI\\data\\verification-environments\\aff6a66a-e8bf-4216-a63a-c8457343af43\\evidence\\57bf1393-c882-4a43-b8df-c4b00cc6ab0b.jpg",
+          "processTerminated": true
+        }
+      ],
+      "outsideRequests": 0,
+      "consoleErrors": 0
+    },
+    "candidate": {
+      "service": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service",
+      "node": "C:\\Users\\NOVELPIA\\.codex\\worktrees\\worktree-continuation\\open_spec_dashboard\\.tools\\desktop-dist-worktreeqa-20261101\\win-unpacked\\resources\\service\\runtime\\node.exe",
+      "root": "C:\\Windows\\Temp\\package-browser-IaocxI",
+      "candidateId": "bb88f2d8-e9df-4e96-85ac-89e30f42f579",
+      "runId": "c00608ea-1566-48fc-8409-61bae9623c44",
+      "status": "passed",
+      "consoleErrors": 0,
+      "environmentId": "f40c19e1-7658-4c54-b2b7-6b1bd27be80f",
+      "dataPath": "C:\\Windows\\Temp\\package-browser-IaocxI\\data\\verification-environments\\f40c19e1-7658-4c54-b2b7-6b1bd27be80f\\data",
+      "evidencePath": "C:\\Windows\\Temp\\package-browser-IaocxI\\data\\verification-environments\\f40c19e1-7658-4c54-b2b7-6b1bd27be80f\\evidence\\c00608ea-1566-48fc-8409-61bae9623c44.jpg",
+      "processTerminated": true,
+      "workRunId": "57bf1393-c882-4a43-b8df-c4b00cc6ab0b",
+      "workDataPath": "C:\\Windows\\Temp\\package-browser-IaocxI\\data\\verification-environments\\aff6a66a-e8bf-4216-a63a-c8457343af43\\data",
+      "workEvidencePath": "C:\\Windows\\Temp\\package-browser-IaocxI\\data\\verification-environments\\aff6a66a-e8bf-4216-a63a-c8457343af43\\evidence\\57bf1393-c882-4a43-b8df-c4b00cc6ab0b.jpg",
+      "head": "201f7b60667ef5129f7ff0d347dc511b0e804e20",
+      "trustedSeed": "실제 등록된 동일 HEAD 후보 fixture; 후보 생성·반영 명령 흐름 전체가 아님"
+    },
+    "reason": "초기 fixture의 literal\\n JS 문제를 정상 입력으로 고쳐 정상2개만 추가 확인; 기존 failed/blocked/interrupted 근거는 유지",
+    "previousNormalConsoleErrors": 0
+  }
+}
