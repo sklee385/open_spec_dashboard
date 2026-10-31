@@ -98,7 +98,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
 
   const operations: Record<string, string> = { status: t('workRoom.dependencies'), instructions: t('workRoom.instructions'), schemas: t('workRoom.schemas'), specs: t('workRoom.specs'), spec: t('workRoom.spec'), deltas: t('workRoom.deltas'), diff: t('workRoom.diff'), validate: t('workRoom.validate'), doctor: t('workRoom.doctor'), context: t('workRoom.context') };
   const [room, setRoom] = useState<Room | null>(null), [doc, setDoc] = useState<Doc | null>(null), [draft, setDraft] = useState('');
-  const [gitManaged, setGitManaged] = useState(false), [gitApplied, setGitApplied] = useState(false);
+  const [gitManaged, setGitManaged] = useState(false), [gitApplied, setGitApplied] = useState(false), [gitPreparationStatus, setGitPreparationStatus] = useState({ workId: '', status: '' });
   const [initialWorkId] = useState(attentionTarget?.workId ?? workId);
   const questionNodes = useRef(new Map<string, HTMLDivElement>());
   const attentionNotice = useRef<HTMLParagraphElement>(null);
@@ -392,8 +392,8 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     {loadError && !needsRecovery && <div className="work-error" role="status">{loadError}</div>}
     {room?.error && !needsRecovery && <div className="work-error">{room.error}</div>}
     {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
-    {room && <WorkspacePreparation key={`workspace-preparation:${room.id}`} workId={room.id} reviewedVersion={room.reviewedVersion} onStatus={status => setGitManaged(status.experimentalEnabled && status.kind === 'git-worktree')} />}
-    {room && gitManaged && <WorkIntegration key={`integration:${room.id}`} workId={room.id} phase={room.phase} state={room.state} sourceId={change.sourceId} workDirty={dirty} active={active} onAppliedChange={setGitApplied} onOpenCandidate={(candidateId, executionPath) => onOpenSource?.({ id: room.id, candidateId, executionPath })} />}
+    {room && <WorkspacePreparation key={`workspace-preparation:${room.id}`} workId={room.id} reviewedVersion={room.reviewedVersion} onStatus={status => { setGitManaged(status.experimentalEnabled && status.kind === 'git-worktree'); setGitPreparationStatus({ workId: room.id, status: status.status }); }} />}
+    {room && gitManaged && <WorkIntegration key={`integration:${room.id}`} workId={room.id} phase={room.phase} state={room.state} sourceId={change.sourceId} workDirty={dirty} active={active && gitPreparationStatus.workId === room.id && ['ready', 'removed'].includes(gitPreparationStatus.status)} onAppliedChange={setGitApplied} onOpenCandidate={(candidateId, executionPath) => onOpenSource?.({ id: room.id, candidateId, executionPath })} />}
     {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}
     {needsRecovery && room && <WorkRecovery status={room.recovery || { required: true, canReconnect: !!room.threadId, code: room.errorCode || 'connection-failed' }} busy={busy} error={room.error || error || loadError} onRecover={() => void recover()} />}
     {nativeResume && room?.threadId && (room.errorCode === 'thread-in-use' || room.sessionRecovery) && <SessionRecovery key={`${room.id}:${room.threadId}:${room.errorCode || ''}`} workId={room.id} threadId={room.threadId} recovery={room.sessionRecovery} conflicted={room.errorCode === 'thread-in-use'} busy={busy}
