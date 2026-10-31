@@ -14,6 +14,7 @@ if(mode==='leaf') {
   const {claimBrowser,checkpointBrowser}=require('../../dist/browser/browser-lease.js');
   const {guardBrowserProcess}=require('../../dist/browser/browser-job.js');
   const {randomUUID}=require('node:crypto');
+  const {prepareBrowserWitness,bindBrowserWitness}=require('../../dist/browser/browser-witness.js');
   process.env.DATA_DIR=path.join(root,'data');let worker;
   process.on('message',message=>{if(message==='crash')process.exit(73);});
   (async()=>{
@@ -21,7 +22,9 @@ if(mode==='leaf') {
     const row={id:randomUUID(),workId:'w',owner:'user',candidateId:null,targetKind:'work',status:'running',snapshotStatus:'running',steps:[],createdAt:new Date().toISOString()};
     const lease=claimBrowser(store,row,()=>{});
     worker=cp.fork(__filename,['worker',root],{execArgv:[],windowsHide:true,stdio:['ignore','ignore','ignore','ipc']});
-    const guard=await guardBrowserProcess(worker,undefined,{browserProtocol:true});
+    const witness=process.env.OPENSPEC_CRASH_WITNESS==='1'?prepareBrowserWitness(store):undefined;
+    const guard=await guardBrowserProcess(worker,undefined,{browserProtocol:true,...(witness?{witness}:{})});
+    if(witness)row.terminationWitness=bindBrowserWitness(store,witness,worker.pid,guard.pid);
     const leafReady=new Promise((resolve,reject)=>{worker.once('message',resolve);worker.once('error',reject);});worker.send('go');const leaf=await leafReady;
     row.processId=worker.pid;row.guardPid=guard.pid;row.dispatched=true;checkpointBrowser(store,lease,row,{intent:{scope:'workspace',root:path.join(root,'source'),status:'running',owner:lease.owner,runGeneration:lease.runGeneration}});
     process.send?.({ready:true,runId:row.id,workerPid:worker.pid,guardPid:guard.pid,leafPid:leaf.leafPid});

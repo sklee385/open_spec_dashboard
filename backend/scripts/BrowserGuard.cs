@@ -33,13 +33,21 @@ public static class BrowserGuard {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint code);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int info, out Accounting data, uint length, IntPtr returned);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  static void WriteWitness(FileStream stream,string state,string nonce,uint worker) {
+    byte[] bytes=Encoding.UTF8.GetBytes(state+"\n"+nonce+"\n"+worker+"\n"+System.Diagnostics.Process.GetCurrentProcess().Id+"\n"+DateTime.UtcNow.ToString("o")+"\n");
+    stream.Position=0; stream.SetLength(0); stream.Write(bytes,0,bytes.Length); stream.Flush(true);
+  }
   public static int Main(string[] args) {
     IntPtr job=IntPtr.Zero, process=IntPtr.Zero, parent=IntPtr.Zero, buffer=IntPtr.Zero;
-    FileStream head=null; bool pinned=false, browserJob=false; int result=1;
+    FileStream witness=null; string witnessNonce=null; bool assigned=false;
+    FileStream head=null; bool pinned=false, browserJob=false; int result=1; uint owner=0, host=0;
     try {
-      uint owner, host;
-      browserJob=args.Length==3 && args[2]=="BROWSER-JOB-V2";
+      browserJob=(args.Length==3 || args.Length==5) && args[2]=="BROWSER-JOB-V2";
       if((args.Length!=2 && args.Length!=4 && !browserJob) || !uint.TryParse(args[0], out owner) || !uint.TryParse(args[1], out host) || owner==0 || host==0) return 2;
+      if(browserJob && args.Length==5) {
+        if(!Path.IsPathRooted(args[3]) || args[4].Length!=64 || !System.Text.RegularExpressions.Regex.IsMatch(args[4], "\\A[a-f0-9]{64}\\z")) throw new Exception("witness request failed");
+        witnessNonce=args[4]; witness=new FileStream(args[3],FileMode.CreateNew,FileAccess.ReadWrite,FileShare.Read);
+      }
       job=CreateJobObject(IntPtr.Zero, null);
       if(job==IntPtr.Zero) throw new Exception("job create failed");
       Extended info=new Extended(); info.BasicLimitInformation.LimitFlags=0x2000;
@@ -47,6 +55,8 @@ public static class BrowserGuard {
       if(!SetInformationJobObject(job, 9, buffer, (uint)Marshal.SizeOf(typeof(Extended)))) throw new Exception("job policy failed");
       process=OpenProcess(0x00100101, false, owner); parent=OpenProcess(0x00100000, false, host);
       if(process==IntPtr.Zero || parent==IntPtr.Zero || !AssignProcessToJobObject(job, process)) throw new Exception("job assignment failed");
+      assigned=true;
+      if(witness!=null) WriteWitness(witness,"READY",witnessNonce,owner);
       if(args.Length==4) {
         if(!Path.IsPathRooted(args[2]) || !args[3].StartsWith("refs/heads/") || args[3].IndexOfAny(new char[]{'\0','\r','\n'})>=0) throw new Exception("head request failed");
         head=new FileStream(args[2], FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -72,13 +82,14 @@ public static class BrowserGuard {
         if(browserJob) {
           DateTime deadline=DateTime.UtcNow.AddSeconds(10); bool quiescent=false;
           while(DateTime.UtcNow<deadline) { if(QueryInformationJobObject(job,1,out accounting,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero) && accounting.ActiveProcesses==0) { quiescent=true; break; } Thread.Sleep(10); }
-          if(quiescent) { Console.WriteLine("QUIESCENT BROWSER-JOB-V2"); Console.Out.Flush(); } else result=1;
+          if(quiescent && assigned && result==0) { if(witness!=null) WriteWitness(witness,"QUIESCENT",witnessNonce,owner); try { Console.WriteLine("QUIESCENT BROWSER-JOB-V2"); Console.Out.Flush(); } catch { /* Host pipe may already be closed; the witness is durable. */ } } else result=1;
         } else while(!QueryInformationJobObject(job, 1, out accounting, (uint)Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero) || accounting.ActiveProcesses!=0) Thread.Sleep(10);
       }
       if(head!=null) {
         if(pinned) { Console.WriteLine("QUIESCENT HEAD-PIN-V1"); Console.Out.Flush(); }
         head.Dispose();
       }
+      if(witness!=null) witness.Dispose();
       if(buffer!=IntPtr.Zero) Marshal.FreeHGlobal(buffer);
       if(job!=IntPtr.Zero) CloseHandle(job);
       if(process!=IntPtr.Zero) CloseHandle(process);

@@ -22,7 +22,12 @@ function closed(child: any, acknowledge = true) {
 }
 beforeEach(() => {
   workers = []; services = []; other = undefined; mock.fork.mockImplementation(() => { const child: any = Object.assign(new EventEmitter(), { pid: 31000 + workers.length, connected: true, exitCode: null, signalCode: null, stdout: { resume() {} }, stderr: { resume() {} }, send: vi.fn((_value, callback) => callback?.()), kill: vi.fn() }); workers.push(child); return child; });
-  mock.guard.mockImplementation(async (child: any) => { let proof: any; const done = new Promise<void>(resolve => { child.ack = (value: any) => { proof = value; resolve(); }; }); return { pid: child.pid + 1000, protocol: 'browser-job-v2', done, get terminationProof() { return proof; }, requestStop: () => closed(child) }; }); mock.stop.mockImplementation(async child => { closed(child); });
+  mock.guard.mockImplementation(async (child: any, _head: unknown, options: any) => { if(options?.witness)writeFileSync(options.witness.file, `READY
+${options.witness.nonce}
+${child.pid}
+${child.pid + 1000}
+${new Date().toISOString()}
+`); let proof: any; const done = new Promise<void>(resolve => { child.ack = (value: any) => { proof = value; resolve(); }; }); return { pid: child.pid + 1000, protocol: 'browser-job-v2', done, get terminationProof() { return proof; }, requestStop: () => closed(child) }; }); mock.stop.mockImplementation(async child => { closed(child); });
   const dir = mkdtempSync(join(tmpdir(), 'blife-')), root = join(dir, 'source'); mkdirSync(root); browserBuildFixture(root, 'a'); browserBuildFixture(root, 'b'); browserFixtureConfig(root, 'fixture'); writeFileSync(join(root, 'server.cjs'), '// host fixture'); process.env.DATA_DIR = join(dir, 'data'); store = new WorkStore();
   const make = (id: string): Work => { const work = store.save({ id, sourceId: 'fixture', projectPath: root, changeName: id, requestKey: id, ideaIds: [], phase: 'verification', state: 'idle', threadId: 'thread-'+id, reviewedVersion: null, createdAt: '', updatedAt: '' }); new FileResults(store).prepare(work); return work; };
   a = make('a'); b = make('b'); browser = new BrowserService(store); services.push(browser);

@@ -19,6 +19,7 @@ import { parseScenario, type Scenario } from './browser-policy';
 import { browserDirectory } from './browser-runtime';
 import { localRuntimeDirectory } from '../runtime';
 import type { BrowserOutcome } from './browser-runner';
+import { prepareBrowserWitness, bindBrowserWitness, recoverBrowserWitness } from './browser-witness';
 import { guardBrowserProcess } from './browser-job';
 import { BrowserMailbox } from './browser-mailbox';
 import { desktopHealth } from '../desktop/health';
@@ -85,7 +86,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     let observation: any = { state: 'not-checked' }, proof: Awaited<ReturnType<BrowserService['capturePassedProof']>> | undefined;
     if (inspect) try { proof = await this.capturePassedProof(id, candidateId); if (browserDigest(rows) !== proof.recordsVersion) throw new ConflictException('조회 중 브라우저 결과가 변경되었습니다'); proof.assertUnchanged(); observation = { state: 'fresh', checkedAt: new Date().toISOString() }; }
     catch (error: any) { proof = undefined; observation = { state: rows.length ? 'stale' : 'not-run', checkedAt: new Date().toISOString(), reason: error.message }; }
-    const results = rows.map(row => ({ ...row, fresh: !!proof && row.id === proof.row.id, freshnessState: inspect ? proof && row.id === proof.row.id ? 'fresh' : 'stale' : 'not-checked' }));
+    const results = rows.map(row => { const { terminationWitness: _witness, ...receipt } = row; return { ...receipt, fresh: !!proof && row.id === proof.row.id, freshnessState: inspect ? proof && row.id === proof.row.id ? 'fresh' : 'stale' : 'not-checked' }; });
     return { scenario: work.browserScenario ?? null, targetKind: candidateId ? 'integration-candidate' : 'work', candidateId: candidateId ?? null, ...this.activity(id, candidateId), observation, results };
   }
   save(id: string, input: unknown) {
@@ -153,7 +154,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         if (lease.proof) row.terminationProof = lease.proof;
         checkpointBrowser(this.store, lease, row);
         if (!lease.proof) throw new Error('소유 Job active=0 및 child close를 확인하지 못했습니다. 사본과 점유를 보존합니다');
-        const final: any = { ...row, ...(result || { status: active.cancelled ? 'interrupted' : 'blocked', error: '실행 결과를 확인하지 못했습니다. 입력을 자동 반복하지 않습니다' }), id: row.id, workId: row.workId, owner: row.owner, candidateId: row.candidateId, targetKind: row.targetKind, environment: row.environment, environmentId: row.environmentId, snapshot: row.snapshot, snapshotRoot: row.snapshotRoot, revision: row.revision, targetVersion: row.targetVersion, requestKey: row.requestKey, mailboxRequestId: row.mailboxRequestId, executionBinding: row.executionBinding, executionProtocol: row.executionProtocol, executionOwner: row.executionOwner, runGeneration: row.runGeneration, intentId: row.intentId, processId: row.processId, guardPid: row.guardPid, workerClosed: row.workerClosed, workerSpawned: row.workerSpawned, dispatched: row.dispatched, processTerminated: row.processTerminated, terminationProof: row.terminationProof, durationMs: Date.now() - started };
+        const final: any = { ...row, ...(result || { status: active.cancelled ? 'interrupted' : 'blocked', error: '실행 결과를 확인하지 못했습니다. 입력을 자동 반복하지 않습니다' }), id: row.id, workId: row.workId, owner: row.owner, candidateId: row.candidateId, targetKind: row.targetKind, environment: row.environment, environmentId: row.environmentId, snapshot: row.snapshot, snapshotRoot: row.snapshotRoot, revision: row.revision, targetVersion: row.targetVersion, requestKey: row.requestKey, mailboxRequestId: row.mailboxRequestId, executionBinding: row.executionBinding, executionProtocol: row.executionProtocol, executionOwner: row.executionOwner, runGeneration: row.runGeneration, intentId: row.intentId, processId: row.processId, guardPid: row.guardPid, workerClosed: row.workerClosed, workerSpawned: row.workerSpawned, dispatched: row.dispatched, processTerminated: row.processTerminated, terminationProof: row.terminationProof, terminationWitness: row.terminationWitness, durationMs: Date.now() - started };
         if (final.status === 'passed' && !result?.buildAttestation) { final.status = 'blocked'; final.error = '새 빌드와 실제 서버 응답의 출처 확인이 없습니다'; }
         if (snapshot) {
           if (!active.cancelled) try {
@@ -219,14 +220,15 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
         child.once('close', () => { closed = true; row.workerClosed = true; lease.proof = observeTermination(); resolveClosed(); void finish(); });
         child.once('error', () => { void stop(); });
         checkpointBrowser(this.store, lease, row);
-        guard = guardBrowserProcess(child, undefined, { browserProtocol: true }); void guard.catch(() => {});
+        row.terminationWitness = prepareBrowserWitness(this.store); checkpointBrowser(this.store, lease, row);
+        guard = guardBrowserProcess(child, undefined, { browserProtocol: true, witness: row.terminationWitness }); void guard.catch(() => {});
         child.on('message', (message: any) => {
           if (closed || finalization) return;
           if (message?.step) try { row.steps.push(message.step); checkpointBrowser(this.store, lease, row); this.store.event(id, 'browser-step', message.step); } catch { void stop(); }
           if (message?.result) result = message.result;
         });
         child.stdout?.resume(); child.stderr?.resume();
-        handle = await guard; if (closed || finalization) throw new ConflictException('메시지 전달 전에 검증 실행기가 종료됐습니다'); row.guardPid = handle.pid ?? null; checkpointBrowser(this.store, lease, row);
+        handle = await guard; if (closed || finalization) throw new ConflictException('메시지 전달 전에 검증 실행기가 종료됐습니다'); row.guardPid = handle.pid ?? null; row.terminationWitness = bindBrowserWitness(this.store, row.terminationWitness, row.processId, row.guardPid); checkpointBrowser(this.store, lease, row);
         active.abort.signal.throwIfAborted();
         this.executionBindings().assertRun(executionBinding);
         row.dispatched = true; checkpointBrowser(this.store, lease, row);
@@ -254,7 +256,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     if (confirmed !== true || typeof runId !== 'string') throw new BadRequestException('정확한 실행 ID와 명시 확인이 필요합니다');
     const row = this.receipt(id, runId); if (!row) throw new NotFoundException('브라우저 실행 영수증이 없습니다');
     const lease = recoverBrowserLease(this.store, row), intent = browserRecord(this.store, row.intentId);
-    const proof = lease.proof ?? (browserTerminationValid(row, browserSlot(this.store), intent) ? row.terminationProof : undefined);
+    const proof = lease.proof ?? (browserTerminationValid(row, browserSlot(this.store), intent) ? row.terminationProof : recoverBrowserWitness(this.store, row, browserSlot(this.store), intent));
     if (!proof) throw new ConflictException('소유 Job과 child의 실제 종료 근거가 없어 복구하지 않습니다');
     const slot = browserSlot(this.store);
     for (const receipt of [row, slot, intent].filter(Boolean)) if (receipt.processId != null && receipt.processId !== proof.workerPid || receipt.guardPid != null && receipt.guardPid !== proof.guardPid) throw new ConflictException('저장된 프로세스 소유 tuple이 종료 근거와 다릅니다');
@@ -267,7 +269,7 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
       permit();
       if (snapshot && await this.snapshots.restore(snapshot)) await this.snapshots.cleanup(snapshot, permit);
       Object.assign(row, { status: 'interrupted', snapshotStatus: snapshot ? 'removed' : 'unavailable', cleanupStatus: 'confirmed', reconciliation: 'terminated', error: '실제 종료를 재확인했습니다. 이전 입력·검증을 자동 반복하지 않았습니다' }); delete row.freshnessEvidence;
-      finishBrowserLease(this.store, lease, row, true, () => { if (row.owner === 'user') { const work = this.work(id); if (work.state === 'running' && work.threadId === row.threadId && (work.turnId ?? null) === (row.turnId ?? null) && this.context(work).executionContext === row.executionContext) { work.state = 'interrupted'; this.store.save(work); } } }); return row;
+      finishBrowserLease(this.store, lease, row, true, () => { if (row.owner === 'user') { const work = this.work(id); if (work.state === 'running' && work.threadId === row.threadId && (work.turnId ?? null) === (row.turnId ?? null) && this.context(work).executionContext === row.executionContext) { work.state = 'interrupted'; this.store.save(work); } } }); const { terminationWitness: _witness, ...receipt } = row; return receipt;
     } finally { lease.reconciling = false; }
   }
   private receipt(id: string, runId: string) {

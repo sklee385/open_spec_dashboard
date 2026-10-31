@@ -38,8 +38,8 @@ export function checkpointBrowser(store: WorkStore, entry: LiveBrowser, row: any
   const expected = store.transaction(() => {
     assertBrowserLease(store, entry, row); const slot = browserSlot(store), intent = options.intent ?? browserRecord(store, row.intentId);
     store.record(row.id, row.workId, 'browser-verification', row);
-    if (intent) store.record(row.intentId, row.workId, 'workspace-git-intent', { ...intent, owner: entry.owner, runGeneration: entry.runGeneration, runId: row.id, executionProtocol: browserProtocol, processId: row.processId ?? null, guardPid: row.guardPid ?? null, processTerminated: row.processTerminated === true, ...(row.terminationProof ? { terminationProof: row.terminationProof } : {}) });
-    saveSlot(store, { ...slot, status: options.status ?? slot.status, snapshot: options.snapshot ?? row.snapshot ?? slot.snapshot, processId: row.processId ?? null, guardPid: row.guardPid ?? null, processTerminated: row.processTerminated === true, ...(row.terminationProof ? { terminationProof: row.terminationProof } : {}) }); options.updateWork?.();
+    if (intent) store.record(row.intentId, row.workId, 'workspace-git-intent', { ...intent, owner: entry.owner, runGeneration: entry.runGeneration, runId: row.id, executionProtocol: browserProtocol, processId: row.processId ?? null, guardPid: row.guardPid ?? null, terminationWitness: row.terminationWitness, processTerminated: row.processTerminated === true, ...(row.terminationProof ? { terminationProof: row.terminationProof } : {}) });
+    saveSlot(store, { ...slot, status: options.status ?? slot.status, snapshot: options.snapshot ?? row.snapshot ?? slot.snapshot, processId: row.processId ?? null, guardPid: row.guardPid ?? null, terminationWitness: row.terminationWitness, processTerminated: row.processTerminated === true, ...(row.terminationProof ? { terminationProof: row.terminationProof } : {}) }); options.updateWork?.();
     return tuple(store, row);
   });
   entry.expected = expected; if (options.snapshot) entry.snapshot = options.snapshot;
@@ -59,7 +59,7 @@ export function finishBrowserLease(store: WorkStore, entry: LiveBrowser, row: an
   if (settled) { entry.releaseScope?.(); entry.releaseScope = undefined; live.delete(entry); } else entry.phase = 'uncertain';
 }
 export function recoverBrowserLease(store: WorkStore, row: any) {
-  const observed = store.transaction(() => { const slot = browserSlot(store); if (!matches(row, slot) || slot.status !== 'uncertain' || digest(browserRecord(store, row.id)) !== digest(row)) throw new ConflictException('현재 미확인 브라우저 세대만 복구할 수 있습니다'); return { slot, expected: tuple(store, row) }; });
+  const observed = store.transaction(() => { const slot = browserSlot(store); if (!matches(row, slot) || !['running', 'uncertain'].includes(slot.status) || digest(browserRecord(store, row.id)) !== digest(row)) throw new ConflictException('현재 미확인 브라우저 세대만 복구할 수 있습니다'); return { slot, expected: tuple(store, row) }; });
   const slot = observed.slot;
   const existing = liveBrowser(store, row.workId);
   if (existing?.phase === 'active' || existing?.reconciling) throw new ConflictException('소유 브라우저 실행 또는 복구가 진행 중입니다');

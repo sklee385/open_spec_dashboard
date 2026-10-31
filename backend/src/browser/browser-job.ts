@@ -4,14 +4,14 @@ import { browserDirectory } from './browser-runtime';
 import { stopOwnedProcess } from './browser-process';
 
 export interface BrowserJobTermination { protocol: 'browser-job-v2'; state: 'job-quiescent'; workerPid: number; guardPid: number; activeProcesses: 0; at: string; }
-export async function guardBrowserProcess(child: ChildProcess, head?: { file: string; ref: string }, options?: { browserProtocol: true }): Promise<{ done: Promise<void>; pid?: number; protocol?: 'browser-job-v2'; terminationProof?: BrowserJobTermination; requestStop?: () => void }> {
+export async function guardBrowserProcess(child: ChildProcess, head?: { file: string; ref: string }, options?: { browserProtocol: true; witness?: { file: string; nonce: string } }): Promise<{ done: Promise<void>; pid?: number; protocol?: 'browser-job-v2'; terminationProof?: BrowserJobTermination; requestStop?: () => void }> {
   if (process.platform !== 'win32') throw new Error('백그라운드 브라우저 검증은 현재 Windows에서 지원합니다');
   if (!child.pid) throw new Error('검증 실행기의 프로세스 ID가 없습니다');
   const workerPid = child.pid;
   const browser = options?.browserProtocol === true;
   if (browser && head) throw new Error('브라우저 Job과 HEAD pin 프로토콜을 혼합할 수 없습니다');
   const executable = browser && process.env.OPENSPEC_BROWSER_GUARD_PATH ? resolve(process.env.OPENSPEC_BROWSER_GUARD_PATH) : join(browserDirectory(), 'guard/BrowserGuard.exe');
-  const helper = spawn(executable, [String(child.pid), String(process.pid), ...(browser ? ['BROWSER-JOB-V2'] : head ? [head.file, head.ref] : [])], { windowsHide: true, stdio: [browser ? 'pipe' : 'ignore', 'pipe', 'ignore'] });
+  const helper = spawn(executable, [String(child.pid), String(process.pid), ...(browser ? ['BROWSER-JOB-V2', ...(options?.witness ? [options.witness.file, options.witness.nonce] : [])] : head ? [head.file, head.ref] : [])], { windowsHide: true, detached: browser, stdio: [browser ? 'pipe' : 'ignore', 'pipe', 'ignore'] });
   let terminationProof: BrowserJobTermination | undefined;
   let ready = false, output = '';
   let readyResolve!: () => void, readyReject!: (error: Error) => void;
