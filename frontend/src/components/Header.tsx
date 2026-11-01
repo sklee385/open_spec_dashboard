@@ -154,7 +154,9 @@ export function Header({
     );
   };
 
-  const SourceSelect = () => (
+  // Render directly: a component declared here gets a new identity on every
+  // activity/source refresh, remounting Select and discarding its open state.
+  const sourceSelect = () => (
     <Select
       value={selectedSourceId || "all"}
       onValueChange={(val) => onSourceChange(val === "all" ? null : val)}
@@ -368,7 +370,7 @@ export function Header({
             </div>
 
             {/* Source select - visible on all sizes */}
-            <SourceSelect />
+            {sourceSelect()}
 
             {/* New Idea button - visible on desktop */}
             <div className="hidden md:block">
