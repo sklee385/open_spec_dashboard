@@ -137,3 +137,12 @@ it('실제로 실행 중인 업무는 완료 phase로 잘못 저장되어도 종
   expect(f.lifecycle.status().idle).toBe(false);
   expect(f.diagnostic().runtime).toBe('active');
 });
+
+it('완료 업무라도 소유 실행 식별이 있는 미확인 브라우저 종료는 계속 막는다', async () => {
+  const f = await setup();
+  f.store.save({ ...f.store.get('w')!, phase: 'completed', state: 'idle' });
+  f.store.record('modern-browser', 'w', 'browser-verification', { owner: 'user', status: 'running', processTerminated: false, runGeneration: 'unconfirmed-generation' });
+  expect(f.lifecycle.status().idle).toBe(false);
+  expect(f.diagnostic().runtime).toBe('unknown');
+  expect(f.store.records('w', 'browser-verification')[0].status).toBe('running');
+});

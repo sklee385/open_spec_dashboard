@@ -118,11 +118,26 @@ export class ExecutionService implements OnModuleDestroy {
       catch (error: any) { record.status = 'blocked'; record.stderr += error.message; record.processTerminated = false; }
       active.terminated = record.processTerminated === true;
       if (active.terminated) this.children.delete(work.id);
-      if (this.closing) return;
+      if (this.closing) {
+        // Nest keeps the store open until module destruction settles. Preserve
+        // observed termination; a restart must not turn this owned receipt unknown.
+        if (active.terminated) {
+          record.status = 'interrupted'; record.durationMs = Date.now() - started;
+          this.store.transaction(() => {
+            this.store.record(record.id, work.id, 'verification', record);
+            const current = this.store.get(work.id);
+            if (current?.state === 'running') { current.state = 'idle'; this.store.save(current); }
+          });
+        }
+        return;
+      }
       record.durationMs = Date.now() - started;
       if (this.interrupted.delete(work.id)) record.status = 'interrupted';
-      this.store.record(record.id, work.id, 'verification', record);
-      const current = this.store.get(work.id)!; current.state = active.terminated ? 'idle' : 'interrupted'; this.store.save(current);
+      const current = this.store.get(work.id)!;
+      this.store.transaction(() => {
+        this.store.record(record.id, work.id, 'verification', record);
+        current.state = active.terminated ? 'idle' : 'interrupted'; this.store.save(current);
+      });
       if (record.status === 'failed') desktopHealth(this.store).event('execution-failed', work.id, 'failed', 'verification-failed');
       const batch = this.batches.get(work.id), next = batch?.remaining.shift();
       if (record.status === 'passed' && active.terminated && next && batch) {

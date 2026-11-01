@@ -1,6 +1,12 @@
 name: Desktop packages
 on:
   workflow_dispatch:
+    inputs:
+      full_suite:
+        description: '전체 검증(장시간·총 소요 미확인): 이유와 소요 안내 후 사용자가 명시 승인한 경우만 선택'
+        type: boolean
+        required: false
+        default: false
   push:
     tags: ['v*']
 permissions:
@@ -35,9 +41,20 @@ jobs:
         run: ./scripts/node.ps1 node_modules/electron/install.js
       - name: Prepare verification browser and process guard
         run: ./scripts/setup-browser.ps1
-      - run: ./scripts/npm.ps1 run desktop:test
-      - run: ./scripts/npm.ps1 test
-        timeout-minutes: 120
+      - name: Verify changed release publisher
+        if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
+        run: ./scripts/node.ps1 --test desktop/test/publish.test.cjs
+      - name: Verify changed work execution and verification paths
+        if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
+        timeout-minutes: 30
+        run: ./scripts/node.ps1 scripts/test-release.cjs
+      - name: Full desktop tests (explicit user request only)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_suite
+        run: ./scripts/npm.ps1 run desktop:test
+      - name: Full workspace tests (explicit user request only)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_suite
+        timeout-minutes: 300
+        run: ./scripts/npm.ps1 test
       - run: ./scripts/npm.ps1 run build
       - name: Stage application
         shell: pwsh

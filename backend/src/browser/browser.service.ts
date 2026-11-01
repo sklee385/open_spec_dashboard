@@ -45,7 +45,10 @@ export class BrowserService implements OnModuleDestroy, OnModuleInit {
     desktopHealth(store).register('browser', work => {
       const entry = liveBrowser(store, work.id), slot = browserSlot(store);
       if (entry?.phase === 'active') return 'active';
-      if (slot?.workId === work.id && slot.status !== 'settled' || store.db.prepare("SELECT 1 FROM records WHERE work_id=? AND kind='browser-verification' AND (json_extract(data,'$.cleanupStatus')='uncertain' OR json_extract(data,'$.status')='running') LIMIT 1").get(work.id)) return 'unknown';
+      const historical = ['completed', 'archived'].includes(work.phase);
+      // A bare legacy history row has no execution identity. Keep it unchanged,
+      // while modern owners, live slots and uncertain cleanup still block exit.
+      if (slot?.workId === work.id && slot.status !== 'settled' || store.db.prepare("SELECT 1 FROM records WHERE work_id=? AND kind='browser-verification' AND (json_extract(data,'$.cleanupStatus')='uncertain' OR (json_extract(data,'$.status')='running' AND (?=0 OR json_type(data,'$.owner') IS NOT NULL OR json_type(data,'$.environmentId') IS NOT NULL OR json_type(data,'$.snapshotId') IS NOT NULL OR json_type(data,'$.workerPid') IS NOT NULL OR json_type(data,'$.processId') IS NOT NULL OR json_type(data,'$.runGeneration') IS NOT NULL OR json_type(data,'$.candidateId') IS NOT NULL))) LIMIT 1").get(work.id, historical ? 1 : 0)) return 'unknown';
       return undefined;
     });
     this.mailbox = new BrowserMailbox(store, (id, input, context) => this.tool(id, input, context), { resolver: () => this.targetResolver(), contexts: () => this.executionBindings() });

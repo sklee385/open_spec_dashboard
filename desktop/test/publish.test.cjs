@@ -38,6 +38,9 @@ test('무설치 ZIP·메타데이터가 있으면 다섯 파일을 빠짐없이 
 
 test('검증한 세 파일을 초안에 올리고 원격 전체 확인 뒤 게시한다', () => {
   const f = fixture(); publishRelease(f.options);
+  const create = f.calls.find(args => args[1] === 'create');
+  const notes = create[create.indexOf('--notes-file') + 1];
+  assert.match(fs.readFileSync(notes, 'utf8'), /전체 backend\/frontend 및 desktop 테스트 suite를 실행하지 않았습니다/);
   assert.deepEqual(f.calls.map(args => args.slice(0, 2).join(' ')), ['api --hostname', 'release create', 'release upload', 'api --hostname', 'release edit']);
   const upload = f.calls.find(args => args[1] === 'upload');
   const files = upload.filter(arg => arg.startsWith(f.directory)).map(file => basename(file)).sort();

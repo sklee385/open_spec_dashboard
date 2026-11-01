@@ -23,13 +23,13 @@ beforeAll(async () => {
 afterAll(async () => { await app?.close(); for (const key of ['CONFIG_PATH', 'DATA_DIR', 'OPENSPEC_WORKTREE_EXPERIMENTAL']) delete process.env[key]; });
 it('검토·실험 허용·복사 방식 확인을 모두 요구하고 상태·기준·복구를 조회한다', async () => {
   const endpoint = `work/${work.id}/workspace`;
-  expect((await request(`${endpoint}/prepare`, { requestKey: 'p', confirmed: true })).status).toBe(409);
+  expect((await request(`${endpoint}/prepare`, { requestKey: 'before-review', confirmed: true })).status).toBe(409);
   expect((await request(`work/${work.id}/action`, { action: 'review' })).status).toBe(200);
   expect((await request(endpoint)).data).toMatchObject({ status: 'unprepared', experimentalEnabled: false });
-  expect((await request(`${endpoint}/prepare`, { requestKey: 'p', confirmed: true })).status).toBe(409);
+  expect((await request(`${endpoint}/prepare`, { requestKey: 'before-enable', confirmed: true })).status).toBe(409);
   process.env.OPENSPEC_WORKTREE_EXPERIMENTAL = '1';
   expect((await request(`${endpoint}/preview`)).data.git).toMatchObject({ state: 'not-git', copyEligible: true });
-  expect((await request(`${endpoint}/prepare`, { requestKey: 'p' })).status).toBe(409);
+  expect((await request(`${endpoint}/prepare`, { requestKey: 'unconfirmed' })).status).toBe(409);
   const ready = await request(`${endpoint}/prepare`, { requestKey: 'p', confirmed: true }); expect(ready.status).toBe(200); expect(ready.data).toMatchObject({ kind: 'copy', legacy: false, status: 'ready', available: true });
   const before = app.get(WorkStore).get(work.id); expect(existsSync(before.executionPath)).toBe(true);
   writeFileSync(join(before.executionPath, '.env'), 'TOKEN=fixture-local');

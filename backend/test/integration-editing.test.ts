@@ -182,7 +182,7 @@ it.each(['edit', 'delete'])('미지원 속성 파일도 raw FS로 %s 복구하�
 });
 it.each(['source-plan', 'work-plan', 'derived-commands', 'work-source', 'work-index', 'target-ref', 'progress', 'verification-record', 'question', 'owner', 'candidate-head', 'candidate-progress', 'candidate-branch', 'final-work-source'])('요청 proof checkpoint await 중 %s 변경은 재검증 통과 없이 차단한다', async dimension => {
   if (dimension === 'derived-commands') {
-    delete work.verificationCommands; store.save(work);
+    delete work.verificationCommands; work.verificationScope = 'full'; store.save(work);
     writeFileSync(join(work.executionPath!, 'package.json'), JSON.stringify({ scripts: { test: 'fixture' } }));
   }
   await candidate(false);

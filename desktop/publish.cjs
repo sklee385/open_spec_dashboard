@@ -28,7 +28,7 @@ function publishRelease({ directory, version, tag, env = process.env, run = runG
   const tags = command(['api', '--hostname', 'github.com', '--paginate', `repos/${repository}/releases`, '--jq', '.[].tag_name'], '기존 릴리스 조회');
   if (tags.split(/\r?\n/).some(value => value.trim() === tag)) throw new Error('기존 릴리스를 덮어쓰지 않습니다. 초안과 배포 이력을 확인해 주세요.');
   const repo = ['--repo', `github.com/${repository}`];
-  command(['release', 'create', tag, ...repo, '--verify-tag', '--draft', '--title', `OpenSpecBoard ${tag}`, '--generate-notes'], '초안 생성');
+  command(['release', 'create', tag, ...repo, '--verify-tag', '--draft', '--title', `OpenSpecBoard ${tag}`, '--notes-file', join(__dirname, 'release-notes.md'), '--generate-notes'], '초안 생성');
   command(['release', 'upload', tag, ...assets.map(asset => asset.file), ...repo], '산출물 업로드');
   let remote;
   try {

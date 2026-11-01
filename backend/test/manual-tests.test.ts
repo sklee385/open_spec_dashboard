@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Subject } from 'rxjs';
@@ -113,3 +113,19 @@ it('검사 계획은 변경 관련을 기본으로 하고 명시 선택과 같�
   expect(execution.requiredPlan(work).commands).toHaveLength(1);
   execution.setCommands(work, { scope: 'full', commands: [check] }); expect(execution.requiredPlan(work).scope).toBe('full');
 });
+
+it('정상 종료에서 확인한 Job 종료를 저장하여 재시작 후 가짜 실행 잠김을 남기지 않는다', async () => {
+  const { work, project } = setup();
+  const marker = join(project, 'shutdown-started.txt');
+  work.verificationCommands = [{ id: 'shutdown', command: process.execPath, args: ['-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'started'); setInterval(()=>{}, 1000)`] }]; store.save(work);
+  execution.run(work, 'shutdown');
+  await expect.poll(() => existsSync(marker), { timeout: 15000 }).toBe(true);
+  await execution.onModuleDestroy();
+  const stopped = store.records(work.id, 'verification').at(-1)!;
+  expect(stopped).toMatchObject({ status: 'interrupted', processTerminated: true, terminationEvidence: 'job-and-worker-closed' });
+  expect(store.get(work.id)?.state).toBe('idle');
+  execution = new ExecutionService(store, { updates: new Subject<void>() } as LegacyService);
+  const current = store.get(work.id)!; current.verificationCommands = [command('after-restart')]; store.save(current);
+  execution.run(current, 'after-restart');
+  await expect.poll(() => store.records(work.id, 'verification').at(-1)?.status, { timeout: 15000 }).toBe('passed');
+}, 30000);
