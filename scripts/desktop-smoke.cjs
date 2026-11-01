@@ -15,6 +15,7 @@ if (process.argv.includes('--lifecycle')) args.push('--desktop-lifecycle-test');
 if (process.argv.includes('--personal-update')) args.push('--desktop-personal-update-test');
 if (process.argv.includes('--renderer-recovery')) args.push('--desktop-recovery-test');
 if (process.argv.includes('--health')) args.push('--desktop-health-test');
+if (process.argv.includes('--daily-dashboard')) args.push('--desktop-daily-test');
 const child = spawn(binary, args, { windowsHide: !process.argv.includes('--lifecycle'), stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, DESKTOP_SMOKE_DIRECTORY: dir } });
 let output = ''; let errors = '';
 child.stdout.on('data', chunk => { output += chunk; });
@@ -24,10 +25,12 @@ child.on('error', error => { clearTimeout(timer); console.error(error.message); 
 child.on('exit', code => {
   clearTimeout(timer);
   const backups = path.join(dir, 'backups');
+  if (process.argv.includes('--daily-dashboard') && !output.includes('DESKTOP_DAILY_READY')) { console.error('패키지 현황판 확인 실패'); process.exitCode = 1; return; }
   if (code !== 0 || !output.includes('DESKTOP_SMOKE_READY') || (process.argv.includes('--security') && !output.includes('DESKTOP_SECURITY_READY')) || (process.argv.includes('--lifecycle') && !output.includes('DESKTOP_LIFECYCLE_READY')) || (process.argv.includes('--personal-update') && !output.includes('DESKTOP_PERSONAL_UPDATE_READY')) || (process.argv.includes('--renderer-recovery') && !output.includes('DESKTOP_RECOVERY_READY')) || (process.argv.includes('--health') && !output.includes('DESKTOP_HEALTH_READY')) || !fs.existsSync(backups) || !fs.readdirSync(backups).length) {
     console.error(`smoke 실패 (exit ${code}): ${errors.slice(-3000)}`); process.exitCode = 1; return;
   }
   console.log(`데스크톱 프로세스 기동·인증 API·빈 프로젝트·정상 종료·백업 smoke 통과: ${dir}`);
+  if (output.includes('DESKTOP_DAILY_READY')) console.log('실제 패키지의 읽기 전용 일일 현황 API·렌더러 진입 통과');
   if (output.includes('DESKTOP_SECURITY_READY')) console.log('Electron 실제 렌더러 격리·업데이트 메인 프레임 IPC 통과');
   if (output.includes('DESKTOP_TRAY_ICON_READY')) console.log('실제 Electron 트레이 아이콘 디코딩·생성·유지 통과');
   if (output.includes('DESKTOP_LIFECYCLE_READY')) console.log('Electron 실제 창 닫기·숨김·트레이 재열기 콜백·서비스 유지 통과');

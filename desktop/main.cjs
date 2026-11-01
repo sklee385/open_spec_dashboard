@@ -365,6 +365,22 @@ async function start() {
     console.log('DESKTOP_TRAY_ICON_READY');
     const status = await api('status');
     if (!status.idle) throw new Error('격리한 앱이 유휴 상태가 아닙니다');
+    if (process.argv.includes('--desktop-daily-test')) {
+      const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+      const date = ['year', 'month', 'day'].map(type => parts.find(part => part.type === type).value).join('-');
+      const response = await fetch(`${origin}/api/daily?date=${date}&zone=Asia%2FSeoul`, { headers: { 'x-desktop-token': token } });
+      if (!response.ok) throw Error('패키지 현황판 API 오류');
+      const daily = await response.json();
+      if (daily.date !== date || daily.zone !== 'Asia/Seoul' || !Array.isArray(daily.items) || daily.summary?.activeWorks !== 0 || daily.summary?.currentRunning !== 0) throw Error('격리 현황판 집계 불일치');
+      await window.webContents.executeJavaScript("Array.from(document.querySelectorAll('button')).find(button => ['일일 현황','Daily activity'].includes(button.textContent.trim()))?.click()");
+      let displayed = false; const deadline = Date.now() + 10000;
+      while (!displayed && Date.now() < deadline) {
+        displayed = await window.webContents.executeJavaScript("!!document.querySelector('[data-ui=\"daily-dashboard\"] .daily-summary') && ['일일 현황','Daily activity'].includes(document.querySelector('[data-ui=\"daily-dashboard\"] h1')?.textContent)");
+        if (!displayed) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!displayed || !(await api('status')).idle) throw Error('패키지 현황판 표시 또는 읽기 전용 상태 확인 실패');
+      console.log('DESKTOP_DAILY_READY');
+    }
     if (process.argv.includes('--desktop-health-test')) {
       const initial = await inspectHealth();
       if (!initial.server?.idle || !Array.isArray(initial.server.works) || !initial.desktop.ownerVerified) throw Error('실제 소유 프로세스·전체 상태 점검 실패');

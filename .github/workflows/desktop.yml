@@ -44,7 +44,7 @@ jobs:
       - name: Verify changed release publisher
         if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
         run: ./scripts/node.ps1 --test desktop/test/publish.test.cjs
-      - name: Verify changed work execution and verification paths
+      - name: Verify changed daily dashboard and direct impact paths
         if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
         timeout-minutes: 30
         run: ./scripts/node.ps1 scripts/test-release.cjs
@@ -65,9 +65,13 @@ jobs:
             ./scripts/node.ps1 scripts/desktop-stage.cjs --personal-update
           }
       - run: ./scripts/npm.ps1 run desktop:dist
-      - name: Verify packaged renderer recovery and session preservation
+      - name: Verify packaged daily dashboard and normal shutdown
+        run: ./scripts/node.ps1 scripts/desktop-smoke.cjs --security --personal-update --daily-dashboard
+      - name: Prior renderer recovery and session preservation (explicit full request only)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_suite
         run: ./scripts/node.ps1 scripts/desktop-smoke.cjs --security --personal-update --renderer-recovery --health
       - name: Verify isolated force exit and safe restart with profile draft recovery
+        if: github.event_name == 'workflow_dispatch' && inputs.full_suite
         run: ./scripts/node.ps1 scripts/desktop-force-smoke.cjs
       - name: Build portable ZIP and metadata
         run: ./scripts/node.ps1 scripts/desktop-portable-build.cjs
