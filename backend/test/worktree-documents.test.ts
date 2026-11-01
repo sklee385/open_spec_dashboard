@@ -96,6 +96,14 @@ async function copiedPlan() {
 it('문서만 업무 브랜치에 커밋하고 제품 기준·통합 기준·검토 revision을 보존한다', async () => {
   writeFileSync(join(change, 'proposal.md'), '# reviewed proposal'); writeFileSync(join(change, 'tasks.md'), '- [ ] implement\n'); writeFileSync(join(source, 'code.txt'), 'dirty product');
   const preview = await copiedPlan(), sourceStatus = git(source, 'status', '--porcelain=v1');
+  // Git for Windows can stat a revision:path as a filename during `show`
+  // disambiguation. Keep real Git/owned mutations; reproduce only that read error.
+  const text = (manager as any).text.bind(manager);
+  vi.spyOn(manager as any, 'text').mockImplementation(async (...input: any[]) => {
+    const [root, args] = input;
+    if (args[0] === 'show' && /^[a-f0-9]{40}:/.test(args[1])) throw new Error(`fatal: failed to stat '${args[1]}': Filename too long`);
+    return text(root, args);
+  });
   const baseline = await manager.commitDocuments(work, settings);
   expect(baseline.status).toBe('committed'); expect(work.workspace?.workspaceBaselineCommit).toBe(baseline.commit);
   const changed = git(work.executionPath!, 'diff', '--name-only', request.baseCommit, baseline.commit).split('\n').filter(Boolean);

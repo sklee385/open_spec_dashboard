@@ -150,7 +150,7 @@ export class WorktreeManager {
       const committedPaths = (await this.text(space.executionPath, ['ls-tree', '-r', '--name-only', '-z', commit, '--', `openspec/changes/${work.changeName}/`])).split('\0').filter(path => isWorkspaceDocument(path, work.changeName)).sort();
       if (JSON.stringify(committedPaths) !== JSON.stringify(copied.manifest.files.map((file: { path: string }) => file.path).sort())) throw new Error('실제 커밋의 문서 목록이 검토 manifest와 다릅니다.');
       const files: { path: string; content: Buffer }[] = [];
-      for (const file of copied.manifest.files) files.push({ path: file.path, content: Buffer.from(await this.text(space.executionPath, ['show', `${commit}:${file.path}`]), 'utf8') });
+      for (const file of copied.manifest.files) files.push({ path: file.path, content: Buffer.from(await this.text(space.executionPath, ['cat-file', 'blob', `${commit}:${file.path}`]), 'utf8') });
       if (documentPlanRevision(files) !== copied.sourcePlanRevision) throw new Error('커밋 문서의 계획 revision이 검토 결과와 다릅니다.');
       await this.verify(work, settings); await this.assertDocumentBasis(work, copied);
       if ((await this.text(space.executionPath, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])).length) throw new Error('문서 기준 커밋 뒤 제품·문서 또는 index가 변경되었습니다.');

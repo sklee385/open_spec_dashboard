@@ -24,3 +24,8 @@
 ## CI 0.1.17 확정 실패 후 보완
 
 CI 41261721257에서 업무 검증 9건·소유 Git Job 1건은 통과했고, HANDLE 신원 정상 경로 3건이 테스트의 로컬 전용 qa-head-runtime/browser-guard-v2 고정 경로로 실패했다. 신원 거부 검사의 넓은 오류 문구 조건도 실행 실패를 오인할 수 있었다. setup-browser.ps1이 실제로 준비한 browserDirectory()/guard/BrowserGuard.exe를 사용하고, PID 불일치는 HANDLE 신원 오류로만 통과하도록 강화했다. 제품 가드는 수정하지 않았다. 관련 4건을 로컬에서 통과했다. 정리 과정에서 잔존 fixture 변수를 고친 뒤 다시 통과를 확인했으며 전체 suite는 실행하지 않았다. 기존 v0.1.17 태그를 보존하고 수정된 0.1.18로 배포한다.
+
+## CI 0.1.18 확정 실패 후 보완
+
+CI 41261987975에서 실제 Job/업무 검사 14개와 후보/상태 검사 7개는 통과했다. 문서 준비 11개는 모두 커밋 문서 git show revision:path 조회에서 Filename too long으로 실패했다. 로컬 Git은 2.54.0.windows.1, CI Git은 2.56.0.windows.4이며, Git 버전 차이가 원인이라는 단정은 하지 않는다. 실제 실패 지점은 commitDocuments의 커밋 문서 읽기다. 객체와 파일 경로의 구분이 필요 없는 cat-file blob 조회로 변경한다. manifest/계획 revision/실제 트리/소유 Job 검증은 유지한다. 기존 실제 Git 테스트에 show의 해당 오류만 주입해 수정 전 실패를 확인했고 수정 후 해당 직접 영향 검사 결과를 기록한다. backend build 통과. 정식 태그는 덮어쓰지 않고 0.1.19로 준비한다. 근거: Git 공식 cat-file 문서 https://git-scm.com/docs/git-cat-file .
+수정 후 .tools/git-blob-read-green.json: 직접 영향 11개 통과, 실패 0개. 신규 전체 검사/프로파일링은 실행하지 않았다.

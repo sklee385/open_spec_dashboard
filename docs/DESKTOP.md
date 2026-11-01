@@ -4,7 +4,7 @@
 
 ## Windows 무설치 ZIP 다운로드
 
-[v0.1.18 무설치 ZIP 다운로드](https://github.com/sklee385/open_spec_dashboard/releases/download/v0.1.18/OpenSpecBoard-0.1.18-win-x64-portable.zip)를 새 쓰기 가능한 폴더에 **전체 압축 해제**하고 안의 `OpenSpecBoard.exe`를 실행한다. 기존 앱은 창 닫기 대신 **앱 종료**로 정상 종료한다. 기존 앱이 트레이에 남아 있으면 같은 사용자 프로필의 이전 창이 다시 열릴 수 있다. ZIP 안에서 실행하거나 EXE만 복사하지 않는다. [무설치 사용 안내](PORTABLE.md)를 참고한다.
+[v0.1.19 무설치 ZIP 다운로드](https://github.com/sklee385/open_spec_dashboard/releases/download/v0.1.19/OpenSpecBoard-0.1.19-win-x64-portable.zip)를 새 쓰기 가능한 폴더에 **전체 압축 해제**하고 안의 `OpenSpecBoard.exe`를 실행한다. 기존 앱은 창 닫기 대신 **앱 종료**로 정상 종료한다. 기존 앱이 트레이에 남아 있으면 같은 사용자 프로필의 이전 창이 다시 열릴 수 있다. ZIP 안에서 실행하거나 EXE만 복사하지 않는다. [무설치 사용 안내](PORTABLE.md)를 참고한다.
 
 ## v0.1.14 대화 점유 복구와 모바일 연결
 
