@@ -4,7 +4,11 @@ const { join, resolve } = require('node:path');
 const root = resolve(__dirname, '..');
 const listOnly = process.argv.includes('--list');
 const managementOnly = process.argv.includes('--work-management');
-if (process.argv.slice(2).some(arg => !['--list', '--work-management'].includes(arg))) throw new Error('지원하지 않는 검사 옵션입니다');
+const selectRefreshOnly = process.argv.includes('--select-refresh');
+if (managementOnly && selectRefreshOnly || process.argv.slice(2).some(arg => !['--list', '--work-management', '--select-refresh'].includes(arg))) throw new Error('지원하지 않는 검사 옵션입니다');
+const selectRefreshGroups = [
+  { name: 'Header 선택 유지·포커스·설정 초안·업무 전환 응답 직접 영향', workspace: 'frontend', args: ['run', 'src/components/HeaderStability.test.tsx', 'src/hooks/useChangeStability.test.ts', 'src/components/HeaderVersion.test.tsx', 'src/components/SourceManagementNavigation.test.tsx', 'src/components/AiToolSettings.test.tsx', '--configLoader=runner'] },
+];
 
 // Reviewed direct-impact selection for this change. Update this selection with
 // the changed behavior in future releases; never fall back to the full suite.
@@ -18,7 +22,7 @@ const previousGroups = [
   { name: '읽기 전용 일일 집계·현재 상태 근거·이력 페이지', workspace: 'backend', args: ['run', 'test/daily-dashboard.test.ts'] },
   { name: '현황판·원문 시각·이동 및 직접 영향 질문/초안/헤더', workspace: 'frontend', args: ['run', 'src/components/DailyDashboard.test.tsx', 'src/lib/workConversation.test.ts', 'src/DailyApp.test.tsx', 'src/components/WorkRoom.test.tsx', 'src/AttentionApp.test.tsx', 'src/components/WorkRoomAttention.test.tsx', 'src/components/WorkRoomPolling.test.tsx', 'src/components/HeaderVersion.test.tsx', 'src/i18n/i18n.test.tsx', '--configLoader=runner'] },
 ];
-const groups = managementOnly ? managementGroups : previousGroups;
+const groups = selectRefreshOnly ? selectRefreshGroups : managementOnly ? managementGroups : previousGroups;
 
 for (const group of groups) {
   const args = [join(root, 'node_modules/vitest/vitest.mjs'), ...group.args, '--maxWorkers=1'];
