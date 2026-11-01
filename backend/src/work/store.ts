@@ -49,6 +49,8 @@ export class WorkStore implements OnApplicationShutdown {
       CREATE TABLE IF NOT EXISTS work (id TEXT PRIMARY KEY, request_key TEXT UNIQUE NOT NULL, source_id TEXT NOT NULL, change_name TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,change_name));
       CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, work_id TEXT NOT NULL REFERENCES work(id), type TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES work(id), kind TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS events_daily_range ON events(created_at,type,work_id,seq);
+      CREATE INDEX IF NOT EXISTS events_work_type_seq ON events(work_id,type,seq);
       PRAGMA user_version=1;`);
   }
   list(): Work[] { return (this.db.prepare('SELECT data FROM work ORDER BY rowid DESC').all() as any[]).map(x => JSON.parse(x.data)); }

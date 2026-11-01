@@ -27,8 +27,9 @@ import { readDocumentDraft, useLocalDraft, workDraftKey } from '../hooks/useLoca
 import { draftStorage } from '../lib/draftStorage';
 import { SessionRecovery, type SessionRecoveryStatus } from './SessionRecovery';
 import { RemoteBoardConnection } from './RemoteBoardConnection';
+import { workConversation, type ConversationEntry } from '../lib/workConversation';
 
-type Entry = { seq: number; type: string; data: Record<string, unknown> };
+type Entry = ConversationEntry;
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: Record<string, unknown> & { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
 type Verification = TestResult;
 type Command = { id: string; command: string; args: string[] };
@@ -71,26 +72,11 @@ async function api<T>(path: string, method = 'GET', body?: unknown, signal?: Abo
 
 
 const operationRequestLabels: Record<string, string> = { status: '산출물·의존성', instructions: '다음 작성 지침', schemas: '워크플로', specs: '기준 명세 목록', spec: '기준 명세 내용', deltas: '변경 명세', diff: '요구사항 차이', validate: '문서 검증', doctor: '관계 진단', context: '프로젝트 관계' };
-function conversation(events: Entry[], toolName: string) {
-  const messages = new Map<string, { seq: number; role: string; text: string }>();
-  for (const entry of events) {
-    if (entry.type === 'user-message') messages.set(`user:${entry.seq}`, { seq: entry.seq, role: 'user', text: String(entry.data.text) });
-    else if (entry.type === 'item/agentMessage/delta') {
-      const key = `${entry.data.turnId}:${entry.data.itemId}`, old = messages.get(key);
-      messages.set(key, { seq: old?.seq || entry.seq, role: toolName, text: (old?.text || '') + String(entry.data.delta) });
-    } else if (entry.type === 'item/completed' && (entry.data.item as Record<string, unknown>)?.type === 'agentMessage') {
-      const item = entry.data.item as Record<string, unknown>, key = `${entry.data.turnId}:${item.id}`, old = messages.get(key);
-      messages.set(key, { seq: old?.seq || entry.seq, role: toolName, text: String(item.text) });
-    }
-  }
-  return [...messages.values()].slice(-100);
-}
-
-type WorkRoomProps = { change: Change; active?: boolean; onClose: () => void; onOpenSource?: (work?: { id: string; executionPath?: string; candidateId?: string }) => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation>; workId?: string };
+type WorkRoomProps = { change: Change; active?: boolean; onClose: () => void; onOpenSource?: (work?: { id: string; executionPath?: string; candidateId?: string }) => void; attentionTarget?: AttentionTarget; navigationRef?: Ref<WorkRoomNavigation>; workId?: string; eventSeq?: number; openChat?: boolean; returnLabel?: string };
 export function WorkRoom(props: WorkRoomProps) {
   return <WorkRoomContent key={JSON.stringify([props.change.id, props.workId ?? null])} {...props} />;
 }
-function WorkRoomContent({ change, active = true, onClose, onOpenSource, attentionTarget, navigationRef, workId }: WorkRoomProps) {
+function WorkRoomContent({ change, active = true, onClose, onOpenSource, attentionTarget, navigationRef, workId, eventSeq, openChat, returnLabel }: WorkRoomProps) {
   const { t } = useI18n();
   const states: Record<string, string> = { idle: t('workRoom.idle'), running: t('workRoom.running'), connecting: t('workRoom.connecting'), 'creating-thread': t('workRoom.creating'), 'waiting-input': t('workRoom.waitingInput'), 'waiting-approval': t('workRoom.waitingApproval'), 'recovery-required': t('workRoom.recovery'), failed: t('workRoom.failed'), interrupted: t('workRoom.interrupted') };
   const phases: Record<string, string> = { planning: t('workRoom.planning'), reviewed: t('workRoom.reviewed'), implementation: t('workRoom.implementation'), verification: t('workRoom.verificationPhase'), completed: t('workRoom.completed'), archived: t('workRoom.archived') };
@@ -139,10 +125,19 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
   const needsRecovery = nativeResume && (room?.recovery?.required || room?.state === 'recovery-required');
   const guidedReviewBlocked = !room || !['idle', 'interrupted', 'failed'].includes(room.state) || ['completed', 'archived'].includes(room.phase) || room.questions.some(question => ['pending', 'sending', 'uncertain', 'recovering'].includes(question.status) || (question.kind === 'input' && question.status === 'expired'));
   const guidedReviewUnsupported = room?.toolCapabilities?.questions === false;
-  const messages = conversation(room?.events || [], toolName);
+  const messages = workConversation(room?.events || [], toolName,eventSeq);
+  const originMessage=eventSeq===undefined?undefined:messages.find(message=>message.seq<=eventSeq!&&message.lastSeq>=eventSeq!);
+  const originEvent=!originMessage&&eventSeq!==undefined?room?.events.find(event=>event.seq===eventSeq):undefined;
+  const originFocused=useRef('');
+  useEffect(()=>{if(openChat)setPane('chat');},[openChat]);
   const conversationVersion = JSON.stringify(messages);
+  useEffect(()=>{
+    if(eventSeq===undefined||!room)return;const key=`${room.id}:${eventSeq}`;if(originFocused.current===key)return;
+    const node=messageList.current?.querySelector<HTMLElement>(`[data-origin-seq="${originMessage?.seq??eventSeq}"]`);
+    if(node){node.scrollIntoView?.({block:'center'});node.focus({preventScroll:true});originFocused.current=key;}
+  },[eventSeq,room?.id,conversationVersion,originMessage?.seq,originEvent,pane]);
   useEffect(() => {
-    if (!attentionTarget && messageList.current && pane === 'chat') messageList.current.scrollTop = messageList.current.scrollHeight;
+    if (!attentionTarget && eventSeq===undefined && messageList.current && pane === 'chat') messageList.current.scrollTop = messageList.current.scrollHeight;
   }, [conversationVersion, pane, attentionTarget]);
   useEffect(() => {
     if (!attentionTarget || readyTarget !== attentionTarget.token || room?.id !== attentionTarget.workId || focusedTarget.current === attentionTarget.token) return;
@@ -381,7 +376,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     <header className="work-header">
       <AttentionBell />
       <button onClick={() => setDetailOpen(true)}>{t('review.documents')}</button>
-      <button onClick={() => void move(':close')}>{t('workRoom.back')}</button>
+      <button onClick={() => void move(':close')}>{returnLabel||t('workRoom.back')}</button>
       {onOpenSource && <button onClick={() => void move(':source')}>{t('project.title')}</button>}
       <div><h1>{change.title || change.name}</h1><span>{room ? `${phases[room.phase] || room.phase} · ${states[room.state] || room.state}` : t('workRoom.loading')}</span></div>
       <AiActivity state={loadError ? undefined : room?.state} />
@@ -422,7 +417,8 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       <section className="work-chat"><h2>{t('workRoom.questions')}</h2><p className="work-hint">{t('workRoom.questionsHint')}</p>
         {attentionTarget && readyTarget === attentionTarget.token && room?.id === attentionTarget.workId && room.questions.find(q => q.id === attentionTarget.questionId)?.status !== 'pending' && <p ref={attentionNotice} tabIndex={-1} className="work-notice" role="status">{t('attention.stale')}</p>}
         <div className="work-messages" ref={messageList} aria-live="polite">{!room?.events.length && <p>{t('workRoom.emptyChat')}</p>}
-          {messages.map(entry => <div key={entry.seq} className={entry.role === 'user' ? 'work-message user' : 'work-message'}><small>{entry.role === 'user' ? t('workRoom.me') : entry.role}</small>{entry.role === 'user' && recoveredAnswer(entry.text) ? <RecoveredAnswer text={entry.text} /> : <MarkdownContent text={entry.text} />}</div>)}
+          {originEvent&&<aside className="work-notice" tabIndex={-1} data-origin-seq={originEvent.seq} aria-label={t('daily.original')}><strong>{originEvent.type}</strong><p>{originEvent.createdAt||t('daily.notRecorded')}</p><JsonBlock value={originEvent.data}/></aside>}
+          {messages.map(entry => <div key={entry.seq} data-origin-seq={entry.seq} tabIndex={-1} className={`${entry.role === 'user' ? 'work-message user' : 'work-message'}${originMessage?.seq===entry.seq?' work-message-origin':''}`}><small className="work-message-meta"><span>{entry.role === 'user' ? t('workRoom.me') : entry.role}</span>{entry.createdAt?<time dateTime={entry.createdAt}>{new Date(entry.createdAt).toISOString().replace('T',' ').replace('Z',' UTC')}</time>:<span>{t('daily.notRecorded')}</span>}</small>{entry.role === 'user' && recoveredAnswer(entry.text) ? <RecoveredAnswer text={entry.text} /> : <MarkdownContent text={entry.text} />}</div>)}
           <details className="work-event"><summary>{t('workRoom.events')}</summary>{room?.events.filter(entry => !['item/agentMessage/delta', 'user-message'].includes(entry.type)).slice(-100).map(entry => <details key={entry.seq}><summary>{({ 'item/autoApprovalReview/started': t('workRoom.autoReviewStarted'), 'item/autoApprovalReview/completed': t('workRoom.autoReviewCompleted'), 'autoApprovalReview/strictReviewRequired': t('workRoom.strictReview') } as Record<string, string>)[entry.type] || entry.type}</summary><JsonBlock value={entry.data} /></details>)}</details>
         </div>
         {room?.questions.filter(q => (q.kind === 'input' ? room.toolCapabilities?.questions !== false : room.toolCapabilities?.approval !== false) && (q.status === 'pending' || (q.status === 'expired' && q.kind === 'input'))).map(q => <div className="work-question" key={q.id} tabIndex={-1} ref={node => { if (node) questionNodes.current.set(q.id, node); else questionNodes.current.delete(q.id); }}>

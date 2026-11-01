@@ -20,8 +20,9 @@ import { useSSE, useChanges, useSpecs, useSources, useIdeas, type SourceConfig }
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import type { Change, Idea } from './types';
 import './App.css';
+import { DailyDashboard } from './components/DailyDashboard';
 
-type View = 'kanban' | 'specs' | 'project';
+type View = 'kanban' | 'specs' | 'project' | 'daily';
 
 const SHOW_ARCHIVED_KEY = 'openspec-show-archived';
 const SELECTED_SOURCE_KEY = 'openspec-selected-source';
@@ -34,7 +35,7 @@ function App() {
 
   const [currentView, setCurrentView] = useState<View>(() => {
     const stored = localStorage.getItem('openspec-view');
-    if (stored === 'kanban' || stored === 'specs' || stored === 'project') {
+    if (stored === 'kanban' || stored === 'specs' || stored === 'project' || stored === 'daily') {
       return stored;
     }
     return 'kanban';
@@ -58,11 +59,24 @@ function App() {
   const [selectedIdea, setSelectedIdea] = useState<Idea | null>(null);
   const [attentionTarget, setAttentionTarget] = useState<AttentionTarget>();
   const [diagnosticWorkId, setDiagnosticWorkId] = useState<{ id: string; changeId: string }>();
+  const [dailyTarget,setDailyTarget]=useState<{workId:string;seq?:number}>();
+  const dailyNavigation=useRef(0);
+  const openDailyWork=useCallback(async(workId:string,eventSeq?:number)=>{
+    const generation=++dailyNavigation.current;
+    const destination=await loadWorkDestination(workId);
+    if(generation!==dailyNavigation.current)return;
+    if(projectNavigation.current&&!await projectNavigation.current())return;
+    if(generation!==dailyNavigation.current)return;
+    if(workRoomNavigation.current&&!workRoomNavigation.current.preserveDrafts())throw Error('Draft preservation failed');
+    setSelectedIdea(null);setSelectedChange(destination);setAttentionTarget(undefined);setDiagnosticWorkId({id:workId,changeId:destination.id});setWorkHidden(false);setDailyTarget({workId,seq:eventSeq});
+  },[]);
   const openAttention = useCallback(async (item: AttentionLink) => {
+    dailyNavigation.current++;
     const destination = await loadAttentionDestination(item);
     if (projectNavigation.current && !await projectNavigation.current()) return;
     if (workRoomNavigation.current && !workRoomNavigation.current.preserveDrafts()) throw new Error('Draft preservation failed');
     setSelectedIdea(null);
+    setDailyTarget(undefined);
     setSelectedChange(destination);
     setDiagnosticWorkId(undefined);
     setWorkHidden(false);
@@ -75,13 +89,14 @@ function App() {
     if (!bridge) return;
     let stopped = false, pending = Promise.resolve();
     const unsubscribe = bridge.onOpenWork(workId => {
+      dailyNavigation.current++;
       pending = pending.then(async () => {
         if (stopped) return;
         const destination = await loadWorkDestination(workId);
         if (stopped || (projectNavigation.current && !await projectNavigation.current())) return;
         if (stopped) return;
         if (workRoomNavigation.current && !workRoomNavigation.current.preserveDrafts()) throw new Error('Draft preservation failed');
-        setSelectedIdea(null); setSelectedChange(destination); setAttentionTarget(undefined);
+        setSelectedIdea(null); setSelectedChange(destination); setAttentionTarget(undefined);setDailyTarget(undefined);
         setDiagnosticWorkId({ id: workId, changeId: destination.id }); setWorkHidden(false);
       }).catch(() => { if (!stopped) reportNavigationError(); });
     });
@@ -168,12 +183,15 @@ function App() {
   }, [projectVisited, currentView, selectedSourceId, workspaceRevision]);
 
   const changeView = async (view: View) => {
+    dailyNavigation.current++;
     if (currentView === 'project' && view !== 'project' && projectNavigation.current && !await projectNavigation.current()) return;
+    if(view==='daily'){if(workRoomNavigation.current&&!workRoomNavigation.current.preserveDrafts())return;setSelectedChange(null);setAttentionTarget(undefined);setDailyTarget(undefined);}
     if (view === 'project') setProjectVisited(true);
     setCurrentView(view);
   };
   const changeSource = async (sourceId: string | null) => {
     if (sourceId === selectedSourceId) return;
+    dailyNavigation.current++;
     if (projectNavigation.current && !await projectNavigation.current()) return;
     setWorkScopeId(null); setCandidateScopeId(null);
     setSelectedSourceId(sourceId);
@@ -262,7 +280,7 @@ function App() {
             />
           ) : currentView === 'specs' ? (
             <SpecsView selectedSourceId={selectedSourceId} refreshVersion={sourceRevision} />
-          ) : null}
+          ) : currentView==='daily'?<DailyDashboard sourceId={selectedSourceId} onOpenWork={openDailyWork}/>:null}
           {projectVisited && <div hidden={currentView !== 'project'}><ProjectWorkspace sourceId={selectedSourceId} workspaces={workspaces} workId={workScopeId} candidateId={candidateScopeId} onWorkScopeChange={id => { setWorkScopeId(id); setCandidateScopeId(null); }} active={currentView === 'project' && (!selectedChange || workHidden)} registerNavigationGuard={registerProjectGuard} onOpenWork={() => void openProjectWork()} /></div>}
         </main>
         {selectedChange && (
@@ -273,9 +291,12 @@ function App() {
             active={!workHidden}
             attentionTarget={attentionTarget}
             workId={diagnosticWorkId?.changeId === selectedChange.id ? diagnosticWorkId.id : undefined}
+            eventSeq={dailyTarget&&dailyTarget.workId===diagnosticWorkId?.id?dailyTarget.seq:undefined}
+            openChat={!!dailyTarget&&dailyTarget.workId===diagnosticWorkId?.id}
+            returnLabel={dailyTarget&&dailyTarget.workId===diagnosticWorkId?.id?t('daily.return'):undefined}
             navigationRef={workRoomNavigation}
             onOpenSource={work => void openProject(work)}
-            onClose={() => { setSelectedChange(null); setWorkHidden(false); setAttentionTarget(undefined); }}
+            onClose={() => { setSelectedChange(null); setWorkHidden(false); setAttentionTarget(undefined);setDailyTarget(undefined); }}
           />
           </div>
         )}

@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/sheet";
 import type { Source } from '../types';
 
-type View = 'kanban' | 'specs' | 'project';
+type View = 'kanban' | 'specs' | 'project' | 'daily';
 
 interface HeaderProps {
   aiState?: string;
@@ -115,6 +115,7 @@ export function Header({
             {t('header.specifications')}
           </button>
           <button onClick={() => handleViewChange('project')} className={cn('flex items-center w-full px-3 py-2.5 text-sm rounded-lg', currentView === 'project' ? 'bg-primary text-primary-foreground' : 'text-foreground hover:bg-muted')}>{t('project.title')}</button>
+          <button onClick={() => handleViewChange('daily')} className={cn('flex items-center w-full px-3 py-2.5 text-sm rounded-lg', currentView === 'daily' ? 'bg-muted font-medium' : 'text-foreground hover:bg-muted')}>{t('daily.title')}</button>
         </div>
       );
     }
@@ -148,6 +149,7 @@ export function Header({
           {t('common.specs')}
         </Button>
         <Button variant="ghost" size="sm" onClick={() => handleViewChange('project')} className={cn('h-8 px-3 rounded-md', currentView === 'project' ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground')}>{t('project.title')}</Button>
+        <Button variant="ghost" size="sm" onClick={() => handleViewChange('daily')} className={cn('h-8 px-3 rounded-md', currentView === 'daily' ? 'bg-background text-foreground font-medium' : 'text-muted-foreground')}>{t('daily.title')}</Button>
       </nav>
     );
   };

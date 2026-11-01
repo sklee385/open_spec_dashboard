@@ -15,3 +15,4 @@
 .work-remote-connection textarea { display: block; width: 100%; min-height: 140px; margin-top: 6px; padding: 8px; resize: vertical; }
 .work-session-recovery { overflow-wrap: anywhere; }
 .work-session-recovery p { margin: 6px 0; }
+.work-message-meta{display:flex;gap:12px;flex-wrap:wrap;align-items:baseline}.work-message-meta time{font-variant-numeric:tabular-nums;font-size:11px}.work-message-origin{outline:2px solid var(--foreground);outline-offset:3px}

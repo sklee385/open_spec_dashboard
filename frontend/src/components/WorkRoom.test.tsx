@@ -7,6 +7,12 @@ const change = { id: 'demo/feature', name: 'feature', sourceId: 'demo' } as Chan
 const work = { id: 'work-1', sourceId: 'demo', changeName: 'feature', phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null,
   documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); });
+it('과거 원문 메시지로 이동하며 저장된 시각을 보존하고 새 실행을 시작하지 않는다', async () => {
+  const events=Array.from({length:150},(_,index)=>({seq:index+1,type:'user-message',createdAt:'2026-11-01T01:00:00.000Z',data:{text:index===0?'첫 원문 메시지':`메시지 ${index}`}}));
+  const fetcher=vi.fn(async(url:string,_init?:RequestInit)=>({ok:true,json:async()=>url.includes('/document')?{path:'proposal.md',content:'내용',version:'v1'}:{...work,events}}));vi.stubGlobal('fetch',fetcher);
+  render(<WorkRoom change={change} workId="work-1" eventSeq={1} openChat returnLabel="일일 현황으로 돌아가기" onClose={()=>{}}/>);
+  const message=await screen.findByText('첫 원문 메시지');expect(message.closest('.work-message')).toHaveClass('work-message-origin');expect(message.closest('.work-message')?.querySelector('time')).toHaveAttribute('datetime','2026-11-01T01:00:00.000Z');expect(screen.getByRole('button',{name:'일일 현황으로 돌아가기'})).toBeInTheDocument();expect(fetcher.mock.calls.every(([,options])=>!options?.method||options.method==='GET')).toBe(true);
+});
 it('외부 점유 업무에 새 세션 복구를 제공하고 모바일 연결은 모든 업무에서 안내한다', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '내용', version: 'v1' } : { ...work, threadId: 'old-thread', state: 'recovery-required', errorCode: 'thread-in-use' } })));
   render(<WorkRoom change={change} onClose={() => {}} />);

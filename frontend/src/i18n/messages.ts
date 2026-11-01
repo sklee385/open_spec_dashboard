@@ -11,8 +11,10 @@ import { enEdgeCopy, koEdgeCopy } from './edgeMessages';
 import { enRecoveryCopy, koRecoveryCopy } from './recoveryMessages';
 import { enBrowserCopy, koBrowserCopy } from './browserMessages';
 import { enWorkspaceCopy, koWorkspaceCopy } from './workspaceMessages';
+import { enDailyCopy, koDailyCopy } from './dailyMessages';
 
 const en = {
+  ...enDailyCopy,
   ...enMaintenanceCopy,
   ...enRetainedCopy,
   ...enLifecycleCopy,
@@ -70,6 +72,7 @@ type MessageArgs<K extends keyof typeof en> = (typeof en)[K] extends (args: infe
 export type MessageKey = keyof typeof en;
 type Dictionary = { [K in MessageKey]: (typeof en)[K] extends string ? string : (typeof en)[K] };
 const ko: Dictionary = {
+  ...koDailyCopy,
   ...koMaintenanceCopy,
   ...koRetainedCopy,
   ...koLifecycleCopy,
