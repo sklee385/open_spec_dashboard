@@ -44,6 +44,7 @@ it('cancels only a pending document read and preserves the displayed document an
   await act(async () => fireEvent.change(screen.getByRole('combobox', { name: '문서 선택' }), { target: { value: 'tasks.md' } }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '조회 취소' })));
   expect(screen.queryByRole('button', { name: '조회 취소' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
   expect(screen.getByRole('textbox', { name: '문서 내용' })).toBeEnabled();
   expect(screen.getByRole('textbox', { name: '문서 내용' })).toHaveValue('synthetic');
   expect(f.fetcher.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);

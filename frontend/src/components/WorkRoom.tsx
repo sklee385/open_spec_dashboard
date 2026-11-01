@@ -29,6 +29,7 @@ import { SessionRecovery, type SessionRecoveryStatus } from './SessionRecovery';
 import { RemoteBoardConnection } from './RemoteBoardConnection';
 import { workConversation, type ConversationEntry } from '../lib/workConversation';
 import { WorkManagement } from './WorkManagement';
+import { implementationPending, startBackgroundImplementation, useBackgroundImplementation } from '../hooks/useBackgroundImplementation';
 
 type Entry = ConversationEntry;
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: Record<string, unknown> & { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
@@ -96,14 +97,16 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
   const [draftError, setDraftError] = useState(initialChat.failed ? t('draft.readFailed') : '');
   const [message, setMessage] = useState(initialChat.message), [error, setError] = useState(''), [mutating, setMutating] = useState(false);
   const [reconciling, setReconciling] = useState(false), [reading, setReading] = useState(false);
-  const busy = mutating || reconciling;
+  const backgroundImplementation = useBackgroundImplementation(room?.id);
+  const busy = mutating || reconciling || backgroundImplementation;
   const reconcilePending = useRef(false), foregroundRead = useRef<AbortController | null>(null);
+  const backgroundWasPending = useRef<{ workId?: string; pending: boolean }>({ pending: false });
   const recovered = useRef(new Set<string>());
   const [conflict, setConflict] = useState<Doc | null>(null);
   const [connection, setConnection] = useState(t('workRoom.connecting'));
   const [loadError, setLoadError] = useState('');
   const [initialView] = useState(() => readWorkView(change.id));
-  const [tab, setTab] = useState(initialView.tab), [preview, setPreview] = useState(false), [pending, setPending] = useState<string | null>(null);
+  const [tab, setTab] = useState(initialView.tab), [preview, setPreview] = useState(true), [pending, setPending] = useState<string | null>(null);
   const [pane, setPane] = useState(initialView.pane);
   const [reviewRevision, setReviewRevision] = useState(0);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -190,12 +193,12 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
         const restoredDoc = { ...result, version: value.version, content: value.baseContent ?? (result.version !== value.version ? '' : result.content) };
         live.current = { doc: restoredDoc, dirty: value.content !== restoredDoc.content || result.version !== value.version };
         setDoc(restoredDoc);
-        setDraft(value.content); setDraftRestored(true);
+        setDraft(value.content); setDraftRestored(true); setPreview(false);
         if (result.version !== value.version) setConflict(result);
         return true;
       }
     } catch { setDraftError(t('draft.readFailed')); }
-    live.current = { doc: result, dirty: false }; setDoc(result); setDraft(result.content);
+    live.current = { doc: result, dirty: false }; setDoc(result); setDraft(result.content); setPreview(true);
     return true;
   }, [readApi, t]);
   const refresh = useCoalescedRefresh(async (id: string) => {
@@ -311,9 +314,20 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       if (scopeLive.current) { reconcilePending.current = false; setReconciling(false); }
     } catch (e) { if (scopeLive.current) setLoadError(errorMessage(e, t)); }
   };
+  useLayoutEffect(() => {
+    const previous = backgroundWasPending.current;
+    backgroundWasPending.current = { workId: room?.id, pending: backgroundImplementation };
+    if (room && previous.workId === room.id && previous.pending && !backgroundImplementation) {
+      // Reconcile in the CURRENT viewer, including one reopened before the ack.
+      // Keep changes locked until observation succeeds; navigation stays free.
+      reconcilePending.current = true; setReconciling(true); void reconcile();
+    }
+    // Only a request completion edge owns this reconciliation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backgroundImplementation, room?.id]);
   const run = async (action: () => Promise<unknown>) => {
     // Ref guards same-turn double clicks before React paints disabled controls.
-    if (activeOperations.current || reconcilePending.current) return false;
+    if (activeOperations.current || reconcilePending.current || implementationPending(room?.id)) return false;
     cancelRead();
     activeOperations.current = 1; setMutating(true); setError('');
     try { await action(); }
@@ -374,6 +388,14 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     if (!room) return;
     if (value === 'guided-review' && (activeOperations.current > 0 || guidedReviewBlocked || guidedReviewUnsupported)) return;
     if (dirty) { setError(t('workRoom.saveOrDiscard')); return; }
+    if (value === 'implement') {
+      if (activeOperations.current || reconcilePending.current || !['idle', 'interrupted', 'failed'].includes(room.state)) return;
+      cancelRead(); setError('');
+      void startBackgroundImplementation(room.id, async () => {
+        await api(`work/${room.id}/action`, 'POST', { action: value, confirmed: false });
+      }).catch(e => { if (scopeLive.current) setError(errorMessage(e, t)); });
+      return;
+    }
     void run(async () => {
       await api(`work/${room.id}/action`, 'POST', { action: value, confirmed: ['complete', 'apply-changes', 'isolate-workspace', 'archive'].includes(value) });
       if (value === 'guided-review') setPane('chat');
@@ -417,6 +439,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       {room && <RemoteBoardConnection workId={room.id} />}
     </header>
     {mutating && <p role="status">{t('workRoom.mutationPending')}</p>}
+    {backgroundImplementation && <p role="status">{t('workRoom.backgroundImplementation')}</p>}
     {reconciling && <div role="status">{t('workRoom.reconciling')} <button onClick={() => void reconcile()}>{t('workRoom.refreshState')}</button></div>}
     {reading && <div role="status">{t('workRoom.readPending')} <button onClick={cancelRead}>{t('workRoom.cancelRead')}</button></div>}
     {error && !needsRecovery && <div className="work-error" role="alert">{error}</div>}
@@ -442,7 +465,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       <button disabled={busy || !room} onClick={() => action('plan')}>{t('workRoom.plan')}</button>
       <button disabled={busy || guidedReviewBlocked || guidedReviewUnsupported} title={guidedReviewUnsupported ? t('workRoom.guidedReviewUnsupported') : guidedReviewBlocked ? t('workRoom.guidedReviewBlocked') : undefined} onClick={() => action('guided-review')}>{t('workRoom.guidedReview')}</button>
       <button disabled={busy || !room} onClick={() => action('review')}>{t('workRoom.review')}</button>
-      <button disabled={busy || !room?.reviewedVersion} onClick={() => action('implement')}>{t('workRoom.implement')}</button>
+      <button disabled={busy || !room?.reviewedVersion || !['idle', 'interrupted', 'failed'].includes(room.state)} onClick={() => action('implement')}>{t('workRoom.implement')}</button>
       <WorkTestActions disabled={testsBlocked} onRun={runTests} />
       <button disabled={busy || !(room?.verifications.some(row => row.status === 'running') || (room?.turnId && room?.toolCapabilities?.interrupt !== false))} onClick={() => room && void run(() => api(`work/${room.id}/interrupt`, 'POST', {}))}>{t('workRoom.interrupt')}</button>
       <button disabled={busy || room?.phase !== 'verification' || gitManaged && !gitApplied} onClick={() => action('complete')}>{t('workRoom.complete')}</button>
@@ -483,9 +506,9 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       </section>
       <section className="work-output"><nav className="work-tabs">{[['documents', t('workRoom.documents')], ['review', t('review.title')], ['results', t('workRoom.results')], ['openspec', 'OpenSpec']].map(([value, label]) => <button aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>
         {tab === 'review' && <ReviewItems {...review} busy={busy} onSelect={item => { if (busy) return; reviewDestination.current = item; void move(item.path); }} />}
-        {tab === 'documents' && <><div className="work-document-bar"><select disabled={mutating || reading} aria-label={t('workRoom.selectDoc')} value={doc?.path || ''} onChange={event => void move(event.target.value)}>{!room?.documents.length && <option>{t('workRoom.createDoc')}</option>}{room?.documents.map(path => <option key={path}>{path}</option>)}</select><button disabled={!dirty || busy || reading} onClick={() => void save()}>{t('workRoom.saveDoc')}</button><button onClick={() => setPreview(!preview)}>{preview ? t('common.edit') : t('workRoom.preview')}</button><span>{dirty ? t('workRoom.unsavedDraft') : t('workRoom.saved')}</span></div>
+        {tab === 'documents' && <><div className="work-document-bar"><select disabled={mutating || reading} aria-label={t('workRoom.selectDoc')} value={doc?.path || ''} onChange={event => void move(event.target.value)}>{!room?.documents.length && <option>{t('workRoom.createDoc')}</option>}{room?.documents.map(path => <option key={path}>{path}</option>)}</select><button disabled={!dirty || busy || reading} onClick={() => void save()}>{t('workRoom.saveDoc')}</button><button disabled={!doc || reading} onClick={() => setPreview(!preview)}>{preview ? t('common.edit') : t('workRoom.preview')}</button><span>{dirty ? t('workRoom.unsavedDraft') : t('workRoom.saved')}</span></div>
           {conflict && <div className="work-notice" role="region" aria-label={t('workRoom.conflict')}><p>{t('workRoom.conflictHint')}</p><h3>{t('workRoom.latest')}</h3><pre>{conflict.content}</pre><button disabled={busy} onClick={() => void save(conflict.version)}>{t('workRoom.reapply')}</button><button disabled={busy} onClick={() => { if (!discardDocumentDraft()) return; setDoc(conflict); setDraft(conflict.content); setConflict(null); setError(''); }}>{t('workRoom.useLatest')}</button></div>}
-          {doc && (preview ? <article className="work-preview"><MarkdownDocument text={draft} /></article> : <textarea ref={editor} className="work-editor" aria-label={t('workRoom.content')} disabled={mutating || reading || room?.phase === 'archived' || room?.phase === 'completed'} value={draft} onChange={event => setDraft(event.target.value)} />)}
+          {doc && (preview ? <article className="work-preview"><MarkdownDocument text={draft} /></article> : <textarea ref={editor} className="work-editor" aria-label={t('workRoom.content')} disabled={mutating || reading || backgroundImplementation || room?.phase === 'archived' || room?.phase === 'completed'} value={draft} onChange={event => setDraft(event.target.value)} />)}
           {!room?.documents.length && <p className="work-hint">{t('workRoom.createHint')}</p>}
         </>}
         {tab === 'results' && <div className="work-result-list"><h2>{t('workRoom.verification')}</h2>

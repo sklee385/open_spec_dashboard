@@ -52,7 +52,7 @@ it.each(['ko', 'en'] as const)('%s 검증 상태만 번역하고 실행·파일 
   const fetch = vi.fn(async (url: string, init?: RequestInit) => { void init; return { ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '# 원문', version: 'v1' } : work }; });
   vi.stubGlobal('fetch', fetch);
   render(<WorkRoom change={change} onClose={() => {}} />, { locale });
-  await screen.findByRole('textbox', { name: t('workRoom.content') });
+  await screen.findByRole('heading', { name: '원문' });
   fireEvent.click(screen.getByRole('button', { name: t('workRoom.results') }));
   expect(screen.getByText(`원문 test · ${t('workRoom.passed')} · ${t('workRoom.currentVersion')}`)).toBeInTheDocument();
   expect(screen.getByText(`${t('workRoom.modified')} · 원문/file.ts`)).toBeInTheDocument();
@@ -70,7 +70,7 @@ it.each(['ko', 'en'] as const)('%s OpenSpec 요청과 AI 요청 준비 문구를
   const fetch = vi.fn(async (url: string, init?: RequestInit) => { void init; return { ok: true, json: async () => url.includes('/openspec?') ? { ok: false, stdout: '원문 stdout', stderr: '原文 stderr' } : url.includes('/document') ? { path: 'proposal.md', content: '# 원문', version: 'v1' } : base }; });
   vi.stubGlobal('fetch', fetch);
   render(<WorkRoom change={change} onClose={() => {}} />, { locale });
-  await screen.findByRole('textbox', { name: t('workRoom.content') });
+  await screen.findByRole('heading', { name: '원문' });
   fireEvent.click(screen.getByRole('button', { name: 'OpenSpec' }));
   fireEvent.change(screen.getByRole('combobox', { name: t('workRoom.specFunction') }), { target: { value: 'validate' } });
   fireEvent.click(screen.getByRole('button', { name: t('workRoom.inspect') }));

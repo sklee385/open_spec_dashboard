@@ -39,7 +39,7 @@ it('이동 전 문서·메시지·답변 초안을 보존하고 저장 실패에
   await screen.findByRole('textbox', { name: '질문 q2' });
   fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: '메시지 초안' } });
   fireEvent.change(screen.getByRole('textbox', { name: '질문 q2' }), { target: { value: '답변 초안' } });
-  fireEvent.change(await screen.findByRole('textbox', { name: '문서 내용' }), { target: { value: '문서 초안' } });
+  fireEvent.change(await editDocument(), { target: { value: '문서 초안' } });
   let preserved = false; act(() => { preserved = navigation.current!.preserveDrafts(); }); expect(preserved).toBe(true);
   expect(JSON.parse(localStorage.getItem('work-chat-draft:demo/feature')!)).toEqual({ message: '메시지 초안', answers: { 'q2:choice': '답변 초안' } });
   expect(JSON.parse(localStorage.getItem('work-draft:["w","proposal.md"]')!)).toMatchObject({ content: '문서 초안', version: 'v1' });
@@ -57,3 +57,5 @@ it('현재 업무에 새 질문 알림이 오면 최신 상세를 확인한 뒤 
   await waitFor(() => expect(screen.getByRole('textbox', { name: '질문 q2' }).closest('.work-question')).toHaveFocus());
   expect(screen.queryByText(/이미 처리되었거나 만료된 요청입니다/)).not.toBeInTheDocument();
 });
+
+async function editDocument() { const editor = screen.queryByRole('textbox', { name: '문서 내용' }); if (editor) return editor; fireEvent.click(await screen.findByRole('button', { name: '편집' })); return screen.findByRole('textbox', { name: '문서 내용' }); }

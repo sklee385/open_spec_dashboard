@@ -44,10 +44,10 @@ jobs:
       - name: Verify changed release publisher
         if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
         run: ./scripts/node.ps1 --test desktop/test/publish.test.cjs
-      - name: Verify stable Header select and direct impact paths
+      - name: Verify background navigation and document direct impact paths
         if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
         timeout-minutes: 30
-        run: ./scripts/node.ps1 scripts/test-release.cjs --select-refresh
+        run: ./scripts/node.ps1 scripts/test-release.cjs --background-documents
       - name: Full desktop tests (explicit user request only)
         if: github.event_name == 'workflow_dispatch' && inputs.full_suite
         run: ./scripts/npm.ps1 run desktop:test

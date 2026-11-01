@@ -20,6 +20,7 @@ import { BrowserService } from '../browser/browser.service';
 import { reconcileArchive } from './archive-state';
 import { WorkspaceService } from './workspace.service';
 import { bindReviewedPlan, fullReviewedPlan } from './reviewed-plan';
+import { allowedWorkDocument, corePlanDocument, workDocumentList, workDocumentPath } from './document-list';
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 @Injectable()
@@ -124,21 +125,22 @@ export class WorkService {
     catch (error) { if (['completed', 'archived'].includes(work.phase)) return []; throw error; }
   }
   private documentsAtRoot(work: Work, root: string) {
-    return ['proposal.md', 'design.md', 'tasks.md', ...markdownFiles(join(root, 'specs')).map(x => `specs/${x}`), ...(work.workspace?.kind === 'git-worktree' ? ['.openspec.yaml', ...markdownFiles(join(root, 'source-ideas')).map(x => `source-ideas/${x}`)] : []), 'verification.md'].filter(x => textFile(within(root, x)) !== null);
+    return workDocumentList(root, work.workspace?.kind === 'git-worktree');
   }
   private documentContent(root: string, path: string) {
-    const content = textFile(within(root, path));
+    const content = textFile(workDocumentPath(root, path));
     if (content === null) throw new NotFoundException('문서가 없습니다');
     return content;
   }
   document(id: string, path: string) {
     const work = this.get(id);
-    if (typeof path !== 'string' || !(/^(proposal|design|tasks|verification)\.md$/.test(path) || /^specs\/.+\.md$/.test(path) || work.workspace?.kind === 'git-worktree' && (path === '.openspec.yaml' || /^source-ideas\/.+\.md$/.test(path)))) throw new BadRequestException('문서 경로가 허용되지 않습니다');
+    if (!allowedWorkDocument(path, work.workspace?.kind === 'git-worktree')) throw new BadRequestException('문서 경로가 허용되지 않습니다');
     if (['completed', 'archived'].includes(work.phase) && work.completedDocuments) {
       const saved = (work.completedDocuments as Record<string, { path: string; content: string; version: string }>)[path];
       if (!saved) throw new NotFoundException('저장된 문서가 없습니다'); return saved;
     }
-    const content = this.documentContent(this.root(work), path);
+    const root = this.root(work);
+    const content = this.documentContent(root, path);
     return { path, content, version: hash(content) };
   }
   saveDocument(id: string, body: any) {
@@ -159,14 +161,14 @@ export class WorkService {
     if (work.workspace?.kind === 'git-worktree' && !['completed', 'archived'].includes(work.phase)) {
       const expected = JSON.stringify(this.get(work.id));
       const project = validatedRoot ?? this.execution.queryPath(work), root = within(project, `openspec/changes/${work.changeName}`);
-      const legacy = hash(this.documentsAtRoot(work, root).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.documentContent(root, path).replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
+      const legacy = hash(this.documentsAtRoot(work, root).filter(corePlanDocument).map(path => `${path}\n${this.documentContent(root, path).replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
       const version = bindReviewedPlan(work, project, legacy);
       // This proof belongs only to this synchronous read; every later action revalidates.
       const latest = this.get(work.id);
       if (JSON.stringify(latest) !== expected || !validatedRoot && this.execution.queryPath(latest) !== project) throw new ConflictException('문서를 읽는 중 업무 공간이 변경되었습니다');
       return version;
     }
-    const legacy = hash(this.documents(work).filter(path => path !== 'verification.md' && path !== '.openspec.yaml' && !path.startsWith('source-ideas/')).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
+    const legacy = hash(this.documents(work).filter(corePlanDocument).map(path => `${path}\n${this.document(work.id, path).content.replace(/- \[[xX ]\]/g, '- [ ]')}`).join('\n'));
     return bindReviewedPlan(work, this.execution.queryPath(work), legacy);
   }
   async action(id: string, body: any, gitComplete?: (work: Work, operation: 'complete' | 'archive') => Promise<Work>) {

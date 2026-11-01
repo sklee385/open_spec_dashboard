@@ -15,7 +15,7 @@ it.each(['message', 'answer'] as const)('keeps a newer %s pending when profile p
     return { ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : { ...work, questions } };
   }));
   const close = vi.fn(); render(<WorkRoom change={change} onClose={close} />);
-  await screen.findByRole('textbox', { name: '문서 내용' });
+  await editDocument();
   const input = screen.getByRole('textbox', { name: kind === 'message' ? 'AI와 문답' : '진행 중 답변' });
   const sendName = kind === 'message' ? '보내기' : '답변 전달';
   fireEvent.change(input, { target: { value: 'first snapshot' } });
@@ -35,7 +35,7 @@ it.each(['message', 'answer'] as const)('keeps a newer %s pending when profile p
 it('retains a clean document screen when normal close cannot flush a message draft', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : work })));
   const close = vi.fn(); render(<WorkRoom change={change} onClose={close} />);
-  await screen.findByRole('textbox', { name: '문서 내용' });
+  await editDocument();
   fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: 'must preserve this message' } });
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
   fireEvent.click(screen.getByRole('button', { name: '← 보드로 돌아가기' }));
@@ -49,12 +49,12 @@ it('restores work chat, answers and documents from the profile bridge after orig
   const questions = [{ id: 'q', kind: 'input', status: 'pending', method: 'ask_user', params: { questions: [{ id: 'choice', question: '복원할 답변' }] } }];
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : { ...work, questions } })));
   const first = render(<WorkRoom change={change} onClose={() => {}} />);
-  fireEvent.change(await screen.findByRole('textbox', { name: '문서 내용' }), { target: { value: 'profile document' } });
+  fireEvent.change(await editDocument(), { target: { value: 'profile document' } });
   fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: 'profile message' } });
   fireEvent.change(screen.getByRole('textbox', { name: '복원할 답변' }), { target: { value: 'profile answer' } });
   first.unmount(); localStorage.clear();
   render(<WorkRoom change={change} onClose={() => {}} />);
-  expect(await screen.findByRole('textbox', { name: '문서 내용' })).toHaveValue('profile document');
+  expect(await editDocument()).toHaveValue('profile document');
   expect(screen.getByRole('textbox', { name: 'AI와 문답' })).toHaveValue('profile message');
   expect(screen.getByRole('textbox', { name: '복원할 답변' })).toHaveValue('profile answer');
   expect(data.has(`work-view:${change.id}`)).toBe(true);
@@ -63,7 +63,7 @@ it('restores document drafts with an explicit server conflict before saving', as
   localStorage.setItem(`work-draft:${work.id}:proposal.md`, JSON.stringify({ content: 'local draft', version: 'v1' }));
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'server changed', version: 'v2' } : work })));
   render(<WorkRoom change={change} onClose={() => {}} />);
-  expect(await screen.findByRole('textbox', { name: '문서 내용' })).toHaveValue('local draft');
+  expect(await editDocument()).toHaveValue('local draft');
   expect(screen.getByRole('region', { name: '문서 충돌 해결' })).toHaveTextContent('server changed');
   expect(screen.getByText('로컬 초안을 복원했습니다. 원본은 저장할 때까지 변경되지 않습니다.')).toBeInTheDocument();
 });
@@ -72,7 +72,7 @@ it('removes only a successfully sent message draft and never resurrects it on un
   localStorage.setItem(`work-chat-draft:${change.id}`, JSON.stringify({ message: 'send me', answers: {} }));
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : work })));
   render(<WorkRoom change={change} onClose={() => {}} />);
-  await screen.findByRole('textbox', { name: '문서 내용' });
+  await editDocument();
   fireEvent.click(screen.getByRole('button', { name: '보내기' }));
   await waitFor(() => expect(screen.getByRole('textbox', { name: 'AI와 문답' })).toHaveValue(''));
   fireEvent(window, new Event('beforeunload'));
@@ -83,7 +83,7 @@ it('keeps message drafts isolated when the same component changes work', async (
   const mock = vi.fn(async (url: string, init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : { ...work, id: init?.body && JSON.parse(String(init.body)).changeName === 'second' ? 'second-work' : work.id } }));
   vi.stubGlobal('fetch', mock);
   const first = render(<WorkRoom change={change} onClose={() => {}} />);
-  await screen.findByRole('textbox', { name: '문서 내용' });
+  await editDocument();
   fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: 'first draft' } });
   const second = { ...change, id: 'demo/second', name: 'second' };
   first.rerender(<WorkRoom change={second} onClose={() => {}} />);
@@ -97,14 +97,14 @@ it('keeps message drafts isolated when the same component changes work', async (
 it('does not resurrect an older persisted document edit after the user reverts its content', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : work })));
   const view = render(<WorkRoom change={change} onClose={() => {}} />);
-  const content = await screen.findByRole('textbox', { name: '문서 내용' });
+  const content = await editDocument();
   fireEvent.change(content, { target: { value: 'older edit' } });
   fireEvent(window, new Event('beforeunload'));
   fireEvent.change(content, { target: { value: 'original' } });
   fireEvent(window, new Event('beforeunload'));
   view.unmount();
   render(<WorkRoom change={change} onClose={() => {}} />);
-  expect(await screen.findByRole('textbox', { name: '문서 내용' })).toHaveValue('original');
+  expect(await editDocument()).toHaveValue('original');
 });
 
 it('preserves newer message input typed while an earlier message is being sent', async () => {
@@ -114,7 +114,7 @@ it('preserves newer message input typed while an earlier message is being sent',
     return { ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : work };
   }));
   render(<WorkRoom change={change} onClose={() => {}} />);
-  await screen.findByRole('textbox', { name: '문서 내용' });
+  await editDocument();
   const input = screen.getByRole('textbox', { name: 'AI와 문답' });
   fireEvent.change(input, { target: { value: 'first message' } });
   fireEvent.click(screen.getByRole('button', { name: '보내기' }));
@@ -143,7 +143,7 @@ it('keeps newer structured answer edits while clearing only the submitted answer
 it('flushes message input on unload and reports local storage failure', async () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: 'original', version: 'v1' } : work })));
   render(<WorkRoom change={change} onClose={() => {}} />);
-  await screen.findByRole('textbox', { name: '문서 내용' });
+  await editDocument();
   const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('quota'); });
   fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: 'unsaved' } });
   fireEvent(window, new Event('beforeunload'));
@@ -161,7 +161,7 @@ it('업무 복구로 같은 대화를 연결하고 오류 제거 후 문서·대
   const button = await screen.findByRole('button', { name: '업무 복구' });
   expect(screen.getByText(/격리 공간 도입 전 업무/)).toBeInTheDocument();
   fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: '보낼 질문 초안' } });
-  fireEvent.change(await screen.findByRole('textbox', { name: '문서 내용' }), { target: { value: '문서 수정 초안' } });
+  fireEvent.change(await editDocument(), { target: { value: '문서 수정 초안' } });
   fireEvent.click(button);
   await screen.findByText('같은 대화로 복구했습니다. 문서와 작성 중인 입력은 유지됩니다.');
   expect(screen.queryByText('오래된 식별 오류')).not.toBeInTheDocument();
@@ -235,6 +235,13 @@ it('서버 재시작 중 처음 열었어도 연결 복구 후 같은 업무를 
     return { ok: true, json: async () => url.includes('/document') ? { path: 'proposal.md', content: '연결 복구 문서', version: 'v1' } : work };
   });
   vi.stubGlobal('fetch', mock); render(<WorkRoom change={change} onClose={() => {}} />);
-  expect(await screen.findByRole('textbox', { name: '문서 내용' }, { timeout: 3000 })).toHaveValue('연결 복구 문서');
+  expect(await editDocument()).toHaveValue('연결 복구 문서');
   expect(attempts).toBe(2); expect(mock.mock.calls.some(([url]) => url.endsWith('/message'))).toBe(false);
 });
+
+async function editDocument() {
+  await waitFor(() => expect(screen.queryByRole('textbox', { name: '문서 내용' }) ?? screen.queryByRole('article')).toBeInTheDocument(), { timeout: 3000 });
+  const editor = screen.queryByRole('textbox', { name: '문서 내용' }); if (editor) return editor;
+  fireEvent.click(screen.getByRole('button', { name: '편집' }));
+  return screen.findByRole('textbox', { name: '문서 내용' });
+}

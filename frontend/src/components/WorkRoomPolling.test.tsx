@@ -11,7 +11,7 @@ it('pauses hidden work polling without reinitializing work and refreshes once on
   const work = { id: 'work-1', phase: 'planning', state: 'idle', threadId: null, reviewedVersion: null, documents: ['proposal.md'], events: [], questions: [], verifications: [], verificationCommands: [], changes: [] };
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => ({ ok: true, json: async () => url.includes('/document?') ? { path: 'proposal.md', content: 'server', version: 'v1' } : url.endsWith('/workspace') ? { experimentalEnabled: false } : url === '/api/work' && init?.method === 'POST' || url === '/api/work/work-1' ? { ...work, questions: incomingQuestion ? [{ id: 'hidden-q', kind: 'input', status: 'pending', params: { questions: [{ id: 'choice', question: '숨긴 동안 받은 질문' }] } }] : [] } : { items: [], errors: [], documentVersions: {} } })); vi.stubGlobal('fetch', fetcher);
   let view!: ReturnType<typeof render>; await act(async () => { view = render(<WorkRoom change={change} active onClose={() => {}} />); });
-  fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: 'hidden chat draft' } }); fireEvent.change(screen.getByRole('textbox', { name: '문서 내용' }), { target: { value: 'hidden document draft' } });
+  fireEvent.change(screen.getByRole('textbox', { name: 'AI와 문답' }), { target: { value: 'hidden chat draft' } }); fireEvent.click(screen.getByRole('button', { name: '편집' })); fireEvent.change(screen.getByRole('textbox', { name: '문서 내용' }), { target: { value: 'hidden document draft' } });
   const workReads = () => fetcher.mock.calls.filter(([url]) => url === '/api/work/work-1').length; const before = workReads();
   await act(async () => view.rerender(<WorkRoom change={change} active={false} onClose={() => {}} />));
   await act(async () => { await vi.advanceTimersByTimeAsync(12000); }); expect(workReads()).toBe(before);
@@ -30,7 +30,7 @@ it('queues notification reads behind a stalled poll while preserving the current
     return response(url.includes('/document?') ? { path: 'proposal.md', content: 'server', version: 'v1' } : url.endsWith('/workspace') ? { experimentalEnabled: false } : { items: [], errors: [], documentVersions: {} });
   }); vi.stubGlobal('fetch', fetcher);
   let view!: ReturnType<typeof render>; await act(async () => { view = render(<WorkRoom change={change} workId="work-1" onClose={() => {}} />); });
-  fireEvent.change(screen.getByRole('textbox', { name: '문서 내용' }), { target: { value: 'keep notification draft' } });
+  fireEvent.click(screen.getByRole('button', { name: '편집' })); fireEvent.change(screen.getByRole('textbox', { name: '문서 내용' }), { target: { value: 'keep notification draft' } });
   const reads = () => fetcher.mock.calls.filter(([url]) => url === '/api/work/work-1').length; const baseline = reads();
   stalled = true; await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
   await act(async () => view.rerender(<WorkRoom change={change} workId="work-1" attentionTarget={{ workId: 'work-1', questionId: 'notification-q', token: 1 }} onClose={() => {}} />));
