@@ -37,6 +37,7 @@ jobs:
         run: ./scripts/setup-browser.ps1
       - run: ./scripts/npm.ps1 run desktop:test
       - run: ./scripts/npm.ps1 test
+        timeout-minutes: 120
       - run: ./scripts/npm.ps1 run build
       - name: Stage application
         shell: pwsh

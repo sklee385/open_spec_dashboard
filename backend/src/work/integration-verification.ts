@@ -73,22 +73,25 @@ export class IntegrationVerification {
     const id = 'verification-plan:' + hash([workId, candidateId, body.requestKey]), fingerprint = hash(body);
     const prior = this.store.records(workId, 'candidate-verification-plan').find(row => row.id === id);
     if (prior) { if (prior.fingerprint !== fingerprint) throw new ConflictException('같은 요청 키의 내용이 다릅니다'); return prior; }
-    this.lifecycle.assertUnlocked(); desktopHealth(this.store).assertExecutionAllowed();
-    const { work, request } = this.request(workId, candidateId);
-    if (!['validating', 'ready'].includes(request.status) || this.rows(workId, candidateId).some(row => row.status === 'running' || row.processTerminated !== true)) throw new ConflictException('후보 실행·종료 확인을 마친 뒤 범위를 선택해 주세요');
-    if (this.verificationPlan(work, request).choiceVersion !== body.choiceVersion) throw new ConflictException('검증 선택 기준이 변경되었습니다. 다시 조회해 주세요');
-    const release = projectCoordinator(this.store).acquireOperation(this.plan(request));
-    try {
-      projectCoordinator(this.store).assertRecovery(this.plan(request));
-      const row = { id, fingerprint, status: 'selected', scope: body.scope };
-      this.store.transaction(() => {
-        const current = this.request(workId, candidateId);
-        if (hash([this.workPolicy(current.work), current.request]) !== body.choiceVersion) throw new ConflictException('검증 선택 기준이 변경되었습니다');
-        this.store.record(request.id, workId, 'integration-request', { ...current.request, verificationScope: body.scope, status: 'validating', verificationRefs: [], updatedAt: new Date().toISOString() });
-        this.store.record(id, workId, 'candidate-verification-plan', row);
-      });
-      return row;
-    } finally { release(); }
+    return new MutationAdmission(this.store, workId, `candidate-verification-plan:${candidateId}`, body.requestKey, fingerprint, () => this.store.records(workId, 'candidate-verification-plan').some(row => row.id === id)).run(async admission => {
+      this.lifecycle.assertUnlocked(); desktopHealth(this.store).assertExecutionAllowed();
+      const { work, request } = this.request(workId, candidateId);
+      if (!['validating', 'ready'].includes(request.status) || this.rows(workId, candidateId).some(row => row.status === 'running' || row.processTerminated !== true)) throw new ConflictException('후보 실행·종료 확인을 마친 뒤 범위를 선택해 주세요');
+      if (this.verificationPlan(work, request).choiceVersion !== body.choiceVersion) throw new ConflictException('검증 선택 기준이 변경되었습니다. 다시 조회해 주세요');
+      const release = projectCoordinator(this.store).acquireOperation(this.plan(request));
+      try {
+        projectCoordinator(this.store).assertRecovery(this.plan(request));
+        const row = { id, fingerprint, status: 'selected', scope: body.scope };
+        this.store.transaction(() => {
+          const current = this.request(workId, candidateId);
+          if (hash([this.workPolicy(current.work), current.request]) !== body.choiceVersion) throw new ConflictException('검증 선택 기준이 변경되었습니다');
+          admission.admit();
+          this.store.record(request.id, workId, 'integration-request', { ...current.request, verificationScope: body.scope, status: 'validating', verificationRefs: [], updatedAt: new Date().toISOString() });
+          this.store.record(id, workId, 'candidate-verification-plan', row);
+        });
+        return row;
+      } finally { release(); }
+    });
   }
   private preparation(work: Work) {
     const records = ['workspace-preparation', 'workspace-local-policy', 'workspace-local-preparation', 'workspace-local-private'].map(kind => [kind, this.store.records(work.id, kind)]);

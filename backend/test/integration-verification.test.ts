@@ -305,7 +305,8 @@ it('후보 계획이 비었으면 전체로 자동 확대하지 않고 명시 �
   const missing = await api(`${reserved.candidateId}/verification/results`);
   expect(missing.data.ready).toBe(false); expect(missing.data.verificationPlan).toMatchObject({ scope: 'work' });
   const body = { requestKey: 'full-plan', scope: 'full', confirmed: true, choiceVersion: missing.data.verificationPlan.choiceVersion };
-  expect((await api(`${reserved.candidateId}/verification/plan`, { ...body, choiceVersion: 'stale' })).status).toBe(409);
+  const rejected = await api(`${reserved.candidateId}/verification/plan`, { ...body, requestKey: 'stale-plan', choiceVersion: 'stale' });
+  expect(rejected.status).toBe(409); expect(rejected.data).toMatchObject({ mutationOutcome: 'rejected-before-intent', requestKey: 'stale-plan' });
   const selected = await api(`${reserved.candidateId}/verification/plan`, body); expect(selected.status).toBe(200);
   expect((await api(`${reserved.candidateId}/verification/plan`, body)).data.id).toBe(selected.data.id);
   const preview = await api(`${reserved.candidateId}/verification/preview`); expect(preview.status).toBe(200); expect(preview.data.verificationPlan.scope).toBe('full');

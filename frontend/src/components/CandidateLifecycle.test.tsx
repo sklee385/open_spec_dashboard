@@ -138,3 +138,23 @@ it('후보의 검사 범위를 현재 선택 기준으로만 변경하고 재확
   const call = fetcher.mock.calls.find(([url, init]) => url.endsWith('/verification/plan') && init?.method === 'POST')!;
   expect(JSON.parse(String(call[1]?.body))).toMatchObject({ confirmed: true, scope: 'work', choiceVersion: 'choice-version' });
 });
+
+it('오래된 범위 선택 거절 뒤 새 기준의 선택을 막지 않는다', async () => {
+  let rejected = false;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/verification/plan') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      if (!rejected) { rejected = true; return { ok: false, status: 409, json: async () => ({ message: '기준 변경', requestKey: body.requestKey, mutationOutcome: 'rejected-before-intent' }) }; }
+      return { ok: true, json: async () => ({ status: 'selected' }) };
+    }
+    return { ok: true, json: async () => url.includes('/verification/') ? verification : status };
+  });
+  vi.stubGlobal('fetch', fetcher); render(<CandidateLifecycle workId="w" candidate={candidate} />);
+  await screen.findByText('현재 관측'); fireEvent.click(screen.getByRole('button', { name: '후보 검증 기준·결과 확인' }));
+  await screen.findByText('명시적으로 선택한 전체 계획');
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'work' } }); await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('기준 변경'));
+  fireEvent.click(screen.getByRole('button', { name: '후보 검증 기준·결과 확인' }));
+  await waitFor(() => expect(screen.getByRole('combobox')).toBeEnabled());
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'work' } });
+  await waitFor(() => expect(fetcher.mock.calls.filter(([url, init]) => url.endsWith('/verification/plan') && init?.method === 'POST')).toHaveLength(2));
+});
