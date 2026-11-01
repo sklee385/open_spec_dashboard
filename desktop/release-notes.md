@@ -12,6 +12,6 @@
 
 ### 검증 범위
 
-통합 변경의 직접 영향 검사와 빌드, 합성 화면의 이동·복귀 및 문서 발견·초안 복원을 확인합니다. 배포 CI는 직접 영향 검사와 기존 필수 게시·패키지·실제 ASAR portable 업데이트 smoke를 수행합니다.
+통합 변경의 직접 영향 검사와 빌드가 통과했습니다. 앱 자체 내장 Chromium 시나리오 실행기를 독립 사본·새 데이터·단일 허용 origin의 합성 fixture에서 사용해 이동·복귀, 문서 생성·목록 갱신·미리보기·편집·초안 복원 25단계를 확인했습니다. Codex 브라우저 결과와는 별도입니다. 운영 앱의 업무나 설정은 테스트하지 않았습니다. 배포 CI는 직접 영향 검사와 기존 필수 게시·패키지·실제 ASAR portable 업데이트 smoke를 수행합니다.
 
-전체 backend/frontend 및 desktop 테스트 suite는 실행하지 않습니다. 기존 Git snapshot 검사는 Windows 임시 경로 길이 제한으로 fixture를 만들지 못했으며, 별도 Git 없는 API fixture에서 완료·보관 snapshot 유지 검사를 통과했습니다. 실제 모델 실행이나 모든 환경의 동작까지 검증한 것은 아닙니다.
+전체 backend/frontend 및 desktop 테스트 suite를 실행하지 않았습니다. 기존 Git snapshot 검사는 Windows 임시 경로 길이 제한으로 fixture를 만들지 못했으며, 별도 Git 없는 API fixture에서 완료·보관 snapshot 유지 검사를 통과했습니다. 실제 모델 실행이나 모든 환경의 동작까지 검증한 것은 아닙니다.
