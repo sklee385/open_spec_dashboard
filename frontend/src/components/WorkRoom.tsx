@@ -93,7 +93,10 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
   const [initialChat] = useState(() => readChatDraft(change.id));
   const [draftRestored, setDraftRestored] = useState(!!initialChat.message || Object.keys(initialChat.answers).length > 0);
   const [draftError, setDraftError] = useState(initialChat.failed ? t('draft.readFailed') : '');
-  const [message, setMessage] = useState(initialChat.message), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState(initialChat.message), [error, setError] = useState(''), [mutating, setMutating] = useState(false);
+  const [reconciling, setReconciling] = useState(false), [reading, setReading] = useState(false);
+  const busy = mutating || reconciling;
+  const reconcilePending = useRef(false), foregroundRead = useRef<AbortController | null>(null);
   const recovered = useRef(new Set<string>());
   const [conflict, setConflict] = useState<Doc | null>(null);
   const [connection, setConnection] = useState(t('workRoom.connecting'));
@@ -171,14 +174,14 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
   const scopeLive = useRef(true);
   const activeRef = useRef(active), previouslyActive = useRef(active);
   useLayoutEffect(() => { activeRef.current = active; }, [active]);
-  useEffect(() => { scopeLive.current = true; return () => { scopeLive.current = false; }; }, []);
+  useEffect(() => { scopeLive.current = true; return () => { scopeLive.current = false; foregroundRead.current?.abort(); }; }, []);
   const read = useReadRequests();
-  const readApi = useCallback(<T,>(path: string) => read(signal => api<T>(path, 'GET', undefined, signal)), [read]);
-  const openDoc = useCallback(async (id: string, path: string, expectedVersion?: string) => {
+  const readApi = useCallback(<T,>(path: string, cancellation?: AbortSignal) => read(signal => api<T>(path, 'GET', undefined, cancellation ? AbortSignal.any([signal, cancellation]) : signal)), [read]);
+  const openDoc = useCallback(async (id: string, path: string, expectedVersion?: string, signal?: AbortSignal) => {
     const request = ++documentRequest.current;
     setConflict(null);
-    const result = await readApi<Doc>(`work/${id}/document?path=${encodeURIComponent(path)}`);
-    if (!scopeLive.current || request !== documentRequest.current) return false;
+    const result = await readApi<Doc>(`work/${id}/document?path=${encodeURIComponent(path)}`, signal);
+    if (signal?.aborted || !scopeLive.current || request !== documentRequest.current) return false;
     if (expectedVersion && result.version !== expectedVersion) throw new ProductError('review.changed');
     try {
       const value = readDocumentDraft(workDraftKey(id, path)) ?? readDocumentDraft(`work-draft:${id}:${path}`);
@@ -300,10 +303,38 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     const guard = (event: BeforeUnloadEvent) => { if (live.current.dirty) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard);
   }, []);
+  const reconcile = async () => {
+    if (!room) return;
+    try {
+      await refresh(room.id);
+      if (scopeLive.current) { reconcilePending.current = false; setReconciling(false); }
+    } catch (e) { if (scopeLive.current) setLoadError(errorMessage(e, t)); }
+  };
   const run = async (action: () => Promise<unknown>) => {
-    ++activeOperations.current;
-    setBusy(true); setError('');
-    try { await action(); if (room) await refresh(room.id); return true; } catch (e) { if (e instanceof RequestError && e.latest) setConflict(e.latest); setError(errorMessage(e, t)); return false; } finally { setBusy(--activeOperations.current > 0); }
+    // Ref guards same-turn double clicks before React paints disabled controls.
+    if (activeOperations.current || reconcilePending.current) return false;
+    cancelRead();
+    activeOperations.current = 1; setMutating(true); setError('');
+    try { await action(); }
+    catch (e) { if (scopeLive.current) { if (e instanceof RequestError && e.latest) setConflict(e.latest); setError(errorMessage(e, t)); } return false; }
+    finally { activeOperations.current = 0; if (scopeLive.current) setMutating(false); }
+    if (scopeLive.current && room) {
+      reconcilePending.current = true; setReconciling(true);
+      // Reads may be slow; they must not block navigation or imply mutation failure.
+      void reconcile();
+    }
+    return true;
+  };
+  const runRead = async (action: (signal: AbortSignal) => Promise<unknown>) => {
+    if (foregroundRead.current || activeOperations.current) return;
+    const controller = new AbortController(); foregroundRead.current = controller; setReading(true); setError('');
+    try { await action(controller.signal); }
+    catch (e) { if (!controller.signal.aborted && scopeLive.current) setError(errorMessage(e, t)); }
+    finally { if (foregroundRead.current === controller) { foregroundRead.current = null; if (scopeLive.current) setReading(false); } }
+  };
+  const cancelRead = () => {
+    foregroundRead.current?.abort(); foregroundRead.current = null;
+    ++documentRequest.current; setReading(false);
   };
   const recover = async () => {
     if (!room || busy) return;
@@ -326,15 +357,16 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     const selected = reviewDestination.current;
     reviewDestination.current = null;
     if (selected?.path === path) {
-      await run(async () => {
+      await runRead(async signal => {
         const latest = await review.refresh();
+        if (signal.aborted) return;
         const target = latest && matchReviewItem(selected, latest);
         if (!target) throw new Error(t('review.changed'));
-        try { if (!await openDoc(room.id, path, target.version)) return; }
+        try { if (!await openDoc(room.id, path, target.version, signal)) return; }
         catch (error) { await review.refresh(); throw error; }
         setSourceSelection(target); setPreview(false); setTab('documents'); setPane('output');
       });
-    } else await run(() => openDoc(room.id, path));
+    } else await runRead(signal => openDoc(room.id, path, undefined, signal));
   };
   const move = async (path: string) => { if (activeOperations.current > 0) return; if (dirty) { setPending(path); return; } await navigate(path); };
   const action = (value: string) => {
@@ -363,7 +395,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       retainChat(current.message, remaining); setAnswers(remaining);
     });
   };
-  const inspect = () => { if (room) void run(async () => setCli(await api(`work/${room.id}/openspec?operation=${operation}&artifact=${artifact}`))); };
+  const inspect = () => { if (room) void runRead(async signal => { const result = await readApi<NonNullable<typeof cli>>(`work/${room.id}/openspec?operation=${operation}&artifact=${artifact}`, signal); if (!signal.aborted && scopeLive.current) setCli(result); }); };
   const testsBlocked = busy || !room || !['implementation', 'verification'].includes(room.phase) || !['idle', 'failed', 'interrupted'].includes(room.state) || !room.reviewedVersion || !!room.reviewRequired || dirty;
   const runTests = (scope: TestScope) => {
     if (!room || testsBlocked || activeOperations.current > 0) return;
@@ -376,13 +408,16 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     <header className="work-header">
       <AttentionBell />
       <button onClick={() => setDetailOpen(true)}>{t('review.documents')}</button>
-      <button onClick={() => void move(':close')}>{returnLabel||t('workRoom.back')}</button>
-      {onOpenSource && <button onClick={() => void move(':source')}>{t('project.title')}</button>}
+      <button disabled={mutating} onClick={() => void move(':close')}>{returnLabel||t('workRoom.back')}</button>
+      {onOpenSource && <button disabled={mutating} onClick={() => void move(':source')}>{t('project.title')}</button>}
       <div><h1>{change.title || change.name}</h1><span>{room ? `${phases[room.phase] || room.phase} · ${states[room.state] || room.state}` : t('workRoom.loading')}</span></div>
       <AiActivity state={loadError ? undefined : room?.state} />
       <details><summary><span>{toolName}</span> · <span>{t('workRoom.sessionInfo')} {connection}</span></summary><small>{nativeResume ? room?.threadId ? `${toolName} ${room.threadId}` : t('workRoom.sessionHint') : t('aiTools.logicalSession')}</small><p>{nativeResume ? t('workRoom.approvalHint') : t('aiTools.limitations')}</p></details>
       {room && <RemoteBoardConnection workId={room.id} />}
     </header>
+    {mutating && <p role="status">{t('workRoom.mutationPending')}</p>}
+    {reconciling && <div role="status">{t('workRoom.reconciling')} <button onClick={() => void reconcile()}>{t('workRoom.refreshState')}</button></div>}
+    {reading && <div role="status">{t('workRoom.readPending')} <button onClick={cancelRead}>{t('workRoom.cancelRead')}</button></div>}
     {error && !needsRecovery && <div className="work-error" role="alert">{error}</div>}
     {loadError && !needsRecovery && <div className="work-error" role="status">{loadError}</div>}
     {room?.error && !needsRecovery && <div className="work-error">{room.error}</div>}
@@ -446,9 +481,9 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
       </section>
       <section className="work-output"><nav className="work-tabs">{[['documents', t('workRoom.documents')], ['review', t('review.title')], ['results', t('workRoom.results')], ['openspec', 'OpenSpec']].map(([value, label]) => <button aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>
         {tab === 'review' && <ReviewItems {...review} busy={busy} onSelect={item => { if (busy) return; reviewDestination.current = item; void move(item.path); }} />}
-        {tab === 'documents' && <><div className="work-document-bar"><select disabled={busy} aria-label={t('workRoom.selectDoc')} value={doc?.path || ''} onChange={event => void move(event.target.value)}>{!room?.documents.length && <option>{t('workRoom.createDoc')}</option>}{room?.documents.map(path => <option key={path}>{path}</option>)}</select><button disabled={!dirty || busy} onClick={() => void save()}>{t('workRoom.saveDoc')}</button><button onClick={() => setPreview(!preview)}>{preview ? t('common.edit') : t('workRoom.preview')}</button><span>{dirty ? t('workRoom.unsavedDraft') : t('workRoom.saved')}</span></div>
+        {tab === 'documents' && <><div className="work-document-bar"><select disabled={mutating || reading} aria-label={t('workRoom.selectDoc')} value={doc?.path || ''} onChange={event => void move(event.target.value)}>{!room?.documents.length && <option>{t('workRoom.createDoc')}</option>}{room?.documents.map(path => <option key={path}>{path}</option>)}</select><button disabled={!dirty || busy || reading} onClick={() => void save()}>{t('workRoom.saveDoc')}</button><button onClick={() => setPreview(!preview)}>{preview ? t('common.edit') : t('workRoom.preview')}</button><span>{dirty ? t('workRoom.unsavedDraft') : t('workRoom.saved')}</span></div>
           {conflict && <div className="work-notice" role="region" aria-label={t('workRoom.conflict')}><p>{t('workRoom.conflictHint')}</p><h3>{t('workRoom.latest')}</h3><pre>{conflict.content}</pre><button disabled={busy} onClick={() => void save(conflict.version)}>{t('workRoom.reapply')}</button><button disabled={busy} onClick={() => { if (!discardDocumentDraft()) return; setDoc(conflict); setDraft(conflict.content); setConflict(null); setError(''); }}>{t('workRoom.useLatest')}</button></div>}
-          {doc && (preview ? <article className="work-preview"><MarkdownDocument text={draft} /></article> : <textarea ref={editor} className="work-editor" aria-label={t('workRoom.content')} disabled={busy || room?.phase === 'archived' || room?.phase === 'completed'} value={draft} onChange={event => setDraft(event.target.value)} />)}
+          {doc && (preview ? <article className="work-preview"><MarkdownDocument text={draft} /></article> : <textarea ref={editor} className="work-editor" aria-label={t('workRoom.content')} disabled={mutating || reading || room?.phase === 'archived' || room?.phase === 'completed'} value={draft} onChange={event => setDraft(event.target.value)} />)}
           {!room?.documents.length && <p className="work-hint">{t('workRoom.createHint')}</p>}
         </>}
         {tab === 'results' && <div className="work-result-list"><h2>{t('workRoom.verification')}</h2>
