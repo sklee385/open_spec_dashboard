@@ -15,12 +15,14 @@
   function rows() {
     const body = el('works'); body.replaceChildren();
     const works = snapshot?.server?.works;
-    if (!works) { const row = node('tr'); const cell = node('td', '서버 상태를 확인하지 못해 업무의 실행 여부도 확인할 수 없습니다.', 'empty'); cell.colSpan = 4; row.append(cell); body.append(row); return; }
-    const visible = el('problems-only').checked ? works.filter(work => work.status !== 'normal' || work.reasons.length) : works;
-    if (!visible.length) { const row = node('tr'); const cell = node('td', works.length ? '확인이 필요한 업무가 없습니다.' : '등록된 업무가 없습니다.', 'empty'); cell.colSpan = 4; row.append(cell); body.append(row); }
+    if (!works) { el('works-summary').textContent = '표시할 업무 상태를 확인하지 못했습니다.'; const row = node('tr'); const cell = node('td', '서버 상태를 확인하지 못해 업무의 실행 여부도 확인할 수 없습니다.', 'empty'); cell.colSpan = 4; row.append(cell); body.append(row); return; }
+    const { visible, hiddenArchivedCount, filteredCount } = window.healthWorkVisibility.filterWorks(works, el('problems-only').checked);
+    el('works-summary').textContent = `표시 ${visible.length}개 / 전체 ${works.length}개 · 정상 보관 ${hiddenArchivedCount}개 숨김${filteredCount ? ` · 추가 필터 ${filteredCount}개 제외` : ''}`;
+    if (!visible.length) { const row = node('tr'); const cell = node('td', !works.length ? '등록된 업무가 없습니다.' : el('problems-only').checked ? '확인이 필요한 업무가 없습니다.' : '정상 보관 업무를 제외하면 표시할 업무가 없습니다.', 'empty'); cell.colSpan = 4; row.append(cell); body.append(row); }
     for (const work of visible) {
       const row = node('tr'), name = node('td', work.name), state = node('td', labels[work.status] || '확인 불가', `status-${work.status}`), details = node('td'), actions = node('td');
-      details.append(node('small', date(work.updatedAt)), node('div', work.reasons.length ? work.reasons.join(' · ') : '종료를 막는 항목 없음'));
+      const reasons = [...work.reasons, ...(work.hasError ? ['저장된 오류 기록 확인 필요'] : [])];
+      details.append(node('small', date(work.updatedAt)), node('div', reasons.length ? reasons.join(' · ') : '종료를 막는 항목 없음'));
       actions.append(button('업무 열기', () => bridge.openWork(work.id)));
       if (work.canInterrupt) actions.append(button('중단 요청', () => bridge.interrupt(work.id)));
       if (work.canRecover) actions.append(button('상태 복구', () => bridge.recover(work.id)));

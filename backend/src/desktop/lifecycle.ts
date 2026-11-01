@@ -6,6 +6,7 @@ import { AiToolService } from '../ai-tools/ai-tool.service';
 import { ExecutionService } from '../work/execution.service';
 import { BrowserService } from '../browser/browser.service';
 import { projectCoordinator } from '../projects/coordinator';
+import { workManagement } from '../work/management';
 
 @Injectable()
 export class DesktopLifecycle {
@@ -25,6 +26,7 @@ export class DesktopLifecycle {
       const stale = !['completed', 'archived'].includes(work.phase) && ['running', 'connecting', 'creating-thread', 'waiting-input', 'waiting-approval', 'recovery-required'].includes(work.state);
       const canRecover = runtime === 'inactive' && stale && !reasons.length && !['completed', 'archived'].includes(work.phase);
       return { id: work.id, name: work.changeName, state: work.state, phase: work.phase, runtime,
+        managementState: workManagement(this.store, work.id).state, hasError: !!(work.error || work.errorCode),
         status: runtime === 'unknown' ? 'unknown' : runtime === 'active' ? 'running' : stale ? 'mismatch' : 'normal',
         reasons: [...(runtime === 'active' ? ['실제 실행이 진행 중입니다'] : runtime === 'unknown' ? ['이전 실행 또는 외부 프로세스의 종료를 확인할 수 없습니다'] : stale ? ['실행은 없으나 저장 상태 확인이 필요합니다'] : []), ...reasons],
         updatedAt: work.updatedAt, canRecover, canInterrupt: runtime === 'active' || health.canInterrupt(work) };

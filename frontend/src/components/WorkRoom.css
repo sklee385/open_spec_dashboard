@@ -16,3 +16,22 @@
 .work-session-recovery { overflow-wrap: anywhere; }
 .work-session-recovery p { margin: 6px 0; }
 .work-message-meta{display:flex;gap:12px;flex-wrap:wrap;align-items:baseline}.work-message-meta time{font-variant-numeric:tabular-nums;font-size:11px}.work-message-origin{outline:2px solid var(--foreground);outline-offset:3px}
+.work-chat:has(> .work-question) { overflow-y: auto; }
+.work-question { flex-shrink: 0; max-height: min(56dvh, 640px); overflow-wrap: anywhere; }
+.work-question-heading { display: flex; flex: 0 0 auto; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.work-question-heading h3 { font-weight: 650; }
+.work-question-heading button { flex-shrink: 0; }
+.work-question label > button { display: block; width: 100%; margin: 6px 0; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.work-question-overlay[data-slot="dialog-overlay"] { z-index: 80; }
+.work-question-dialog[data-slot="dialog-content"] { display: flex; flex-direction: column; gap: 0; padding: 0; z-index: 90; width: calc(100vw - 32px); max-width: 1100px; height: min(84dvh, 900px); max-height: calc(100dvh - 32px); min-height: 0; overflow: hidden; background: var(--background); color: var(--foreground); font-size: 14px; overflow-wrap: anywhere; }
+.work-question-dialog .work-question-body { flex: 1 1 auto; }
+.work-question-dialog .work-question-heading { margin: 0; text-align: left; }
+.work-question-dialog .work-question-actions { flex-shrink: 0; }
+.work-question-dialog button { border: 1px solid var(--border); background: var(--secondary); color: var(--foreground); border-radius: 7px; padding: 8px 12px; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
+.work-question-dialog button:disabled { opacity: .45; cursor: default; }
+.work-question-dialog label { display: block; margin: 8px 0; }
+.work-question-dialog label > button { display: block; width: 100%; margin: 6px 0; text-align: left; }
+.work-question-dialog textarea { display: block; width: 100%; min-height: 96px; resize: vertical; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--background); color: var(--foreground); }
+.work-question-dialog pre { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.work-question-dialog button:focus-visible, .work-question-dialog textarea:focus-visible, .work-question-heading button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media(max-width:480px) { .work-question-dialog[data-slot="dialog-content"] { width: calc(100vw - 16px); height: calc(100dvh - 16px); max-height: calc(100dvh - 16px); }.work-question-heading { gap: 8px; }.work-question-actions button { min-height: 44px; } }

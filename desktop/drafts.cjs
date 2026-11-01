@@ -2,7 +2,9 @@ const fs = require('node:fs');
 const { join } = require('node:path');
 const { randomBytes } = require('node:crypto');
 const LIMIT = 8 * 1024 * 1024;
-function validKey(key) { return typeof key === 'string' && key.length <= 2048 && /^(work-chat-draft|work-view|work-draft|project-draft|project-view):[^\x00-\x1f]+$/.test(key); }
+// Keep the profile bridge in sync with the UI's draft and write-before-send receipts.
+// History keys remain within their receipt namespace; arbitrary profile keys stay denied.
+function validKey(key) { return typeof key === 'string' && key.length <= 2048 && /^(work-chat-draft|work-view|work-draft|project-draft|project-view|workspace-preparation-draft|integration-draft|candidate-edit|workspace-mutation|integration-control):[^\x00-\x1f]+$/.test(key); }
 class DraftStore {
   constructor(directory) { this.directory = directory; this.path = join(directory, 'recovery-drafts.json'); }
   load() {

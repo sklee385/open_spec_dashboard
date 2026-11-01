@@ -3,6 +3,7 @@ import { useReadRequests } from '../hooks/useReadRequests';
 import { ProductError, errorMessage } from '@/i18n/errors';
 import { useI18n } from '@/i18n/context';
 import { BrowserVerification } from './BrowserVerification';
+import { QueuedMessageNotice } from './QueuedMessageNotice';
 import { AiActivity } from './AiActivity';
 import { WorkRecovery, type RecoveryStatus } from './WorkRecovery';
 import { DeleteBoardItem } from './BoardTrash';
@@ -30,6 +31,7 @@ import { RemoteBoardConnection } from './RemoteBoardConnection';
 import { workConversation, type ConversationEntry } from '../lib/workConversation';
 import { WorkManagement } from './WorkManagement';
 import { implementationPending, startBackgroundImplementation, useBackgroundImplementation } from '../hooks/useBackgroundImplementation';
+import { QuestionPanel } from './QuestionPanel';
 
 type Entry = ConversationEntry;
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: Record<string, unknown> & { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
@@ -481,19 +483,13 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
           {messages.map(entry => <div key={entry.seq} data-origin-seq={entry.seq} tabIndex={-1} className={`${entry.role === 'user' ? 'work-message user' : 'work-message'}${originMessage?.seq===entry.seq?' work-message-origin':''}`}><small className="work-message-meta"><span>{entry.role === 'user' ? t('workRoom.me') : entry.role}</span>{entry.createdAt?<time dateTime={entry.createdAt}>{new Date(entry.createdAt).toISOString().replace('T',' ').replace('Z',' UTC')}</time>:<span>{t('daily.notRecorded')}</span>}</small>{entry.role === 'user' && recoveredAnswer(entry.text) ? <RecoveredAnswer text={entry.text} /> : <MarkdownContent text={entry.text} />}</div>)}
           <details className="work-event"><summary>{t('workRoom.events')}</summary>{room?.events.filter(entry => !['item/agentMessage/delta', 'user-message'].includes(entry.type)).slice(-100).map(entry => <details key={entry.seq}><summary>{({ 'item/autoApprovalReview/started': t('workRoom.autoReviewStarted'), 'item/autoApprovalReview/completed': t('workRoom.autoReviewCompleted'), 'autoApprovalReview/strictReviewRequired': t('workRoom.strictReview') } as Record<string, string>)[entry.type] || entry.type}</summary><JsonBlock value={entry.data} /></details>)}</details>
         </div>
-        {room?.questions.filter(q => (q.kind === 'input' ? room.toolCapabilities?.questions !== false : room.toolCapabilities?.approval !== false) && (q.status === 'pending' || (q.status === 'expired' && q.kind === 'input'))).map(q => <div className="work-question" key={q.id} tabIndex={-1} ref={node => { if (node) questionNodes.current.set(q.id, node); else questionNodes.current.delete(q.id); }}>
-          <div className="work-question-body">
-          <h3>{q.kind === 'input' ? t('workRoom.aiQuestion') : t('workRoom.permission')}</h3>
+        {room?.questions.filter(q => (q.kind === 'input' ? room.toolCapabilities?.questions !== false : room.toolCapabilities?.approval !== false) && (q.status === 'pending' || (q.status === 'expired' && q.kind === 'input'))).map(q => <QuestionPanel key={q.id} title={q.kind === 'input' ? t('workRoom.aiQuestion') : t('workRoom.permission')} panelRef={node => { if (node) questionNodes.current.set(q.id, node); else questionNodes.current.delete(q.id); }} actions={q.kind === 'input' ? <button disabled={busy} onClick={() => answerQuestion(q)}>{q.status === 'expired' ? t('workRoom.restoreAnswer') : t('workRoom.answer')}</button> : <><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'accept' }))}>{t('workRoom.approve')}</button><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'decline' }))}>{t('workRoom.decline')}</button></>}>
           {q.status === 'expired' && <p>{t('workRoom.expired')}</p>}
           {q.kind === 'input' ? <>{q.params.questions?.map(question => <label key={question.id}>{question.question}
             {question.options?.map(option => <button key={option.label} aria-label={`${option.label} — ${option.description}`} onClick={() => setAnswers(old => ({ ...old, [`${q.id}:${question.id}`]: option.label }))}>{option.label} — {option.description}</button>)}
             <textarea aria-label={question.question} value={answerText(q, question.id)} onChange={event => setAnswers(old => ({ ...old, [`${q.id}:${question.id}`]: event.target.value }))} />
           </label>)}</> : <ApprovalRequest method={q.method} params={q.params} />}
-          </div>
-          <div className="work-question-actions">
-            {q.kind === 'input' ? <button disabled={busy} onClick={() => answerQuestion(q)}>{q.status === 'expired' ? t('workRoom.restoreAnswer') : t('workRoom.answer')}</button> : <><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'accept' }))}>{t('workRoom.approve')}</button><button disabled={busy} onClick={() => void run(() => api(`work/${room.id}/approval`, 'POST', { questionId: q.id, decision: 'decline' }))}>{t('workRoom.decline')}</button></>}
-          </div>
-        </div>)}
+        </QuestionPanel>)}
         {!!room?.questions.some(q => q.status === 'answered') && <details className="work-event"><summary>{t('workRoom.answerHistory')}</summary>{room.questions.filter(q => q.status === 'answered').map(q => <div key={q.id}><p>{q.params.questions?.map(x => x.question).join(' · ') || t('workRoom.executionApproval')}</p><>{q.kind === 'input' && q.params.questions?.length ? <QuestionAnswers questions={q.params.questions} answers={q.answer} /> : <JsonBlock value={q.answer} />}</><p>{q.reflection === 'applied' ? t('workRoom.reflected') : q.reflection === 'pending' ? t('workRoom.reflectionPending') : t('workRoom.reflectionCheck')}</p>{q.documents?.map(d => <p key={d.path}>{d.path} · {d.version.slice(0, 12)}</p>)}</div>)}</details>}
         <label className="work-compose">{t('workRoom.chat')}<textarea aria-label={t('workRoom.chat')} aria-keyshortcuts="Control+Enter" placeholder={t('workRoom.chatPlaceholder')} value={message} onChange={event => setMessage(event.target.value)} onKeyDown={event => {
           if (event.key === 'Enter' && event.ctrlKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && !event.repeat) {
@@ -501,7 +497,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
             send();
           }
         }} /></label>
-        {room?.queuedMessages?.filter(q => q.status !== 'sent').map(q => <div className="work-notice" key={q.id}>{q.status === 'queued' ? t('workRoom.queued') : q.status === 'dispatching' ? t('workRoom.dispatching') : t('workRoom.queueCheck')}: {q.text}<p>{q.error}{['blocked', 'uncertain'].includes(q.status) && t('workRoom.queueHint')}</p></div>)}
+        {room?.queuedMessages?.filter(q => q.status !== 'sent').map(q => <QueuedMessageNotice key={q.id} message={q} />)}
         <button disabled={busy || !room || !message.trim()} onClick={send}>{t('workRoom.send')}</button>
       </section>
       <section className="work-output"><nav className="work-tabs">{[['documents', t('workRoom.documents')], ['review', t('review.title')], ['results', t('workRoom.results')], ['openspec', 'OpenSpec']].map(([value, label]) => <button aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>

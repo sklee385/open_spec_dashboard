@@ -1,6 +1,16 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), { join } = require('node:path'), { tmpdir } = require('node:os');
 const { DraftStore, registerDraftBridge } = require('../drafts.cjs');
+test('업무공간·후보 초안과 전송 전 요청 영수증은 프로필 재시작 후에도 복구된다', t => {
+  const directory = fs.mkdtempSync(join(tmpdir(),'desktop-flow-drafts-')); t.after(() => fs.rmSync(directory,{recursive:true,force:true}));
+  const keys = ['workspace-preparation-draft:w', 'integration-draft:w', 'candidate-edit:w:c', 'workspace-mutation:workspace:w', 'workspace-mutation:candidate-edit:w:c:reconcile:history:attempt', 'integration-control:browser:w', 'integration-control:browser:w:history:attempt'];
+  let store = new DraftStore(directory);
+  for (const key of keys) { assert.equal(store.request('get',key),null); store.request('set',key,JSON.stringify({ draft:key })); }
+  store = new DraftStore(directory);
+  for (const key of keys) assert.deepEqual(JSON.parse(store.request('get',key)),{draft:key});
+  for (const key of ['unknown:w','workspace-mutation:','candidate-edit:w\nother','integration-control:w\x00']) assert.throws(() => store.request('set',key,'x'));
+  store.request('remove',keys[0]); assert.equal(new DraftStore(directory).request('get',keys[0]),null);
+});
 test('초안은 임의 서버 포트와 무관하게 프로필에 저장되고 삭제·재시작을 견딘다', t => {
   const directory = fs.mkdtempSync(join(tmpdir(),'desktop-drafts-')); t.after(() => fs.rmSync(directory,{recursive:true,force:true}));
   const a = new DraftStore(directory); a.request('set','work-chat-draft:work1','private draft');

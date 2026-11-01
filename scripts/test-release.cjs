@@ -6,7 +6,12 @@ const listOnly = process.argv.includes('--list');
 const managementOnly = process.argv.includes('--work-management');
 const selectRefreshOnly = process.argv.includes('--select-refresh');
 const backgroundDocumentsOnly = process.argv.includes('--background-documents');
-if ([managementOnly, selectRefreshOnly, backgroundDocumentsOnly].filter(Boolean).length > 1 || process.argv.slice(2).some(arg => !['--list', '--work-management', '--select-refresh', '--background-documents'].includes(arg))) throw new Error('지원하지 않는 검사 옵션입니다');
+const recoveryUiOnly = process.argv.includes('--recovery-ui');
+if ([managementOnly, selectRefreshOnly, backgroundDocumentsOnly, recoveryUiOnly].filter(Boolean).length > 1 || process.argv.slice(2).some(arg => !['--list', '--work-management', '--select-refresh', '--background-documents', '--recovery-ui'].includes(arg))) throw new Error('지원하지 않는 검사 옵션입니다');
+const recoveryUiGroups = [
+  { name: '상태 점검 보관 필터의 읽기 전용 근거', workspace: 'backend', args: ['run', 'test/desktop-health.test.ts'] },
+  { name: '질문 확대·안내 접기·데스크톱 초안·요청 보존 직접 영향', workspace: 'frontend', args: ['run', 'src/components/QuestionPanel.test.tsx', 'src/components/QueuedMessageNotice.test.tsx', 'src/components/DesktopFlowStorage.test.tsx', 'src/components/WorkspaceFlow.test.tsx', 'src/lib/draftStorage.test.ts', 'src/lib/exactMutation.test.ts', 'src/components/WorkRoom.test.tsx', 'src/components/WorkRoomPolling.test.tsx', 'src/components/WorkRoomAttention.test.tsx', 'src/i18n/contracts.test.tsx', '--configLoader=runner'] },
+];
 const backgroundDocumentsGroups = [
   { name: '추가 문서 발견·경로 경계·계획 해시·완료 snapshot', workspace: 'backend', args: ['run', 'test/work-document-list.test.ts'] },
   { name: '구현 중 이동·문서 미리보기·초안·복구 및 번역 직접 영향', workspace: 'frontend', args: ['run', 'src/components/WorkRoomBackground.test.tsx', 'src/components/WorkRoomDocuments.test.tsx', 'src/components/WorkRoom.test.tsx', 'src/components/WorkRoomResponsiveness.test.tsx', 'src/components/WorkRoomPolling.test.tsx', 'src/components/WorkRoomAttention.test.tsx', 'src/components/WorkRoomRecovery.test.tsx', 'src/i18n/contracts.test.tsx', '--configLoader=runner'] },
@@ -27,7 +32,7 @@ const previousGroups = [
   { name: '읽기 전용 일일 집계·현재 상태 근거·이력 페이지', workspace: 'backend', args: ['run', 'test/daily-dashboard.test.ts'] },
   { name: '현황판·원문 시각·이동 및 직접 영향 질문/초안/헤더', workspace: 'frontend', args: ['run', 'src/components/DailyDashboard.test.tsx', 'src/lib/workConversation.test.ts', 'src/DailyApp.test.tsx', 'src/components/WorkRoom.test.tsx', 'src/AttentionApp.test.tsx', 'src/components/WorkRoomAttention.test.tsx', 'src/components/WorkRoomPolling.test.tsx', 'src/components/HeaderVersion.test.tsx', 'src/i18n/i18n.test.tsx', '--configLoader=runner'] },
 ];
-const groups = backgroundDocumentsOnly ? backgroundDocumentsGroups : selectRefreshOnly ? selectRefreshGroups : managementOnly ? managementGroups : previousGroups;
+const groups = recoveryUiOnly ? recoveryUiGroups : backgroundDocumentsOnly ? backgroundDocumentsGroups : selectRefreshOnly ? selectRefreshGroups : managementOnly ? managementGroups : previousGroups;
 
 for (const group of groups) {
   const args = [join(root, 'node_modules/vitest/vitest.mjs'), ...group.args, '--maxWorkers=1'];

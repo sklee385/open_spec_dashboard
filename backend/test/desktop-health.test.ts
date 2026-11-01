@@ -15,6 +15,16 @@ function setup(state = 'recovery-required') {
   store.save({ id: 'w', sourceId: 's', projectPath: root, changeName: 'work', requestKey: 'w', ideaIds: [], phase: 'planning', state, threadId: 't', reviewedVersion: null, createdAt: '', updatedAt: '' });
   return new DesktopLifecycle(store);
 }
+it('표시용 관리상 보관·오류 근거를 제공하되 업무 상태와 실행 판정은 변경하지 않는다', () => {
+  const lifecycle = setup('idle');
+  store.record('run-archive', 'w', 'management-state', { scope: 'run', state: 'archived' });
+  expect(lifecycle.diagnostics().works[0]).toMatchObject({ managementState: 'automatic', hasError: false });
+  store.record('work-archive', 'w', 'management-state', { scope: 'work', state: 'archived' });
+  const work = store.get('w')!; work.state = 'running'; work.errorCode = 'execution-failed'; store.save(work);
+  const before = JSON.stringify(store.get('w'));
+  expect(lifecycle.diagnostics().works[0]).toMatchObject({ managementState: 'archived', hasError: true, phase: 'planning', state: 'running', runtime: 'unknown', status: 'unknown' });
+  expect(JSON.stringify(store.get('w'))).toBe(before);
+});
 it('실행 없음이 확인된 복구 필요 업무는 종료를 막지 않고 동기 상태 복구한다', () => {
   const lifecycle = setup(); desktopHealth(store).register('test', () => 'inactive');
   expect(lifecycle.diagnostics().works[0]).toMatchObject({ runtime: 'inactive', status: 'mismatch', canRecover: true });

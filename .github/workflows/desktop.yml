@@ -41,13 +41,13 @@ jobs:
         run: ./scripts/node.ps1 node_modules/electron/install.js
       - name: Prepare verification browser and process guard
         run: ./scripts/setup-browser.ps1
-      - name: Verify changed release publisher
+      - name: Verify release publisher, desktop drafts and health filter
         if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
-        run: ./scripts/node.ps1 --test desktop/test/publish.test.cjs
-      - name: Verify background navigation and document direct impact paths
+        run: ./scripts/node.ps1 --test desktop/test/publish.test.cjs desktop/test/drafts.test.cjs desktop/test/health-filter.test.cjs
+      - name: Verify recovery UI direct impact paths
         if: github.event_name != 'workflow_dispatch' || !inputs.full_suite
         timeout-minutes: 30
-        run: ./scripts/node.ps1 scripts/test-release.cjs --background-documents
+        run: ./scripts/node.ps1 scripts/test-release.cjs --recovery-ui
       - name: Full desktop tests (explicit user request only)
         if: github.event_name == 'workflow_dispatch' && inputs.full_suite
         run: ./scripts/npm.ps1 run desktop:test
