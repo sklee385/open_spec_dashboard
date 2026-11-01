@@ -195,7 +195,8 @@ it('결합 장애: 설정 전환과 질문을 유지하며 생성 응답 유실�
   const questionBefore = store.records(a.id, 'question');
   const rootA = a.workspace!.rootPath, offline = join(dir, 'offline-root-a');
   expect(dirname(rootA)).toBe(dir); expect(dirname(offline)).toBe(dir);
-  const current = settings.read(), check = settings.check({ version: current.version, path: join(dir, 'second-root') });
+  // This scenario tests root switching and lost responses, not OS long paths.
+  const current = settings.read(), check = settings.check({ version: current.version, path: join(dir, 'r2') });
   settings.save({ version: current.version, token: check.token, confirmed: true });
   expect(settings.history().roots).toHaveLength(2);
   const b: Work = { ...work, id: 'b', changeName: 'feature-b', requestKey: 'b', threadId: 'thread-b', workspace: undefined, executionPath: undefined, state: 'idle' };
@@ -207,7 +208,8 @@ it('결합 장애: 설정 전환과 질문을 유지하며 생성 응답 유실�
   } }) });
   try { await expect(losing.prepare(b, body)).rejects.toThrow('combined creation response lost'); } finally { await losing.close(); }
   const failedB = store.get(b.id)!, bPath = failedB.executionPath!;
-  expect(failedB.workspace).toMatchObject({ status: 'recovery-required', rootPath: join(dir, 'second-root') });
+  expect(failedB.workspace).toMatchObject({ status: 'recovery-required', rootPath: join(dir, 'r2') });
+  expect(join(bPath, 'openspec/changes/feature-b/specs/feature-b/spec.md').length).toBeLessThan(260);
   const renewed = await provisioner.preview(failedB, 'main');
   await provisioner.prepare(failedB, { ...body, previewToken: renewed.documents!.confirmationToken });
   expect(store.get(b.id)?.executionPath).toBe(bPath); expect(adds).toBe(1);

@@ -29,3 +29,7 @@ CI 41261721257에서 업무 검증 9건·소유 Git Job 1건은 통과했고, HA
 
 CI 41261987975에서 실제 Job/업무 검사 14개와 후보/상태 검사 7개는 통과했다. 문서 준비 11개는 모두 커밋 문서 git show revision:path 조회에서 Filename too long으로 실패했다. 로컬 Git은 2.54.0.windows.1, CI Git은 2.56.0.windows.4이며, Git 버전 차이가 원인이라는 단정은 하지 않는다. 실제 실패 지점은 commitDocuments의 커밋 문서 읽기다. 객체와 파일 경로의 구분이 필요 없는 cat-file blob 조회로 변경한다. manifest/계획 revision/실제 트리/소유 Job 검증은 유지한다. 기존 실제 Git 테스트에 show의 해당 오류만 주입해 수정 전 실패를 확인했고 수정 후 해당 직접 영향 검사 결과를 기록한다. backend build 통과. 정식 태그는 덮어쓰지 않고 0.1.19로 준비한다. 근거: Git 공식 cat-file 문서 https://git-scm.com/docs/git-cat-file .
 수정 후 .tools/git-blob-read-green.json: 직접 영향 11개 통과, 실패 0개. 신규 전체 검사/프로파일링은 실행하지 않았다.
+
+## CI 0.1.19 확정 실패 후 보완
+
+CI 41262626900에서 Job/업무 14개, 후보/상태 7개, 문서 준비 10개가 통과했다. 남은 결합 장애 1개는 second-root 아래 실제 checkout 경로가 Windows 한도를 초과하여 의도한 응답 유실 주입 전에 실패했다. 결합 시나리오의 테스트용 둘째 루트명만 r2로 단축했고 가장 긴 fixture 문서 경로가 260자 미만임을 검사한다. OS/전역 Git 설정과 제품 경로 검사는 변경하지 않는다. 해당 한 건 로컬 통과(.tools/combined-short-root-proof.json). 테스트 외 제품 코드는 b063469와 동일하며 새 backend/frontend 전체 검사는 하지 않는다. 기존 태그를 보존하고 0.1.20으로 배포한다.
