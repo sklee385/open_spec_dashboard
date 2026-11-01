@@ -28,6 +28,7 @@ import { draftStorage } from '../lib/draftStorage';
 import { SessionRecovery, type SessionRecoveryStatus } from './SessionRecovery';
 import { RemoteBoardConnection } from './RemoteBoardConnection';
 import { workConversation, type ConversationEntry } from '../lib/workConversation';
+import { WorkManagement } from './WorkManagement';
 
 type Entry = ConversationEntry;
 type Question = { id: string; kind: string; status: string; reflection?: string; recovered?: boolean; answer?: unknown; documents?: { path: string; version: string }[]; params: Record<string, unknown> & { questions?: { id: string; question: string; options?: { label: string; description: string }[] }[] }; method: string };
@@ -422,6 +423,7 @@ function WorkRoomContent({ change, active = true, onClose, onOpenSource, attenti
     {loadError && !needsRecovery && <div className="work-error" role="status">{loadError}</div>}
     {room?.error && !needsRecovery && <div className="work-error">{room.error}</div>}
     {room && <p className="work-hint">{nativeResume ? t('aiTools.supported') : t('aiTools.external')}</p>}
+    {room && <WorkManagement key={`management:${room.id}`} workId={room.id} />}
     {room && <WorkspacePreparation key={`workspace-preparation:${room.id}`} workId={room.id} reviewedVersion={room.reviewedVersion} onStatus={status => { setGitManaged(status.experimentalEnabled && status.kind === 'git-worktree'); setGitPreparationStatus({ workId: room.id, status: status.status }); }} />}
     {room && gitManaged && <WorkIntegration key={`integration:${room.id}`} workId={room.id} phase={room.phase} state={room.state} sourceId={change.sourceId} workDirty={dirty} active={active && gitPreparationStatus.workId === room.id && ['ready', 'removed'].includes(gitPreparationStatus.status)} onAppliedChange={setGitApplied} onOpenCandidate={(candidateId, executionPath) => onOpenSource?.({ id: room.id, candidateId, executionPath })} />}
     {room?.toolReadiness && !room.toolReadiness.ready && <p className="work-error">{room.toolReadiness.message}</p>}

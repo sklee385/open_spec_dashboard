@@ -23,6 +23,8 @@ export interface Artifact {
 }
 
 export interface Change {
+  managementState?: 'active' | 'completed' | 'archived';
+  observedStatus?: ChangeStatus;
   workState?: string;
   id: string;
   name: string;

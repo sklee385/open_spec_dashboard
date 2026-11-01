@@ -68,6 +68,7 @@ export function ChangeCard({ change, onClick }: ChangeCardProps) {
       onClick={onClick}
     >
       <CardContent className="p-4">
+        {change.managementState && <p>{t('management.current')}: {t(`management.${change.managementState}`)} · {t('management.observed')}: {change.observedStatus}</p>}
         {['draft','todo','in_progress'].includes(change.status) && <div className="flex justify-end mb-1"><DeleteBoardItem id={change.id} kind="change" state={change.workState} /></div>}
         {change.workState && !['idle', 'interrupted'].includes(change.workState) && <div className="mb-3"><AiActivity state={change.workState} /></div>}
         {/* Keep the project badge on its own row so narrow cards retain the full title. */}

@@ -7,12 +7,19 @@ import { ReviewService } from '../review/review.service';
 import { workTool, capabilities, readiness } from '../ai-tools/config.service';
 import { WorkRecovery } from './recovery';
 import { GitCompletionService } from './git-completion';
+import { WorkManagement } from './management';
 @Controller('work')
 export class WorkController {
   constructor(@Inject(WorkService) readonly service: WorkService, @Inject(AiToolService) readonly codex: AiToolService, @Inject(OpenSpecService) readonly openspec: OpenSpecService, @Inject(ReviewService) readonly review: ReviewService, @Inject(GitCompletionService) readonly completion: GitCompletionService) {}
   @Get(':id/review-items') reviewItems(@Param('id') id: string) { return this.review.read(this.service.root(this.service.get(id))); }
   @Get() list() { return { work: this.service.list().map(work => this.toolInfo(work)) }; }
   @Get('attention') attention() { return { items: this.service.store.attention() }; }
+  @Get(':id/management') management(@Param('id') id: string, @Query('scope') scope?: string) { return new WorkManagement(this.service.store).status(id, scope ?? 'work'); }
+  @Post(':id/management') @HttpCode(200) manage(@Param('id') id: string, @Body() body: unknown) {
+    const result = new WorkManagement(this.service.store).change(id, body);
+    if (!result.replayed) this.service.legacy.updates.next();
+    return result;
+  }
   private toolInfo(work: any) { const tool = workTool(work); return { ...work, toolId: tool.id, toolConfigSnapshot: tool, toolCapabilities: capabilities(tool), toolReadiness: readiness(tool), providerSessionId: tool.kind === 'codex' ? work.threadId : null }; }
   @Post() @HttpCode(200) create(@Body() body: unknown) { return this.service.create(body); }
   @Get(':id') get(@Param('id') id: string) {
